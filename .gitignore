@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+.idea/
+.vscode/
+.trae/
+qlib_data/
+artifacts/
+*.log
