@@ -1,0 +1,51 @@
+name: "weekly_reversal_v1"
+version: "1.0"
+strategy_type: "周频/反转+质量"
+author: "Quant"
+updated_at: "2024-04-05"
+
+description: >
+  这是一个针对A股周频调仓的多因子组合库测试样例。
+  核心思想是“长动量+短反转”，同时叠加流动性和基础质量过滤。
+
+analysis:
+  pros: "在震荡市和均值回归明显的市场中表现优异，盈亏比高。"
+  cons: "在极端的单边单边牛市中容易踏空，或者在小盘股流动性危机时回撤较大。"
+  optimization_direction: "可以尝试加入北向资金净流入因子，或者加入行业中性化处理以对冲行业风险。"
+
+factors:
+  - name: "short_reversal"
+    category: "反转"
+    expression: 
+      qlib: "($close - Ref($close, 5)) / Ref($close, 5)"
+      duckdb: "(close - lag(close, 5) over (partition by ts_code order by trade_date)) / lag(close, 5) over (partition by ts_code order by trade_date)"
+    meaning: "5日收益率。周频核心反转因子，通常与下周收益呈负相关（跌得多的容易反弹）。"
+    usage_scenario: "周频调仓模型、超跌反弹策略。"
+    strategy_hint: "负向因子（需取反或作为排序的倒序指标），适合在宽幅震荡市捕捉短期超跌标的。"
+
+  - name: "volatility_filter"
+    category: "波动率"
+    expression: 
+      qlib: "Std(Abs($close/Ref($close,1)-1), 20)"
+      duckdb: "stddev(abs(close/lag(close, 1) over (partition by ts_code order by trade_date) - 1)) over (partition by ts_code order by trade_date rows between 19 preceding and current row)"
+    meaning: "20日收益率标准差。过滤掉上蹿下跳的妖股，追求稳定胜率。"
+    usage_scenario: "多因子模型的风控端或低波动率增强策略。"
+    strategy_hint: "负向因子，常用于剔除市场中炒作情绪过热或流动性干涸带来的高波动个股。"
+
+  - name: "volume_surge"
+    category: "流动性"
+    expression: 
+      qlib: "Mean($volume, 5) / Mean($volume, 60)"
+      duckdb: "(avg(vol) over (partition by ts_code order by trade_date rows between 4 preceding and current row)) / (avg(vol) over (partition by ts_code order by trade_date rows between 59 preceding and current row))"
+    meaning: "5日均量除以60日均量。捕捉近期资金温和活跃的标的，避免买入死水股。"
+    usage_scenario: "量价配合策略，验证价格反弹的有效性。"
+    strategy_hint: "正向因子，反转必须有资金配合，但要避免极端放量（如单日换手过高）。"
+
+  - name: "long_momentum"
+    category: "动量"
+    expression: 
+      qlib: "($close - Ref($close, 60)) / Ref($close, 60)"
+      duckdb: "(close - lag(close, 60) over (partition by ts_code order by trade_date)) / lag(close, 60) over (partition by ts_code order by trade_date)"
+    meaning: "60日收益率。中期动量因子，筛选出中期处于上升通道的股票。"
+    usage_scenario: "趋势跟随策略的基础池筛选。"
+    strategy_hint: "正向因子，大前提是股票处于中期上升趋势中，然后再利用短期反转寻找上车点。"

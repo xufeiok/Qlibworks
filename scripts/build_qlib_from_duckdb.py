@@ -156,7 +156,18 @@ def main() -> int:
             return 3
         sch, tbl = target
         print(f"table={sch}.{tbl}")
-        symbols = _get_symbols(con, sch, tbl, cmap["symbol"])
+        
+        # 只处理主板股票
+        print("Filtering main board stocks...")
+        query_main_board = """
+            SELECT dp.ts_code
+            FROM daily_prices dp
+            JOIN stock_universe su ON dp.ts_code = su.ts_code
+            WHERE su.market = '主板'
+            GROUP BY dp.ts_code
+        """
+        rows = con.execute(query_main_board).fetchall()
+        symbols = [str(r[0]) for r in rows]
         lim = os.environ.get("QLIB_BUILD_LIMIT")
         if lim:
             try:
