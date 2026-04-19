@@ -53,49 +53,83 @@ class FactorLibraryManager:
             
         return config
 
-    def get_qlib_expressions(self, strategy_name: str) -> tuple:
+    def get_qlib_expressions(self, strategy_names: str | list[str]) -> tuple:
         """
         提取用于 Qlib DatasetH 初始化的特征表达式和对应的特征名
-        :param strategy_name: 策略名
+        支持传入单个策略名，或多个策略名列表以进行因子集合并
+        :param strategy_names: 策略名或策略名列表
         :return: (fields, names) 列表
         """
-        config = self.load_strategy_config(strategy_name)
-        fields = []
-        names = []
-        
-        for factor in config.get('factors', []):
-            expr = factor.get('expression', '')
-            if isinstance(expr, dict):
-                qlib_expr = expr.get('qlib', '')
-            else:
-                qlib_expr = str(expr)
-                
-            fields.append(qlib_expr)
-            names.append(factor.get('name'))
+        if isinstance(strategy_names, str):
+            strategy_names = [strategy_names]
             
-        return fields, names
+        all_fields = []
+        all_names = []
+        seen_names = set() # 防止不同文件中出现同名因子导致冲突
+        
+        for strategy_name in strategy_names:
+            config = self.load_strategy_config(strategy_name)
+            
+            for factor in config.get('factors', []):
+                name = factor.get('name')
+                
+                # 如果有同名因子，跳过或重命名（这里选择跳过并警告）
+                if name in seen_names:
+                    print(f"[警告] 发现重名因子 '{name}' (位于 {strategy_name}.yaml 中)，已跳过合并。")
+                    continue
+                
+                expr = factor.get('expression', '')
+                if isinstance(expr, dict):
+                    qlib_expr = expr.get('qlib', '')
+                else:
+                    qlib_expr = str(expr)
+                    
+                if not qlib_expr:
+                    continue
+                    
+                all_fields.append(qlib_expr)
+                all_names.append(name)
+                seen_names.add(name)
+                
+        return all_fields, all_names
 
-    def get_duckdb_expressions(self, strategy_name: str) -> tuple:
+    def get_duckdb_expressions(self, strategy_names: str | list[str]) -> tuple:
         """
         提取用于 DuckDB 数据库的特征表达式和对应的特征名
-        :param strategy_name: 策略名
+        支持传入单个策略名，或多个策略名列表以进行因子集合并
+        :param strategy_names: 策略名或策略名列表
         :return: (fields, names) 列表
         """
-        config = self.load_strategy_config(strategy_name)
-        fields = []
-        names = []
-        
-        for factor in config.get('factors', []):
-            expr = factor.get('expression', '')
-            if isinstance(expr, dict):
-                duckdb_expr = expr.get('duckdb', '')
-            else:
-                duckdb_expr = str(expr)
-                
-            fields.append(duckdb_expr)
-            names.append(factor.get('name'))
+        if isinstance(strategy_names, str):
+            strategy_names = [strategy_names]
             
-        return fields, names
+        all_fields = []
+        all_names = []
+        seen_names = set()
+        
+        for strategy_name in strategy_names:
+            config = self.load_strategy_config(strategy_name)
+            
+            for factor in config.get('factors', []):
+                name = factor.get('name')
+                
+                if name in seen_names:
+                    continue
+                    
+                expr = factor.get('expression', '')
+                if isinstance(expr, dict):
+                    duckdb_expr = expr.get('duckdb', '')
+                else:
+                    duckdb_expr = str(expr)
+                    
+                if not duckdb_expr:
+                    continue
+                    
+                all_fields.append(duckdb_expr)
+                all_names.append(name)
+                seen_names.add(name)
+                
+        return all_fields, all_names
 
     def print_strategy_report(self, strategy_name: str):
         """
