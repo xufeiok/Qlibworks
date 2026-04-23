@@ -1,0 +1,11 @@
+name: other_factors
+version: '2.0'
+strategy_type: other_factors 因子合集
+author: Quant
+updated_at: '2026-04-22'
+description: 其他因子库：未能明确归类的补充因子。
+analysis:
+  pros: 作为灵活扩展区，适合定制化、另类因子的独立存放。
+  cons: 无。
+  optimization_direction: 遇到成熟因子后可再次归类至主要类别中。
+factors:

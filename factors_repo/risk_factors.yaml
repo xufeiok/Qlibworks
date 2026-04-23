@@ -1,0 +1,66 @@
+name: risk_factors
+version: '2.0'
+strategy_type: risk_factors 因子合集
+author: Quant
+updated_at: '2026-04-22'
+description: 风险因子库：包含波动率、Beta、解禁压力等用于风控和止损的因子。
+analysis:
+  pros: 分类清晰，完全符合系统化投研体系。
+  cons: 部分另类因子需要底层数据支持。
+  optimization_direction: 持续迭代新的因子表达式。
+factors:
+  - name: volatility_1m
+    category: 波动率
+    expression:
+      qlib: Std(Abs($close/Ref($close,1)-1), 20)
+      duckdb: stddev(abs(close/lag(close, 1) over (partition by ts_code order by trade_date) - 1)) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+    meaning: 过去20个交易日的日收益率标准差。
+    usage_scenario: 低波动率异象：A股中历史波动率低的股票，未来收益往往更高且回撤小。
+    strategy_hint: 作为质量因子的补充，或者构建低波红利策略（负向因子）。
+
+  - name: volatility_filter
+    category: 波动率
+    expression:
+      qlib: Std(Abs($close/Ref($close,1)-1), 20)
+      duckdb: stddev(abs(close/lag(close, 1) over (partition by ts_code order by trade_date) - 1)) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+    meaning: 20日收益率标准差。过滤掉上蹿下跳的妖股，追求稳定胜率。
+    usage_scenario: 多因子模型的风控端或低波动率增强策略。
+    strategy_hint: 负向因子，常用于剔除市场中炒作情绪过热或流动性干涸带来的高波动个股。
+
+
+
+  - name: beta
+    category: 风险
+    expression:
+      qlib: $beta
+      duckdb: beta
+    meaning: Beta系数
+    usage_scenario: 风控、过滤庄股
+    strategy_hint: 视策略而定
+
+  - name: shareholder_change
+    category: 风险
+    expression:
+      qlib: $stk_holdernumber / Ref($stk_holdernumber, 20) - 1
+      duckdb: stk_holdernumber / lag(stk_holdernumber, 20) - 1
+    meaning: 股东人数变化
+    usage_scenario: 筹码集中度分析
+    strategy_hint: 负向（减少代表集中）
+
+  - name: unlock_pressure
+    category: 风险
+    expression:
+      qlib: $share_float_30d / $total_mv
+      duckdb: share_float_30d / total_mv
+    meaning: 解禁压力
+    usage_scenario: 防暴雷
+    strategy_hint: 负向
+
+  - name: pledge_ratio
+    category: 风险
+    expression:
+      qlib: $pledge_ratio
+      duckdb: pledge_ratio
+    meaning: 质押比例
+    usage_scenario: 防暴雷
+    strategy_hint: 负向

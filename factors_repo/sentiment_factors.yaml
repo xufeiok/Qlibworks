@@ -1,0 +1,37 @@
+name: sentiment_factors
+version: '2.0'
+strategy_type: sentiment_factors 因子合集
+author: Quant
+updated_at: '2026-04-22'
+description: 情绪因子库：包含一致预期、北向资金、融资余额等反应市场情绪的因子。
+analysis:
+  pros: 分类清晰，完全符合系统化投研体系。
+  cons: 部分另类因子需要底层数据支持。
+  optimization_direction: 持续迭代新的因子表达式。
+factors:
+  - name: eps_forecast_yoy
+    category: 情绪
+    expression:
+      qlib: ($eps_forecast / Ref($eps_last, 240)) - 1
+      duckdb: (eps_forecast / eps_last) - 1
+    meaning: 预期净利润增速
+    usage_scenario: 抓预期差、拐点
+    strategy_hint: 正向
+
+  - name: north_fund_change
+    category: 情绪
+    expression:
+      qlib: $north_hold - Ref($north_hold, 20)
+      duckdb: north_hold - lag(north_hold, 20)
+    meaning: 北向资金持股变动
+    usage_scenario: 抓外资拐点
+    strategy_hint: 正向
+
+  - name: margin_balance_change
+    category: 情绪
+    expression:
+      qlib: $rzye - Ref($rzye, 5)
+      duckdb: rzye - lag(rzye, 5)
+    meaning: 融资余额变化
+    usage_scenario: 抓杠杆资金
+    strategy_hint: 正向

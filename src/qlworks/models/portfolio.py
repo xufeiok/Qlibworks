@@ -64,9 +64,17 @@ def optimize_portfolio(
     
     # 4. 执行优化: 最大化夏普比率 或 约束目标波动率
     try:
-        # 在目标风险约束下最大化预期收益
-        weights = ef.efficient_risk(target_volatility=target_volatility)
-        
+        # A股市场个股波动率通常在 25%-40% 左右。如果 target_volatility 过低 (如 0.15)，
+        # 且要求满仓 (权重和为1) + 不能做空 (min_weight=0)，优化器通常会无解 (infeasible)。
+        # 因此这里我们首选尝试给定波动率，如果无解则回退到最大化夏普比率 (max_sharpe)
+        try:
+            weights = ef.efficient_risk(target_volatility=target_volatility)
+        except Exception as risk_err:
+            print(f"[Portfolio Opt] 目标波动率 {target_volatility} 无法实现 ({risk_err})，回退到最大化夏普比率 (max_sharpe)...")
+            # 重新实例化，因为前一次 ef 的内部状态已被改变
+            ef = EfficientFrontier(expected_ret, S, weight_bounds=(min_weight, max_weight))
+            weights = ef.max_sharpe()
+            
         # 清理极小权重并归一化
         cleaned_weights = ef.clean_weights()
         return pd.Series(cleaned_weights)

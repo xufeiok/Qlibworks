@@ -1,0 +1,124 @@
+name: quality_factors
+version: '2.0'
+strategy_type: quality_factors 因子合集
+author: Quant
+updated_at: '2026-04-22'
+description: 质量因子库：包含ROE、毛利率、现金流等用于排雷和提升夏普的财务因子。
+analysis:
+  pros: 分类清晰，完全符合系统化投研体系。
+  cons: 部分另类因子需要底层数据支持。
+  optimization_direction: 持续迭代新的因子表达式。
+factors:
+  - name: roe_ttm
+    category: 盈利
+    expression:
+      qlib: $roe_ttm
+      duckdb: roe
+    meaning: 净资产收益率（TTM）。反映股东权益的盈利效率，值越高盈利能力越强。
+    usage_scenario: 全市场、各行业、小市值股票池。
+    strategy_hint: 正向因子。A股中盈利稳定的标的长期跑赢市场，小市值策略中需通过盈利剔除垃圾股。
+
+  - name: roa_ttm
+    category: 盈利
+    expression:
+      qlib: $roa
+      duckdb: roa
+    meaning: 总资产收益率（TTM）。剔除财务杠杆影响，更贴合企业真实盈利。
+    usage_scenario: 高负债行业（金融、地产）、全市场、小市值股票池。
+    strategy_hint: 正向因子，通常结合估值指标（如 PB）筛选性价比。
+
+  - name: grossprofit_margin
+    category: 盈利
+    expression:
+      qlib: $grossprofit_margin
+      duckdb: grossprofit_margin
+    meaning: 销售毛利率（TTM）。反映企业产品的核心盈利空间，值越高产品竞争力越强。
+    usage_scenario: 制造业、消费、医药等行业，全市场、小市值股票池。
+    strategy_hint: 正向因子，寻找具有宽广护城河和定价权的企业。
+
+  - name: netprofit_margin
+    category: 盈利
+    expression:
+      qlib: $netprofit_margin
+      duckdb: netprofit_margin
+    meaning: 销售净利率（TTM）。反映企业每 1 元营收的净利润，综合体现成本、费用控制能力。
+    usage_scenario: 全市场、各行业、小市值股票池。
+    strategy_hint: 正向因子，作为财务质量筛选的核心指标。
+
+
+
+  - name: netprofit_yoy
+    category: 成长
+    expression:
+      qlib: $netprofit_yoy
+      duckdb: netprofit_yoy
+    meaning: 归母净利润同比增长率。反映公司业绩的扩张速度。
+    usage_scenario: 成长股策略的核心指标，尤其在业绩披露期有效性极强。
+    strategy_hint: 正向因子，通常结合估值指标（如 PEG）筛选高性价比成长股。
+
+  - name: tr_yoy
+    category: 成长
+    expression:
+      qlib: $tr_yoy
+      duckdb: tr_yoy
+    meaning: 营业总收入同比增长率。反映公司业务规模的扩张速度。
+    usage_scenario: 成长股策略、景气度投资。
+    strategy_hint: 正向因子，结合净利润增长率交叉验证企业是否处于真实的高景气周期。
+
+  - name: basic_eps_yoy
+    category: 成长
+    expression:
+      qlib: $basic_eps_yoy
+      duckdb: basic_eps_yoy
+    meaning: 基本每股收益同比增长率。综合反映盈利与股本扩张后的实际回报增长。
+    usage_scenario: 全市场选股、成长多因子。
+    strategy_hint: 正向因子，作为盈利成长的核心确认指标。
+
+
+
+  - name: debt_to_assets
+    category: 财务质量
+    expression:
+      qlib: $debt_to_assets
+      duckdb: debt_to_assets
+    meaning: 资产负债率。反映企业的财务杠杆和长期偿债风险。
+    usage_scenario: 信用债违约高发期、熊市防守阶段。
+    strategy_hint: 负向因子，常用于剔除高杠杆、高风险的暴雷潜雷股。
+
+  - name: current_ratio
+    category: 财务质量
+    expression:
+      qlib: $current_ratio
+      duckdb: current_ratio
+    meaning: 流动比率。反映企业短期偿债能力和资金周转状况。
+    usage_scenario: 全市场、尤其是现金流紧张的周期底部。
+    strategy_hint: 正向因子，但过高可能意味着资金闲置。主要用于剔除流动性枯竭的个股。
+
+  - name: inv_turn
+    category: 财务质量
+    expression:
+      qlib: $inv_turn
+      duckdb: inv_turn
+    meaning: 存货周转率。反映企业存货管理的效率，数值越高说明存货变现速度越快。
+    usage_scenario: 制造业、零售业等强库存周期的行业。
+    strategy_hint: 正向因子，作为精细化运营能力的衡量指标。
+
+
+
+  - name: ocf_to_netprofit
+    category: 质量
+    expression:
+      qlib: $ocf / $net_profit
+      duckdb: ocf / net_profit
+    meaning: 盈利现金流含量
+    usage_scenario: 排雷、提升夏普
+    strategy_hint: 正向
+
+  - name: q_profit_yoy
+    category: 质量
+    expression:
+      qlib: $q_profit_yoy
+      duckdb: q_profit_yoy
+    meaning: 扣非净利润同比
+    usage_scenario: 排雷
+    strategy_hint: 正向

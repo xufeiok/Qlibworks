@@ -1,0 +1,86 @@
+name: style_factors
+version: '2.0'
+strategy_type: style_factors 因子合集
+author: Quant
+updated_at: '2026-04-22'
+description: 风格因子库：包含市值、价值、红利等定义策略基础风格的因子。
+analysis:
+  pros: 分类清晰，完全符合系统化投研体系。
+  cons: 部分另类因子需要底层数据支持。
+  optimization_direction: 持续迭代新的因子表达式。
+factors:
+  - name: pe_ttm
+    category: 估值
+    expression:
+      qlib: $pe_ttm
+      duckdb: pe_ttm
+    meaning: 市盈率（TTM）。反映股价相对盈利的溢价，值越低估值越低。
+    usage_scenario: 全市场、价值选股。在震荡市、价值牛市中有效性极强。
+    strategy_hint: 通常作为负向因子（取倒数或求相反数使用），小市值策略中需结合估值筛选避免陷阱。
+
+  - name: pb_lf
+    category: 估值
+    expression:
+      qlib: $pb
+      duckdb: pb
+    meaning: 市净率（LF）。反映股价相对最新净资产的溢价。
+    usage_scenario: 金融、周期等重资产行业，全市场价值选股。
+    strategy_hint: 通常作为负向因子，在行业轮动或小市值估值过滤中使用。
+
+  - name: ps_ttm
+    category: 估值
+    expression:
+      qlib: $ps_ttm
+      duckdb: ps_ttm
+    meaning: 市销率（TTM）。反映股价相对营收的溢价。
+    usage_scenario: 适配盈利不稳定的成长股 / 周期股，如创业板、科创板、中小盘成长股。
+    strategy_hint: 负向因子，用于成长股选股、小市值多因子。
+
+  - name: dv_ttm
+    category: 估值
+    expression:
+      qlib: $dv_ttm
+      duckdb: dv_ttm
+    meaning: 股息率（TTM）。反映股票的现金回报能力。
+    usage_scenario: 大盘蓝筹、高分红板块、震荡市全市场。
+    strategy_hint: 正向因子，用于红利策略、养老型量化策略。
+
+
+
+  - name: circ_mv
+    category: 市值与流动性
+    expression:
+      qlib: Log($circ_mv)
+      duckdb: ln(circ_mv)
+    meaning: 流通市值的自然对数。反映公司的体量大小。
+    usage_scenario: 市值因子是A股最显著的风格因子之一（小市值效应）。
+    strategy_hint: 通常作为负向因子，在小市值策略、微盘股策略中作为核心筛选指标。
+
+  - name: turnover_rate_1m
+    category: 市值与流动性
+    expression:
+      qlib: Mean($turnover_rate, 20)
+      duckdb: avg(turnover_rate) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+    meaning: 过去20个交易日换手率均值。
+    usage_scenario: 量价背离、量价齐升。温和放量通常是资金介入的信号。
+    strategy_hint: A股常存在高换手率折价现象，通常将极高换手作为负向因子剔除过度炒作的股票。
+
+  - name: illiquidity_amihud
+    category: 市值与流动性
+    expression:
+      qlib: Mean(Abs($close/Ref($close, 1) - 1) / $amount, 20)
+      duckdb: avg(abs(close/lag(close, 1) over (partition by ts_code order by trade_date) - 1) / amount) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+    meaning: Amihud 非流动性指标：单位交易额引起的绝对收益率变化均值。
+    usage_scenario: 非流动性溢价：流动性越差的股票，投资者要求更高的预期收益补偿。
+    strategy_hint: 适合中低频、容量较小的策略，赚取流动性折价。
+
+
+
+  - name: total_mv_log
+    category: 风格
+    expression:
+      qlib: Log($total_mv)
+      duckdb: ln(total_mv)
+    meaning: 总市值对数（负向）
+    usage_scenario: 小市值策略
+    strategy_hint: 控制暴露不直接参与打分
