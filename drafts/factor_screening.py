@@ -82,9 +82,10 @@ def load_factor_metadata(factor_files):
                 
             metadata[name] = {
                 '大类 (File)': file_name,
-                '子类 (Category)': factor.get('category', '未知'),
                 '计算公式 (Expression)': qlib_expr,
-                '业务意义 (Meaning)': factor.get('meaning', '').replace('\n', ' ')
+                '业务意义 (Meaning)': factor.get('meaning', '').replace('\n', ' '),
+                '使用场景 (Scenario)': factor.get('usage_scenario', '').replace('\n', ' '),
+                '策略提示 (Hint)': factor.get('strategy_hint', '').replace('\n', ' ')
             }
     return metadata
 
@@ -210,20 +211,25 @@ def screen_and_rank_factors():
     print(f"    - 展示的其中前 10 个因子: {selected_features[:10]}")
     
     # -------------------------------------------------------------------------
-    # [第 5 步] 因子深度分析：信息系数 (IC) 与 信息比率 (ICIR)
+    # [第 5 步] 因子深度分析：信息系数 (IC) 与 信息比率 (ICIR)、IC胜率、分层回测
     # -------------------------------------------------------------------------
     # 【量化逻辑】
     # 1. IC (Information Coefficient): 因子值与第二天真实收益率的相关性。IC 绝对值越大，说明预测越准。
     # 2. ICIR (Information Ratio): IC 均值 / IC 标准差。衡量因子赚钱是否“稳”。如果一个因子偶尔很准但平时瞎指，ICIR就很低。
-    print("\n[5] 因子深度分析：计算相关性 (IC) 和 稳定性 (ICIR)...")
+    # 3. IC 胜率: 每天的 IC 与 IC 均值同向的比例。说明该因子有效的天数占比。
+    # 4. 分层回测 (Quantile Return): 截面上将股票按因子值分5层，看最高层与最低层的多空收益差。
+    print("\n[5] 因子深度分析：计算相关性 (IC)、稳定性 (ICIR)、胜率与分层多空收益...")
     
     ic_dict = {}
     icir_dict = {}
+    ic_win_rate_dict = {}
+    q_spread_dict = {}
     
     import warnings
     warnings.filterwarnings('ignore', message='An input array is constant; the correlation coefficient is not defined.')
     
     for feature in selected_features:
+        # ---- 1. 计算 IC ----
         # 每天单独算一次该因子和第二天收益率的相关性
         daily_ic = train_frame.groupby('datetime').apply(
             lambda x: x[feature].corr(x[fs_conf["label_col"]], method='spearman')
@@ -235,21 +241,65 @@ def screen_and_rank_factors():
         
         ic_dict[feature] = ic_mean
         
+        # ---- 2. 计算 ICIR ----
         # 如果标准差极小，说明因子退化成常数了，ICIR 设为0
         if pd.isna(ic_std) or ic_std < 1e-6:
             icir_dict[feature] = 0
         else:
             # 乘以 sqrt(252) 是为了把它年化 (一年约252个交易日)
             icir_dict[feature] = ic_mean / ic_std * np.sqrt(252) 
+            
+        # ---- 3. 计算 IC 胜率 ----
+        if len(daily_ic) > 0:
+            if ic_mean > 0:
+                win_rate = (daily_ic > 0).sum() / len(daily_ic)
+            else:
+                win_rate = (daily_ic < 0).sum() / len(daily_ic)
+            ic_win_rate_dict[feature] = win_rate
+        else:
+            ic_win_rate_dict[feature] = 0.0
+            
+        # ---- 4. 计算 5层分层多空收益 (Quantile Spread) ----
+        # 每天将股票按因子值分5组，计算各组的平均次日收益
+        def _get_q_ret(df):
+            try:
+                # 因子值可能存在大量重复值，使用 duplicates='drop'
+                q_labels = pd.qcut(df[feature], 5, labels=False, duplicates='drop')
+                res = df.groupby(q_labels)[fs_conf["label_col"]].mean()
+                # 如果分层不足2层（比如所有值都一样），直接返回None
+                if len(res) < 2:
+                    return None
+                # 返回最高层减去最低层的多空收益差
+                # 如果 IC 为正，做多最高层(最大索引)做空最低层(最小索引)
+                if ic_mean > 0:
+                    return res.iloc[-1] - res.iloc[0]
+                # 如果 IC 为负，做多最低层做空最高层
+                else:
+                    return res.iloc[0] - res.iloc[-1]
+            except:
+                return None
+                
+        daily_spread = train_frame.groupby('datetime').apply(_get_q_ret).dropna()
+        
+        if len(daily_spread) > 0:
+            # 算出每天的多空收益差的均值，然后年化 (* 252)
+            q_spread_dict[feature] = daily_spread.mean() * 252 
+        else:
+            q_spread_dict[feature] = 0.0
         
     ic_df = pd.DataFrame({
         'Factor': list(ic_dict.keys()),
         'IC': list(ic_dict.values()),
-        'ICIR': list(icir_dict.values())
+        'ICIR': list(icir_dict.values()),
+        'IC胜率': list(ic_win_rate_dict.values()),
+        '多空年化(%)': list(q_spread_dict.values())
     }).set_index('Factor')
     
+    # 转换为百分比展示更好看
+    ic_df['多空年化(%)'] = ic_df['多空年化(%)'] * 100
+    
     ic_df = ic_df.dropna(subset=['IC'])
-    print(f">>> IC 与 ICIR 计算完成！")
+    print(f">>> IC 与 其他深度指标 计算完成！")
     print(f"    - 【数据抽样展示】前 10 个因子的量化指标:")
     print(ic_df.head(10))
     
@@ -308,14 +358,17 @@ def screen_and_rank_factors():
             '综合得分 (Score)': round(ic_df.loc[factor, 'Score'], 6),
             'IC均值 (IC)': round(ic_df.loc[factor, 'IC'], 4),
             '信息比率 (ICIR)': round(ic_df.loc[factor, 'ICIR'], 2),
+            'IC胜率 (WinRate)': f"{ic_df.loc[factor, 'IC胜率']:.2%}",
+            '多空年化收益(%)': round(ic_df.loc[factor, '多空年化(%)'], 2),
         }
         
         # 加上元数据（如果在YAML里没找到就填空）
         meta = metadata.get(factor, {
             '大类 (File)': '未归类',
-            '子类 (Category)': '未归类',
             '计算公式 (Expression)': '',
-            '业务意义 (Meaning)': ''
+            '业务意义 (Meaning)': '',
+            '使用场景 (Scenario)': '',
+            '策略提示 (Hint)': ''
         })
         record.update(meta)
         result_records.append(record)
@@ -329,7 +382,7 @@ def screen_and_rank_factors():
         print(f"[{group_name}]: 入选 {len(group_df)} 个因子")
         
     # 给新手补充一句话解释打印的这三个列
-    print("\n (释义：IC 绝对值越大收益预测越准，ICIR 绝对值越大越稳，Score 是综合分)")
+    print("\n (释义：IC 绝对值越大预测越准，ICIR 绝对值越大越稳，IC胜率>50%有效，多空年化代表最高层减最低层收益，Score 是综合分)")
     
     # 为了不在屏幕上刷屏太乱，终端只按得分从高到低打印 Top 10，并截取部分说明
     print("\n【全市场综合得分 Top 10】:")
@@ -340,7 +393,7 @@ def screen_and_rank_factors():
     pd.set_option('display.width', 200)
     pd.set_option('display.max_colwidth', 50)
     
-    print(top10_df[['因子名称 (Factor)', '大类 (File)', '综合得分 (Score)', 'IC均值 (IC)', '信息比率 (ICIR)', '计算公式 (Expression)']])
+    print(top10_df[['因子名称 (Factor)', '大类 (File)', '综合得分 (Score)', 'IC均值 (IC)', '信息比率 (ICIR)', 'IC胜率 (WinRate)', '多空年化收益(%)']])
     print("...\n")
     
     # 保存完整榜单（包含所有信息）到 drafts 目录，按照 大类 和 得分 进行双重排序

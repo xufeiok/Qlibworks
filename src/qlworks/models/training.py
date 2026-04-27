@@ -99,9 +99,7 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
         "learning_rate": 0.1,
         "iterations": 100,
         "depth": 6,
-        "subsample": 0.8,
         "thread_count": -1,
-        "verbose": False,
     }
     if params:
         base_params.update(params)
@@ -140,13 +138,14 @@ def train_lstm_model(dataset, params: Dict[str, object] = None):
     return model
 
 
-def predict_ensemble_models(models: list, dataset) -> pd.DataFrame:
+def predict_ensemble_models(models: list, dataset, segment: str = "test") -> pd.DataFrame:
     """
     功能概述：
     - 对多个训练好的模型（如 LGBM + XGB + CatBoost）进行等权重集成预测。
     输入：
     - models: 模型实例列表。
-    - dataset: 待预测的数据集。
+    - dataset: 待预测的数据集 (Qlib Dataset 对象)。
+    - segment: 预测的时间段名称，默认为 "test"。
     输出：
     - 包含 'score' 列的 DataFrame。
     """
@@ -155,7 +154,7 @@ def predict_ensemble_models(models: list, dataset) -> pd.DataFrame:
         
     predictions = []
     for model in models:
-        pred = model.predict(dataset)
+        pred = model.predict(dataset, segment=segment)
         predictions.append(pred)
         
     # 等权重平均 (也可以在这里拓展为加权平均或 Stacking)
