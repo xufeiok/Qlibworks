@@ -214,6 +214,10 @@ def embedded_feature_selection(
     - 树模型可刻画非线性，Lasso 更适合线性稀疏筛选。
     """
     model_kwargs = model_kwargs or {}
+    
+    # 从 kwargs 中分离出供我们代码逻辑使用的参数，以及供 sklearn 模型使用的参数
+    max_features = model_kwargs.pop("max_features", None)
+    
     if algo == "lasso":
         kwargs = {"alpha": 0.01, "max_iter": 2000}
         kwargs.update(model_kwargs)
@@ -225,13 +229,23 @@ def embedded_feature_selection(
     else:
         raise ValueError(f"不支持的嵌入法方法: {algo}")
 
-    model.fit(x_train, y_train)
+    # Lasso 等线性模型需要将输入数据标准化
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    x_train_scaled = scaler.fit_transform(x_train)
+    
+    model.fit(x_train_scaled, y_train)
     if algo == "lasso":
         scores = pd.Series(np.abs(model.coef_), index=x_train.columns, name="importance")
     else:
         scores = pd.Series(model.feature_importances_, index=x_train.columns, name="importance")
 
     selected = scores[scores > threshold].sort_values(ascending=False)
+    
+    # 极速优化：如果有 max_features 参数限制，直接截断
+    if max_features and len(selected) > max_features:
+        selected = selected.head(max_features)
+        
     if selected.empty:
         selected = scores.sort_values(ascending=False).head(1)
 

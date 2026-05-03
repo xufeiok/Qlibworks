@@ -59,7 +59,7 @@ def main():
     print("\n[4] 启动 Backtrader 引擎进行交易撮合...")
     strategy_params = dict(
         top_k=5,             # 每天买入预测分数最高的 5 只股票
-        rebalance_days=1,    # 调仓周期: 1天 (每日换仓，考验因子短期预测能力)
+        rebalance_days=5,    # 调仓周期: 5天 (每周换仓，降低摩擦成本)
         buy_pct=0.95,        # 最大资金使用率 95% (留5%现金防滑点)
         log_enabled=False    # 关闭详细的买卖日志以保持终端整洁
     )

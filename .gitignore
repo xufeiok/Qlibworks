@@ -8,3 +8,6 @@ __pycache__/
 qlib_data/
 artifacts/
 *.log
+
+catboost_info/
+mlruns/
