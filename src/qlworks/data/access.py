@@ -22,18 +22,11 @@ InstrumentInput = Union[str, Sequence[str]]
 class DataFetchSpec:
     """
     功能概述：
-    - 统一描述一次 Qlib 数据提取请求，便于数据层、特征层、模型层复用。
+    - 统一描述一次数据提取请求，便于数据层、特征层、模型层复用。
     输入：
     - instruments: 股票池名称或股票代码列表。
-    - fields: 需要提取的字段/因子表达式列表。
+    - fields: 需要提取的字段/因子表达式列表（在 ClickHouse 模式下为 DuckDB SQL 表达式）。
     - start_time/end_time/freq: 时间区间与频率。
-    输出：
-    - 仅保存查询参数，不直接执行查询。
-    边界条件：
-    - fields 为空时应由调用方兜底。
-    - instruments 为字符串时既可表示股票池，也可表示单只股票。
-    性能/安全注意事项：
-    - 推荐批量查询，避免碎片化小请求破坏缓存命中率。
     """
 
     instruments: InstrumentInput
@@ -47,15 +40,7 @@ class QlibDataAccessor:
     """
     功能概述：
     - 封装 Qlib 常用数据访问动作，包括初始化、交易日历、股票池与特征/标签提取。
-    输入：
-    - provider_uri/region: Qlib 数据根目录与市场区域。
-    输出：
-    - 返回标准 Pandas DataFrame 或列表，供下游清洗、评估、建模模块使用。
-    边界条件：
-    - 若 Qlib 未安装，调用时会抛出清晰异常。
-    - 股票池字符串与显式股票列表均可使用。
-    性能/安全注意事项：
-    - `ensure_init()` 只在首次调用时初始化，避免重复初始化带来额外开销。
+    - 维持与 Qlib 原生 `.bin` 文件的接口兼容，确保下游 DatasetH 和模型算子不报错。
     """
 
     def __init__(self, provider_uri: Optional[str] = None, region: str = "cn"):
@@ -90,18 +75,7 @@ class QlibDataAccessor:
         freq: str = "day",
         as_list: bool = True,
     ) -> List[str]:
-        """
-        功能概述：
-        - 将股票池配置展开为具体股票列表。
-        输入：
-        - instruments: 股票池名称、股票代码或股票列表。
-        输出：
-        - 标准股票代码列表。
-        边界条件：
-        - 若已是列表，则直接返回去重后的结果。
-        性能/安全注意事项：
-        - 大股票池建议复用结果，避免重复展开。
-        """
+        """将股票池配置展开为具体股票列表。"""
         self.ensure_init()
         if isinstance(instruments, (list, tuple)):
             return [str(x) for x in instruments]
@@ -156,19 +130,7 @@ class QlibDataAccessor:
         label_fields: Sequence[str],
         label_names: Optional[Sequence[str]] = None,
     ) -> pd.DataFrame:
-        """
-        功能概述：
-        - 一次性提取特征与标签并按索引对齐，形成统一研究底表。
-        输入：
-        - feature_spec: 特征查询规范。
-        - label_fields/label_names: 标签表达式与标签名。
-        输出：
-        - 对齐后的多重索引 DataFrame。
-        边界条件：
-        - label_names 缺失时自动生成 `LABEL0/LABEL1...`。
-        性能/安全注意事项：
-        - 只做按索引拼接，不做额外重采样，避免无意引入前视偏差。
-        """
+        """一次性提取特征与标签并按索引对齐，形成统一研究底表。"""
         feature_df = self.fetch_features(feature_spec)
         label_df = self.fetch_labels(
             instruments=feature_spec.instruments,
@@ -187,25 +149,20 @@ class QlibDataAccessor:
 if __name__ == "__main__":
     print("=== QlibDataAccessor 使用示例 ===")
     
-    # 1. 初始化数据访问器 (默认使用 config.py 中的 QLIB_DATA_DIR)
+    # 1. 初始化数据访问器
     accessor = QlibDataAccessor()
 
     # 2. 获取交易日历
-    print("\n[1] 获取交易日历 (2020-01-01 至 2020-01-10):")
-    cal = accessor.calendar(start_time="2020-01-01", end_time="2020-01-10")
-    print(cal)
-
-    # 3. 获取股票池列表 (为加快运行速度，只打印前5只)
-    print("\n[2] 获取沪深300成分股 (前5只):")
+    print("\n[1] 获取交易日历 (2020-01-02 至 2020-01-10):")
     try:
-        # 注意：2020-01-01 是元旦休息日，本地数据从 2020-01-02 开始
-        instruments = accessor.list_instruments(instruments="csi300", start_time="2020-01-02", end_time="2020-01-02")
-        print(instruments[:5])
+        cal = accessor.calendar(start_time="2020-01-02", end_time="2020-01-10")
+        print(cal)
     except Exception as e:
-        print(f"获取股票池失败 (可能是本地数据未包含 csi300): {e}")
+        print(f"获取交易日历失败: {e}")
 
-    # 为了演示快速运行，我们取两只具体的股票 (本地数据格式为 code.EXCHANGE，如 600000.SH)
+    # 3. 获取股票池列表
     demo_instruments = ["600000.SH", "000001.SZ"]
+    print(f"\n[2] 获取标的列表: {demo_instruments}")
 
     # 4. 构建特征查询规范
     print("\n[3] 构建特征查询规范 DataFetchSpec...")
@@ -227,7 +184,6 @@ if __name__ == "__main__":
 
     # 6. 提取统一研究底表 (特征 + 标签)
     print("\n[5] 提取统一研究底表 fetch_feature_label_frame (特征 + 标签, 前5行):")
-    # 假设预测未来2天的收益率作为标签
     label_fields = ["Ref($close, -2)/$close - 1"]
     try:
         dataset_df = accessor.fetch_feature_label_frame(
@@ -237,9 +193,6 @@ if __name__ == "__main__":
         )
         print(dataset_df.head(5))
         
-        # ==============================================================
-        # 演示模块串联：access.py -> cleaning.py -> quality.py
-        # ==============================================================
         from qlworks.data.cleaning import clean_ohlcv_data
         from qlworks.data.quality import generate_data_quality_report
         
@@ -252,23 +205,7 @@ if __name__ == "__main__":
         
         print("\n=== 数据质量报告 ===")
         print(f"1. 综合质量得分: {quality_report['overall_score']:.4f}")
-        print(f"   [{quality_report['metrics_explanation']['overall_score']}]")
-        
         print(f"\n2. 完整性得分 (Completeness): {quality_report['completeness']['completeness']:.4f}")
-        print(f"   缺失比例统计:\n{quality_report['completeness']['missing_ratio']}")
-        print(f"   [{quality_report['metrics_explanation']['completeness']}]")
-        
-        print(f"\n3. 一致性得分 (Consistency): {quality_report['consistency']['consistency_score']:.4f}")
-        print(f"   发现逻辑违规异常数: {quality_report['consistency']['consistency_issues']}")
-        print(f"   [{quality_report['metrics_explanation']['consistency']}]")
-        
-        print(f"\n4. 时效性得分 (Timeliness): {quality_report['timeliness']['timeliness_score']:.4f}")
-        print(f"   数据延迟天数: {quality_report['timeliness']['data_lag_days']} 天")
-        print(f"   [{quality_report['metrics_explanation']['timeliness']}]")
-        
-        print(f"\n5. 异常极端值分布 (Outliers):")
-        print(f"{quality_report['outliers']}")
-        print(f"   [{quality_report['metrics_explanation']['outliers']}]")
         
     except Exception as e:
         print(f"提取研究底表或串联演示失败: {e}")

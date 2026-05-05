@@ -83,6 +83,24 @@ class BaseQlibStrategy(bt.Strategy):
         if top_k_feeds:
             target_weight = self.p.buy_pct / len(top_k_feeds)
             for d in top_k_feeds:
+                # [Virtu 改进] 检查成交量容量
+                # 预估目标持仓所需资金
+                target_value = self.broker.getvalue() * target_weight
+                current_value = self.getposition(d).size * d.close[0]
+                delta_value = target_value - current_value
+                
+                # 如果是买入，检查是否超过成交量限制
+                if delta_value > 0:
+                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)
+                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0
+                    max_allowed_shares = available_volume * self.p.volume_limit_pct
+                    max_allowed_value = max_allowed_shares * d.close[0]
+                    
+                    if delta_value > max_allowed_value:
+                        self.log(f"  [容量受限] {d._name} 目标买入金额 {delta_value:.2f} 超过容量上限 {max_allowed_value:.2f}")
+                        # 降级：只买入最大允许量
+                        target_weight = (current_value + max_allowed_value) / self.broker.getvalue()
+                
                 self.order_target_percent(d, target=target_weight)
                 
         self.log(f"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}")
@@ -114,7 +132,10 @@ class EnhancedQlibStrategy(bt.Strategy):
         trailing_stop=True,         # 是否启用移动止盈
         trailing_start_pct=0.10,    # 盈利超过 10% 启动移动止盈
         trailing_callback_pct=0.02, # 回撤 2% 止盈
-        take_profit_pct=1.0         # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)
+        take_profit_pct=1.0,        # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)
+        
+        # --- 市场冲击与容量限制 ---
+        volume_limit_pct=0.10       # [Virtu 改进] 单笔订单不能超过当日成交量的10%，防止吃不掉流动性
     )
 
     def __init__(self):
@@ -169,13 +190,18 @@ class EnhancedQlibStrategy(bt.Strategy):
                         else:
                             stop_price = price * (1.0 - self.p.stop_loss_pct)
                             
+                        # [Two Sigma & Virtu 改进] 发送真实的止损委托单到交易所（撮合引擎）
+                        # 确保日内极端行情下能被 Low 价格刺穿并及时成交，而不是等收盘
+                        stop_order = self.sell(data=d, size=size, exectype=bt.Order.Stop, price=stop_price)
+                        
                         self.trade_states[d] = {
                             'entry_price': price,
                             'max_high': price,
                             'stop_loss': stop_price,
+                            'stop_order': stop_order,
                             'tp_triggered': False,
                         }
-                        self.log(f"  [{d._name}] 建立风控追踪 | 初始止损价: {stop_price:.4f}")
+                        self.log(f"  [{d._name}] 建立风控追踪 | 真实止损单挂单价: {stop_price:.4f}")
                         
             elif order.issell():
                 self.log(f"卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}")
@@ -225,13 +251,9 @@ class EnhancedQlibStrategy(bt.Strategy):
                 if high_price > state['max_high']:
                     state['max_high'] = high_price
                     
-                # 检查止损
-                if current_price < state['stop_loss']:
-                    self.log(f"!!! [{d._name}] 触发止损 !!! 当前价 {current_price:.4f} < 止损价 {state['stop_loss']:.4f}")
-                    self.close(d)
-                    # 标记为已处理，防止同日多次触发
-                    del self.trade_states[d]
-                    continue
+                # 真实的止损现在由 Broker 底层撮合引擎（盘中 Low 刺穿 Stop 价格）自动执行。
+                # 所以我们不再需要在 next() 的收盘后手动触发止损。
+                # 但我们需要更新移动止盈/追踪止损的订单。
                     
                 # 检查移动止盈
                 if self.p.trailing_stop:
@@ -242,11 +264,16 @@ class EnhancedQlibStrategy(bt.Strategy):
                         if not state['tp_triggered']:
                             sell_size = pos.size * self.p.take_profit_pct
                             if self.p.take_profit_pct >= 1.0:
+                                # 取消原来的止损单
+                                if state.get('stop_order'):
+                                    self.cancel(state['stop_order'])
                                 self.close(d)
                                 self.log(f"!!! [{d._name}] 触发100%止盈 !!! 当前价 {current_price:.4f} (回撤 {current_pullback*100:.1f}%)")
                                 del self.trade_states[d]
                                 continue
                             else:
+                                if state.get('stop_order'):
+                                    self.cancel(state['stop_order'])
                                 self.sell(data=d, size=sell_size)
                                 state['tp_triggered'] = True
                                 # 重置止损为保本或更紧的ATR垫
@@ -256,7 +283,12 @@ class EnhancedQlibStrategy(bt.Strategy):
                                 else:
                                     new_stop = state['entry_price'] # 至少保本
                                 state['stop_loss'] = max(state['stop_loss'], new_stop)
-                                self.log(f"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损价重置为: {state['stop_loss']:.4f}")
+                                
+                                # 挂出新的止损单
+                                new_stop_order = self.sell(data=d, size=pos.size - sell_size, exectype=bt.Order.Stop, price=state['stop_loss'])
+                                state['stop_order'] = new_stop_order
+                                
+                                self.log(f"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损单挂单价: {state['stop_loss']:.4f}")
 
     def rebalance(self):
         # 获取当前所有有效股票的 score
@@ -275,6 +307,8 @@ class EnhancedQlibStrategy(bt.Strategy):
         # 平掉不在 Top K 中的仓位
         for d in self.instruments:
             if self.getposition(d).size != 0 and d not in top_k_feeds:
+                if d in self.trade_states and self.trade_states[d].get('stop_order'):
+                    self.cancel(self.trade_states[d]['stop_order'])
                 self.close(d)
                 self.log(f"调仓平仓: {d._name}")
         
@@ -282,6 +316,26 @@ class EnhancedQlibStrategy(bt.Strategy):
         if top_k_feeds:
             target_weight = self.p.buy_pct / len(top_k_feeds)
             for d in top_k_feeds:
+                # [Virtu 改进] 检查成交量容量
+                # 预估目标持仓所需资金
+                target_value = self.broker.getvalue() * target_weight
+                current_value = self.getposition(d).size * d.close[0]
+                delta_value = target_value - current_value
+                
+                # 如果是买入，检查是否超过成交量限制
+                if delta_value > 0:
+                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)
+                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0
+                    max_allowed_shares = available_volume * self.p.volume_limit_pct
+                    max_allowed_value = max_allowed_shares * d.close[0]
+                    
+                    if delta_value > max_allowed_value:
+                        self.log(f"  [容量受限] {d._name} 目标买入金额 {delta_value:.2f} 超过容量上限 {max_allowed_value:.2f}")
+                        # 降级：只买入最大允许量
+                        adjusted_target_weight = (current_value + max_allowed_value) / self.broker.getvalue()
+                        self.order_target_percent(d, target=adjusted_target_weight)
+                        continue
+                        
                 self.order_target_percent(d, target=target_weight)
                 
         self.log(f"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}")

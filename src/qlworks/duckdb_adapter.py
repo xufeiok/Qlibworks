@@ -79,37 +79,67 @@ def _table_columns(con: duckdb.DuckDBPyConnection, schema: str, table: str) -> L
 
 @dataclass
 class DuckDBOHLCV:
-    db_path: Path = DUCKDB_PATH
+    # 飞牛OS ClickHouse 连接配置
+    ch_host: str = "192.168.10.102"
+    ch_port: int = 18123
+    ch_user: str = "xufei"
+    ch_password: str = "xf1987216"
+    ch_database: str = "quant_db"
+    
+    db_path: Path = DUCKDB_PATH  # 保留兼容性
     table: Optional[Tuple[str, str]] = None
     column_map: Optional[Dict[str, str]] = None
 
-    def _connect(self) -> duckdb.DuckDBPyConnection:
-        return duckdb.connect(str(self.db_path))
+    def _connect_clickhouse(self):
+        import clickhouse_connect
+        return clickhouse_connect.get_client(
+            host=self.ch_host,
+            port=self.ch_port,
+            user=self.ch_user,
+            password=self.ch_password,
+            database=self.ch_database
+        )
 
-    def _auto_detect(self, con: duckdb.DuckDBPyConnection) -> Tuple[Tuple[str, str], Dict[str, str]]:
-        tables = _list_user_tables(con)
-        for sch, tbl in tables:
-            cols = _table_columns(con, sch, tbl)
+    def _auto_detect(self) -> Tuple[Tuple[str, str], Dict[str, str]]:
+        # 在 ClickHouse 中自动检测 OHLCV 表
+        ch_client = self._connect_clickhouse()
+        tables_res = ch_client.query("SHOW TABLES").result_rows
+        tables = [row[0] for row in tables_res]
+        
+        for tbl in tables:
+            cols_res = ch_client.query(f"DESCRIBE {tbl}").result_rows
+            cols = [row[0] for row in cols_res]
             m = _detect_ohlcv_columns(cols)
             if m:
-                return (sch, tbl), m
-        raise RuntimeError("No OHLCV-like table detected")
+                return (self.ch_database, tbl), m
+        raise RuntimeError("No OHLCV-like table detected in ClickHouse")
 
     def load(self) -> pd.DataFrame:
-        con = self._connect()
-        try:
-            table = self.table
-            cmap = self.column_map
-            if table is None or cmap is None:
-                table, cmap = self._auto_detect(con)
-                self.table = table
-                self.column_map = cmap
-            sch, tbl = table
-            cols = list(cmap.values())
-            q = f"select {', '.join([f'{sch}.{tbl}.{c}' for c in cols])} from {sch}.{tbl}"
-            df = con.execute(q).fetch_df()
-        finally:
-            con.close()
+        ch_client = self._connect_clickhouse()
+        
+        table = self.table
+        cmap = self.column_map
+        if table is None or cmap is None:
+            table, cmap = self._auto_detect()
+            self.table = table
+            self.column_map = cmap
+            
+        sch, tbl = table
+        cols = list(cmap.values())
+        
+        # 1. 从 ClickHouse 取【中间结果集】获取 Arrow 格式（超快）
+        query = f"SELECT {', '.join(cols)} FROM {tbl}"
+        arrow_table = ch_client.query_arrow(query)
+        
+        # 2. 直接注入 DuckDB（零拷贝、瞬间完成）
+        con = duckdb.connect()
+        con.register("kline_data", arrow_table)
+        
+        # 3. 从 DuckDB 中查询并返回 DataFrame
+        q = f"SELECT * FROM kline_data"
+        df = con.execute(q).df()
+        con.close()
+
         ren = {cmap[k]: k for k in cmap}
         df = df.rename(columns=ren)
         if "amount" not in df.columns:

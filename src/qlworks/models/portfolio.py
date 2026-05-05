@@ -53,7 +53,20 @@ def optimize_portfolio(
         raise ValueError("价格数据与预测得分没有股票交集")
     
     prices = prices_df[common_tickers]
-    expected_ret = predictions[common_tickers]
+    raw_scores = predictions[common_tickers]
+
+    # [Man Group & Point72 改进] 
+    # 机器学习的预测分数通常是截面排序或Z-Score，不能直接作为“年化预期收益率”输入马科维茨优化器！
+    # 这里我们使用简化的 Grinold 的 Alpha 公式进行映射： E(R) = Volatility * IC * Score
+    # 假设模型的历史预估 IC 为 0.05
+    assumed_ic = 0.05
+    # 计算个股的年化历史波动率 (252个交易日)
+    annualized_vol = prices.pct_change().std() * np.sqrt(252)
+    # 将截面分数进行 Z-Score 标准化，使其均值为0，标准差为1
+    z_scores = (raw_scores - raw_scores.mean()) / (raw_scores.std() + 1e-8)
+    
+    # 计算转化后的预期年化收益率
+    expected_ret = annualized_vol * assumed_ic * z_scores
 
     # 2. 估计协方差矩阵 (风险模型)
     # 这里使用 Ledoit-Wolf 压缩收缩法，对金融噪声数据比简单的样本协方差更稳健

@@ -44,12 +44,25 @@ class CSNeutralize(Processor):
         exposures = exposures.reindex(df.index)
         
         # Process market cap (log)
+        # [AQR 改进] 保留原始市值用于 WLS (加权最小二乘法) 权重计算
+        exposures['raw_market_cap'] = exposures['market_cap'].copy()
         if self.log_mc:
             exposures['market_cap'] = np.where(exposures['market_cap'] <= 0, np.nan, exposures['market_cap'])
             exposures['market_cap'] = np.log(exposures['market_cap'])
             
-        print(f"[{self.__class__.__name__}] Running cross-sectional neutralization...")
+        print(f"[{self.__class__.__name__}] Running cross-sectional neutralization for group: {self.fields_group}...")
         
+        # 核心修复：只提取当前需要处理的 fields_group 列
+        # Qlib 的 df.columns 通常是 MultiIndex (如 ('feature', '$close'), ('label', 'LABEL0'))
+        if isinstance(df.columns, pd.MultiIndex) and self.fields_group is not None:
+            # 找到属于该 group 的列
+            target_cols = df.columns[df.columns.get_level_values(0) == self.fields_group]
+        else:
+            target_cols = df.columns
+            
+        if len(target_cols) == 0:
+            return df
+            
         # Group by datetime to neutralize cross-sectionally
         def _neutralize_slice(sub_df):
             date = sub_df.index.get_level_values('datetime')[0]
@@ -84,31 +97,64 @@ class CSNeutralize(Processor):
             
             X_mat = X.values.astype(float)
             
-            # Result dataframe
-            res_df = pd.DataFrame(np.nan, index=sub_df.index, columns=sub_df.columns)
+            # [AQR 改进] WLS weights (市值平方根)
+            weights = np.sqrt(valid_exp['raw_market_cap'].values.astype(float))
+            # 避免极端情况下的 NaN 或者 <=0 的权重
+            weights = np.nan_to_num(weights, nan=1.0)
+            weights = np.clip(weights, a_min=1e-8, a_max=None)
             
-            # We can do matrix operation for all features at once, but features might have NaNs!
-            # If a feature has NaN, we need to handle it separately.
-            # To optimize, we can fill NaN with 0 temporarily, or do column by column.
-            # Since K (features) is typically ~100-200, column by column is acceptable if we use np.linalg.lstsq
+            # 仅提取目标列的数据
+            target_sub_df = valid_sub_df[target_cols]
             
-            for col in valid_sub_df.columns:
-                y = valid_sub_df[col].values.astype(float)
-                valid_y_mask = ~np.isnan(y)
+            # Result dataframe (只填充我们要修改的列，其余列原样返回)
+            res_df = sub_df.copy()
+            
+            # [AQR 改进] 矩阵化极速求解 OLS
+            # 提取 Y 矩阵 (目标因子)
+            Y_mat = target_sub_df.values.astype(float)
+            
+            # 找出哪些行 (instrument) 在 Y 中是完全有效的（即所有因子都没有 NaN）
+            # 检查是否有 NaN
+            has_nan = np.isnan(Y_mat).any()
+            
+            if not has_nan and Y_mat.shape[0] > X_mat.shape[1]:
+                # 理想情况：Y 矩阵完全无缺失值，直接进行全矩阵 WLS 计算
+                # 权重广播
+                X_mat_w = X_mat * weights[:, np.newaxis]
+                Y_mat_w = Y_mat * weights[:, np.newaxis]
                 
-                if valid_y_mask.sum() > X_mat.shape[1]:  # Need enough degrees of freedom
-                    X_valid = X_mat[valid_y_mask]
-                    y_valid = y[valid_y_mask]
+                # 求解所有特征的 beta
+                # beta shape: (X_features, Y_features)
+                beta, _, _, _ = np.linalg.lstsq(X_mat_w, Y_mat_w, rcond=None)
+                
+                # 计算残差
+                resid_mat = Y_mat - X_mat @ beta
+                
+                # 映射回 DataFrame
+                res_df.loc[valid_sub_df.index, target_cols] = resid_mat
+            else:
+                # 降级情况：存在 NaN，退回到逐列计算以保证严谨性
+                for col in target_cols:
+                    y = valid_sub_df[col].values.astype(float)
+                    valid_y_mask = ~np.isnan(y)
                     
-                    # np.linalg.lstsq solves: X * beta = y
-                    beta, _, _, _ = np.linalg.lstsq(X_valid, y_valid, rcond=None)
-                    
-                    # Calculate residuals
-                    resid = y_valid - X_valid @ beta
-                    
-                    # Map back to res_df
-                    # valid_sub_df.index[valid_y_mask] gives the original instrument indices
-                    res_df.loc[valid_sub_df.index[valid_y_mask], col] = resid
+                    if valid_y_mask.sum() > X_mat.shape[1]:  # Need enough degrees of freedom
+                        X_valid = X_mat[valid_y_mask]
+                        y_valid = y[valid_y_mask]
+                        
+                        # WLS weights matching valid_y_mask
+                        w_valid = weights[valid_y_mask]
+                        X_valid_w = X_valid * w_valid[:, np.newaxis]
+                        y_valid_w = y_valid * w_valid
+                        
+                        # np.linalg.lstsq solves: X_w * beta = y_w
+                        beta, _, _, _ = np.linalg.lstsq(X_valid_w, y_valid_w, rcond=None)
+                        
+                        # Calculate residuals
+                        resid = y_valid - X_valid @ beta
+                        
+                        # Map back to res_df
+                        res_df.loc[valid_sub_df.index[valid_y_mask], col] = resid
                     
             return res_df
             

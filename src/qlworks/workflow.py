@@ -42,12 +42,17 @@ CONFIG = {
         "algo": "random_forest", # 换用 RF，因为 lasso 容易把因子全部砍掉导致模型输入全是常数
         "threshold": 0.0001,    # 降低稀疏阈值，保留更多因子
         "label_col": "LABEL0",
+        "remove_collinearity": True,    # [AQR 改进] 是否在模型特征选择前进行共线性过滤
+        "collinearity_threshold": 0.7   # 共线性相关系数阈值
     },
     
     # 4. 模型训练与调优参数
     "model_tuning": {
         "use_optuna": False,    # 是否开启贝叶斯寻优 (实盘建议 True)
         "n_trials": 5,          # 寻优迭代次数
+        "use_purged_cv": True,  # [Point72 改进] 开启带隔离期的滚动交叉验证防泄漏
+        "n_splits": 3,
+        "embargo_days": 10      # 避免特征生成带来的数据泄露，设置10天的安全隔离带
     },
     
     # 5. Barra 组合优化参数
@@ -175,29 +180,42 @@ def run_quant_research_workflow():
         )
         
         # 执行选择算法
+        # [AQR 改进] 传递共线性过滤参数
+        fs_kwargs = {
+            "algo": fs_conf["algo"],
+            "threshold": fs_conf["threshold"],
+            "remove_collinearity": fs_conf.get("remove_collinearity", False),
+            "collinearity_threshold": fs_conf.get("collinearity_threshold", 0.7)
+        }
+        
         fs_result = select_features(
             x_train, y_train, 
             method=fs_conf["method"], 
-            algo=fs_conf["algo"], 
-            threshold=fs_conf["threshold"]
+            **fs_kwargs
         )
         
         selected_features = list(fs_result.selected_features)
         print(f"- 从 {len(bundle.names)} 个因子中挑选出 {len(selected_features)} 个有效因子:")
         print(selected_features)
         
-        # 为了演示流水线连续性，在此处进行 DataFrame 切片
-        # (工程最佳实践：重写 dataset handler 或重新生成 dataset)
-        keep_cols = selected_features + [c for c in train_frame.columns if "LABEL" in c]
-        # (后续送给模型的 dataset 虽然庞大，但在内部我们会提取 selected_features，
-        # 此处展示降维名单已获取，不实际破坏 Qlib 底层 Dataset)
+        # [Point72 改进] 为了简化，不破坏底层的 Qlib dataset handler（因为 Qlib 旧版本可能不支持直接 infer_processors），
+        # 而是将特征选择结果保存，在后续训练时作为参数传入模型或者单独切片
+        # 这里仅作为打印展示，真实实盘可以在 dataset.py 中传入选中的特征重新构造 Dataset
+        # (后续送给模型的 dataset 虽然庞大，但在内部模型训练时如果传入了 selected_features 则只用这些)
         
     # 5. 模型调优与训练
     print("\n[5] 模型训练与评估...")
     best_params = None
     if CONFIG["model_tuning"]["use_optuna"]:
         print("- 启动 Optuna 自动超参寻优...")
-        best_params = tune_lgbm_hyperparameters(dataset, n_trials=CONFIG["model_tuning"]["n_trials"])
+        tuning_conf = CONFIG["model_tuning"]
+        best_params = tune_lgbm_hyperparameters(
+            dataset, 
+            n_trials=tuning_conf["n_trials"],
+            use_purged_cv=tuning_conf.get("use_purged_cv", False),
+            n_splits=tuning_conf.get("n_splits", 3),
+            embargo_days=tuning_conf.get("embargo_days", 10)
+        )
         
     print("- 训练 LightGBM...")
     model = train_lgb_model(dataset, **(best_params or {}))
@@ -252,7 +270,16 @@ def run_quant_research_workflow():
                 df_inst = raw_data.xs(inst, level='instrument').copy()
                 # 仅截取从回测起始日开始的行情，提前留一点预热期(例如提前30天)保证BT指标计算
                 df_inst = df_inst[df_inst.index >= (bt_start_date - pd.Timedelta(days=30))]
+                
+                # [Renaissance 改进] 幸存者偏差防范。退市或长期停牌的股票会导致后续数据全为 NaN 或 volume 为 0。
+                # 在灌入 BT 之前，将最后连续为 NaN 或 volume=0 的数据剔除，BT 引擎发现没有数据时会自动平仓该股票。
                 if not df_inst.empty:
+                    # 找到最后一天有真实交易量的日子
+                    valid_volume = df_inst[df_inst['volume'] > 0]
+                    if not valid_volume.empty:
+                        last_valid_date = valid_volume.index[-1]
+                        # 截断退市后的冗余数据
+                        df_inst = df_inst[df_inst.index <= last_valid_date]
                     price_df_dict[inst] = df_inst
                 
         bt_conf = CONFIG["backtest"]

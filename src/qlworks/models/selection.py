@@ -191,6 +191,35 @@ def wrapper_feature_selection(
     )
 
 
+def remove_collinear_features(
+    x_train: pd.DataFrame, 
+    threshold: float = 0.7, 
+    method: str = "spearman"
+) -> pd.DataFrame:
+    """
+    功能概述：
+    - [AQR 改进] 因子共线性过滤。计算特征之间的相关系数矩阵，若两个特征高度相关，保留排在前面的特征，剔除后面的特征。
+    输入：
+    - x_train: 训练特征矩阵。
+    - threshold: 相关系数绝对值阈值 (默认 0.7)。
+    - method: pearson 或 spearman。金融数据推荐 spearman 秩相关。
+    输出：
+    - 剔除高共线性特征后的 x_train。
+    """
+    print(f"    - 开始进行 {method} 相关性共线性过滤 (阈值: {threshold})...")
+    # 计算相关系数矩阵
+    corr_matrix = x_train.corr(method=method).abs()
+    
+    # 提取上三角矩阵
+    upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+    
+    # 找到相关系数大于阈值的特征列
+    to_drop = [column for column in upper.columns if any(upper[column] > threshold)]
+    
+    print(f"    - 共发现并剔除了 {len(to_drop)} 个高共线性特征。")
+    return x_train.drop(columns=to_drop)
+
+
 def embedded_feature_selection(
     x_train: pd.DataFrame,
     y_train: pd.Series,
@@ -282,6 +311,18 @@ def select_features(
     if method == "wrapper":
         return wrapper_feature_selection(x_train, y_train, **kwargs)
     if method == "embedded":
+        # [AQR 改进] 在执行基于模型的嵌入法选择前，先进行多重共线性剔除
+        if kwargs.get("remove_collinearity", False):
+            x_train = remove_collinear_features(
+                x_train, 
+                threshold=kwargs.get("collinearity_threshold", 0.7),
+                method="spearman"
+            )
+        
+        # 剔除仅供共线性过滤使用的参数
+        kwargs.pop("remove_collinearity", None)
+        kwargs.pop("collinearity_threshold", None)
+        
         return embedded_feature_selection(x_train, y_train, **kwargs)
     raise ValueError(f"不支持的特征选择类型: {method}")
 

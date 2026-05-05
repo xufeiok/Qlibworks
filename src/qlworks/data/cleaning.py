@@ -27,7 +27,7 @@ import pandas as pd
 def fill_group_missing(
     df: pd.DataFrame,
     group_level: str = "instrument",
-    methods: Sequence[str] = ("ffill", "bfill"),
+    methods: Sequence[str] = ("ffill",),  # [Bloomberg 改进] 移除 "bfill" 以防止未来数据泄露 (Future Leakage)
 ) -> pd.DataFrame:
     """
     功能概述：
@@ -35,28 +35,30 @@ def fill_group_missing(
     输入：
     - df: 待清洗数据。
     - group_level: 分组索引层名称。
-    - methods: 填充方法顺序。
+    - methods: 填充方法顺序。默认仅使用 ffill。
     输出：
     - 缺失值按组处理后的 DataFrame。
     边界条件：
     - 若不存在目标分组层，则退化为全表填充。
     性能/安全注意事项：
-    - 采用 Pandas 向量化分组操作，适合中大型样本。
+    - [安全] 严禁在原始日线使用 bfill，否则会导致前视偏差。
+    - 增加了 limit=5 的限制，防止长期停牌股票产生过多“僵尸数据”。
     """
     result = df.copy()
     if not isinstance(result.index, pd.MultiIndex) or group_level not in result.index.names:
         for method in methods:
             if method == "ffill":
-                result = result.ffill()
+                result = result.ffill(limit=5)
             elif method == "bfill":
-                result = result.bfill()
+                # 虽然不推荐，但保留接口兼容性
+                result = result.bfill(limit=5)
         return result
 
     for method in methods:
         if method == "ffill":
-            result = result.groupby(level=group_level, group_keys=False).apply(lambda x: x.ffill())
+            result = result.groupby(level=group_level, group_keys=False).apply(lambda x: x.ffill(limit=5))
         elif method == "bfill":
-            result = result.groupby(level=group_level, group_keys=False).apply(lambda x: x.bfill())
+            result = result.groupby(level=group_level, group_keys=False).apply(lambda x: x.bfill(limit=5))
     return result
 
 

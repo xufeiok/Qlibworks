@@ -4,7 +4,7 @@
     "timeframe": "1d",
     "description": "\n    增强版的 Qlib 截面回测策略。\n    结合了定期（如每周）根据 score 进行排序的截面多因子逻辑，\n    以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。\n    ",
     "chart_config": {},
-    "code": "class EnhancedQlibStrategy(bt.Strategy):\n    \"\"\"\n    增强版的 Qlib 截面回测策略。\n    结合了定期（如每周）根据 score 进行排序的截面多因子逻辑，\n    以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。\n    \"\"\"\n    params = dict(\n        top_k=5,             # 持仓数量\n        rebalance_days=5,    # 调仓周期（天）\n        buy_pct=0.95,        # 最大资金使用率\n        log_enabled=True,\n        \n        # --- 止盈止损风控参数 ---\n        use_risk_control=True,      # 是否启用风控增强模式\n        stop_type='ATR',            # 止损类型: 'ATR' 或 'FIXED'\n        stop_loss_pct=0.05,         # 固定止损比例 (5%)，仅在 stop_type='FIXED' 时有效\n        atr_period=14,              # ATR 周期\n        atr_multiplier=2.0,         # ATR 止损倍数\n        \n        trailing_stop=True,         # 是否启用移动止盈\n        trailing_start_pct=0.10,    # 盈利超过 10% 启动移动止盈\n        trailing_callback_pct=0.02, # 回撤 2% 止盈\n        take_profit_pct=1.0         # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)\n    )\n\n    def __init__(self):\n        self.days_since_rebalance = 0\n        self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']\n        self.all_orders = []\n        \n        # 记录每只股票的交易状态\n        self.trade_states = {}\n        \n        # 为每个数据源计算 ATR\n        self.atrs = {}\n        if self.p.use_risk_control and self.p.stop_type == 'ATR':\n            for d in self.instruments:\n                self.atrs[d] = bt.indicators.ATR(d, period=self.p.atr_period)\n\n    def notify_order(self, order):\n        if order.status in [order.Submitted, order.Accepted]:\n            return\n            \n        if order.status == order.Completed:\n            d = order.data\n            price = order.executed.price\n            size = order.executed.size\n            \n            if order.isbuy():\n                self.log(f\"买入成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'buy',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 初始化或更新持仓状态 (忽略加仓造成的复杂成本计算，以最新买入价为准)\n                if d not in self.trade_states or self.getposition(d).size == size:\n                    stop_price = 0.0\n                    if self.p.use_risk_control:\n                        if self.p.stop_type == 'ATR':\n                            # 注意：如果历史数据不足，ATR可能为NaN\n                            atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (price * 0.05)\n                            stop_dist = atr_val * self.p.atr_multiplier\n                            stop_price = price - stop_dist\n                        else:\n                            stop_price = price * (1.0 - self.p.stop_loss_pct)\n                            \n                        self.trade_states[d] = {\n                            'entry_price': price,\n                            'max_high': price,\n                            'stop_loss': stop_price,\n                            'tp_triggered': False,\n                        }\n                        self.log(f\"  [{d._name}] 建立风控追踪 | 初始止损价: {stop_price:.4f}\")\n                        \n            elif order.issell():\n                self.log(f\"卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'sell',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 如果平仓完了，移除追踪\n                if self.getposition(d).size == 0:\n                    if d in self.trade_states:\n                        del self.trade_states[d]\n                        \n        elif order.status in [order.Canceled, order.Margin, order.Rejected]:\n            self.log(f\"订单异常 | {order.data._name} | Status: {order.status}\")\n\n    def next(self):\n        # 1. 每日风控检查 (止盈止损)\n        if self.p.use_risk_control:\n            self.check_risk_control()\n            \n        self.days_since_rebalance += 1\n        # 2. 检查是否到达调仓日\n        if self.days_since_rebalance >= self.p.rebalance_days:\n            self.days_since_rebalance = 0\n            self.rebalance()\n\n    def check_risk_control(self):\n        for d in self.instruments:\n            pos = self.getposition(d)\n            if pos.size > 0 and d in self.trade_states:\n                state = self.trade_states[d]\n                current_price = d.close[0]\n                high_price = d.high[0]\n                \n                # 更新最高价\n                if high_price > state['max_high']:\n                    state['max_high'] = high_price\n                    \n                # 检查止损\n                if current_price < state['stop_loss']:\n                    self.log(f\"!!! [{d._name}] 触发止损 !!! 当前价 {current_price:.4f} < 止损价 {state['stop_loss']:.4f}\")\n                    self.close(d)\n                    # 标记为已处理，防止同日多次触发\n                    del self.trade_states[d]\n                    continue\n                    \n                # 检查移动止盈\n                if self.p.trailing_stop:\n                    current_profit_pct = (current_price - state['entry_price']) / state['entry_price']\n                    current_pullback = (state['max_high'] - current_price) / state['max_high']\n                    \n                    if current_profit_pct > self.p.trailing_start_pct and current_pullback > self.p.trailing_callback_pct:\n                        if not state['tp_triggered']:\n                            sell_size = pos.size * self.p.take_profit_pct\n                            if self.p.take_profit_pct >= 1.0:\n                                self.close(d)\n                                self.log(f\"!!! [{d._name}] 触发100%止盈 !!! 当前价 {current_price:.4f} (回撤 {current_pullback*100:.1f}%)\")\n                                del self.trade_states[d]\n                                continue\n                            else:\n                                self.sell(data=d, size=sell_size)\n                                state['tp_triggered'] = True\n                                # 重置止损为保本或更紧的ATR垫\n                                if self.p.stop_type == 'ATR':\n                                    atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (current_price * 0.05)\n                                    new_stop = current_price - atr_val * self.p.atr_multiplier\n                                else:\n                                    new_stop = state['entry_price'] # 至少保本\n                                state['stop_loss'] = max(state['stop_loss'], new_stop)\n                                self.log(f\"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损价重置为: {state['stop_loss']:.4f}\")\n\n    def rebalance(self):\n        # 获取当前所有有效股票的 score\n        scores = []\n        for d in self.instruments:\n            if len(d) > 0 and not np.isnan(d.score[0]):\n                scores.append((d._name, d, d.score[0]))\n        \n        # 按 score 降序排列\n        scores.sort(key=lambda x: x[2], reverse=True)\n        \n        # 选出 Top K\n        top_k_feeds = [x[1] for x in scores[:self.p.top_k]]\n        top_k_names = [x[0] for x in scores[:self.p.top_k]]\n        \n        # 平掉不在 Top K 中的仓位\n        for d in self.instruments:\n            if self.getposition(d).size != 0 and d not in top_k_feeds:\n                self.close(d)\n                self.log(f\"调仓平仓: {d._name}\")\n        \n        # 对 Top K 分配权重\n        if top_k_feeds:\n            target_weight = self.p.buy_pct / len(top_k_feeds)\n            for d in top_k_feeds:\n                self.order_target_percent(d, target=target_weight)\n                \n        self.log(f\"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}\")\n\n    def log(self, txt, dt=None):\n        if self.p.log_enabled:\n            dt = dt or self.datas[0].datetime.date(0)\n            print(f'{dt.isoformat()}, {txt}')\n",
+    "code": "class EnhancedQlibStrategy(bt.Strategy):\n    \"\"\"\n    增强版的 Qlib 截面回测策略。\n    结合了定期（如每周）根据 score 进行排序的截面多因子逻辑，\n    以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。\n    \"\"\"\n    params = dict(\n        top_k=5,             # 持仓数量\n        rebalance_days=5,    # 调仓周期（天）\n        buy_pct=0.95,        # 最大资金使用率\n        log_enabled=True,\n        \n        # --- 止盈止损风控参数 ---\n        use_risk_control=True,      # 是否启用风控增强模式\n        stop_type='ATR',            # 止损类型: 'ATR' 或 'FIXED'\n        stop_loss_pct=0.05,         # 固定止损比例 (5%)，仅在 stop_type='FIXED' 时有效\n        atr_period=14,              # ATR 周期\n        atr_multiplier=2.0,         # ATR 止损倍数\n        \n        trailing_stop=True,         # 是否启用移动止盈\n        trailing_start_pct=0.10,    # 盈利超过 10% 启动移动止盈\n        trailing_callback_pct=0.02, # 回撤 2% 止盈\n        take_profit_pct=1.0,        # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)\n        \n        # --- 市场冲击与容量限制 ---\n        volume_limit_pct=0.10       # [Virtu 改进] 单笔订单不能超过当日成交量的10%，防止吃不掉流动性\n    )\n\n    def __init__(self):\n        self.days_since_rebalance = 0\n        self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']\n        self.all_orders = []\n        \n        # 记录每只股票的交易状态\n        self.trade_states = {}\n        \n        # 为每个数据源计算 ATR\n        self.atrs = {}\n        if self.p.use_risk_control and self.p.stop_type == 'ATR':\n            for d in self.instruments:\n                self.atrs[d] = bt.indicators.ATR(d, period=self.p.atr_period)\n\n    def notify_order(self, order):\n        if order.status in [order.Submitted, order.Accepted]:\n            return\n            \n        if order.status == order.Completed:\n            d = order.data\n            price = order.executed.price\n            size = order.executed.size\n            \n            if order.isbuy():\n                self.log(f\"买入成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'buy',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 初始化或更新持仓状态 (忽略加仓造成的复杂成本计算，以最新买入价为准)\n                if d not in self.trade_states or self.getposition(d).size == size:\n                    stop_price = 0.0\n                    if self.p.use_risk_control:\n                        if self.p.stop_type == 'ATR':\n                            # 注意：如果历史数据不足，ATR可能为NaN\n                            atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (price * 0.05)\n                            stop_dist = atr_val * self.p.atr_multiplier\n                            stop_price = price - stop_dist\n                        else:\n                            stop_price = price * (1.0 - self.p.stop_loss_pct)\n                            \n                        # [Two Sigma & Virtu 改进] 发送真实的止损委托单到交易所（撮合引擎）\n                        # 确保日内极端行情下能被 Low 价格刺穿并及时成交，而不是等收盘\n                        stop_order = self.sell(data=d, size=size, exectype=bt.Order.Stop, price=stop_price)\n                        \n                        self.trade_states[d] = {\n                            'entry_price': price,\n                            'max_high': price,\n                            'stop_loss': stop_price,\n                            'stop_order': stop_order,\n                            'tp_triggered': False,\n                        }\n                        self.log(f\"  [{d._name}] 建立风控追踪 | 真实止损单挂单价: {stop_price:.4f}\")\n                        \n            elif order.issell():\n                self.log(f\"卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'sell',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 如果平仓完了，移除追踪\n                if self.getposition(d).size == 0:\n                    if d in self.trade_states:\n                        del self.trade_states[d]\n                        \n        elif order.status in [order.Canceled, order.Margin, order.Rejected]:\n            self.log(f\"订单异常 | {order.data._name} | Status: {order.status}\")\n\n    def next(self):\n        # 1. 每日风控检查 (止盈止损)\n        if self.p.use_risk_control:\n            self.check_risk_control()\n            \n        self.days_since_rebalance += 1\n        # 2. 检查是否到达调仓日\n        if self.days_since_rebalance >= self.p.rebalance_days:\n            self.days_since_rebalance = 0\n            self.rebalance()\n\n    def check_risk_control(self):\n        for d in self.instruments:\n            pos = self.getposition(d)\n            if pos.size > 0 and d in self.trade_states:\n                state = self.trade_states[d]\n                current_price = d.close[0]\n                high_price = d.high[0]\n                \n                # 更新最高价\n                if high_price > state['max_high']:\n                    state['max_high'] = high_price\n                    \n                # 真实的止损现在由 Broker 底层撮合引擎（盘中 Low 刺穿 Stop 价格）自动执行。\n                # 所以我们不再需要在 next() 的收盘后手动触发止损。\n                # 但我们需要更新移动止盈/追踪止损的订单。\n                    \n                # 检查移动止盈\n                if self.p.trailing_stop:\n                    current_profit_pct = (current_price - state['entry_price']) / state['entry_price']\n                    current_pullback = (state['max_high'] - current_price) / state['max_high']\n                    \n                    if current_profit_pct > self.p.trailing_start_pct and current_pullback > self.p.trailing_callback_pct:\n                        if not state['tp_triggered']:\n                            sell_size = pos.size * self.p.take_profit_pct\n                            if self.p.take_profit_pct >= 1.0:\n                                # 取消原来的止损单\n                                if state.get('stop_order'):\n                                    self.cancel(state['stop_order'])\n                                self.close(d)\n                                self.log(f\"!!! [{d._name}] 触发100%止盈 !!! 当前价 {current_price:.4f} (回撤 {current_pullback*100:.1f}%)\")\n                                del self.trade_states[d]\n                                continue\n                            else:\n                                if state.get('stop_order'):\n                                    self.cancel(state['stop_order'])\n                                self.sell(data=d, size=sell_size)\n                                state['tp_triggered'] = True\n                                # 重置止损为保本或更紧的ATR垫\n                                if self.p.stop_type == 'ATR':\n                                    atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (current_price * 0.05)\n                                    new_stop = current_price - atr_val * self.p.atr_multiplier\n                                else:\n                                    new_stop = state['entry_price'] # 至少保本\n                                state['stop_loss'] = max(state['stop_loss'], new_stop)\n                                \n                                # 挂出新的止损单\n                                new_stop_order = self.sell(data=d, size=pos.size - sell_size, exectype=bt.Order.Stop, price=state['stop_loss'])\n                                state['stop_order'] = new_stop_order\n                                \n                                self.log(f\"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损单挂单价: {state['stop_loss']:.4f}\")\n\n    def rebalance(self):\n        # 获取当前所有有效股票的 score\n        scores = []\n        for d in self.instruments:\n            if len(d) > 0 and not np.isnan(d.score[0]):\n                scores.append((d._name, d, d.score[0]))\n        \n        # 按 score 降序排列\n        scores.sort(key=lambda x: x[2], reverse=True)\n        \n        # 选出 Top K\n        top_k_feeds = [x[1] for x in scores[:self.p.top_k]]\n        top_k_names = [x[0] for x in scores[:self.p.top_k]]\n        \n        # 平掉不在 Top K 中的仓位\n        for d in self.instruments:\n            if self.getposition(d).size != 0 and d not in top_k_feeds:\n                if d in self.trade_states and self.trade_states[d].get('stop_order'):\n                    self.cancel(self.trade_states[d]['stop_order'])\n                self.close(d)\n                self.log(f\"调仓平仓: {d._name}\")\n        \n        # 对 Top K 分配权重\n        if top_k_feeds:\n            target_weight = self.p.buy_pct / len(top_k_feeds)\n            for d in top_k_feeds:\n                # [Virtu 改进] 检查成交量容量\n                # 预估目标持仓所需资金\n                target_value = self.broker.getvalue() * target_weight\n                current_value = self.getposition(d).size * d.close[0]\n                delta_value = target_value - current_value\n                \n                # 如果是买入，检查是否超过成交量限制\n                if delta_value > 0:\n                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)\n                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0\n                    max_allowed_shares = available_volume * self.p.volume_limit_pct\n                    max_allowed_value = max_allowed_shares * d.close[0]\n                    \n                    if delta_value > max_allowed_value:\n                        self.log(f\"  [容量受限] {d._name} 目标买入金额 {delta_value:.2f} 超过容量上限 {max_allowed_value:.2f}\")\n                        # 降级：只买入最大允许量\n                        adjusted_target_weight = (current_value + max_allowed_value) / self.broker.getvalue()\n                        self.order_target_percent(d, target=adjusted_target_weight)\n                        continue\n                        \n                self.order_target_percent(d, target=target_weight)\n                \n        self.log(f\"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}\")\n\n    def log(self, txt, dt=None):\n        if self.p.log_enabled:\n            dt = dt or self.datas[0].datetime.date(0)\n            print(f'{dt.isoformat()}, {txt}')\n",
     "filename": "E:/Quant/Qlibworks/src/qlworks/backtest/bt_strategy.py",
     "data_feeds": [
       {
@@ -1854,110 +1854,119 @@
       {
         "close_datetime": "2020-10-21T00:00:00",
         "size": 0,
-        "price": 19.719999313354492,
+        "price": 145.03488938903806,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 61.148094904518125,
-        "pnl": -1977.610994494059
+        "commission": 65.73493478167724,
+        "pnl": 3594.267188387272
       },
       {
         "close_datetime": "2020-10-21T00:00:00",
         "size": 0,
-        "price": 1.3513500238656997,
+        "price": 231.23099999999997,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.17689246237326,
-        "pnl": -355.493333352682
+        "commission": 61.692101122924804,
+        "pnl": -1264.4229781981167
       },
       {
         "close_datetime": "2020-10-28T00:00:00",
         "size": 0,
-        "price": 10.440430305480955,
+        "price": 1.3413400334119796,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.040580709923745,
-        "pnl": -416.7526856665441
+        "commission": 63.03887478035808,
+        "pnl": -1081.1987300447802
       },
       {
         "close_datetime": "2020-10-28T00:00:00",
         "size": 0,
-        "price": 11.50148977088928,
+        "price": 24.065106625164255,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.791077833366394,
-        "pnl": 1044.167504186442
+        "commission": 62.474041138153076,
+        "pnl": -3045.522923431852
       },
       {
         "close_datetime": "2020-10-28T00:00:00",
         "size": 0,
-        "price": 2.259999990463257,
+        "price": 10.560550190925596,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 60.144637711969615,
-        "pnl": -2440.6666618988215
+        "commission": 65.27008907852172,
+        "pnl": 299.6775160144841
+      },
+      {
+        "close_datetime": "2020-11-02T00:00:00",
+        "size": 0,
+        "price": 72.15208183288573,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 59.60215264604491,
+        "pnl": -2796.8482102144076
       },
       {
         "close_datetime": "2020-11-04T00:00:00",
         "size": 0,
-        "price": 36.336299236297606,
+        "price": 17.317299236297604,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.305590004997256,
-        "pnl": 4377.479652190134
+        "commission": 63.647215268983835,
+        "pnl": 1275.9254015160707
       },
       {
         "close_datetime": "2020-11-04T00:00:00",
         "size": 0,
-        "price": 20.740719312667846,
+        "price": 6.06605994272232,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 58.8768946538639,
-        "pnl": -1454.5125634027202
-      },
-      {
-        "close_datetime": "2020-11-04T00:00:00",
-        "size": 0,
-        "price": 36.25,
-        "direction": "Long",
-        "return_pct": 0.0,
-        "commission": 58.492119368804936,
-        "pnl": -1088.8727505638706
+        "commission": 62.094394862319945,
+        "pnl": -278.26726418604574
       },
       {
         "close_datetime": "2020-11-11T00:00:00",
         "size": 0,
-        "price": 3.943940057277679,
+        "price": 46.47643030548095,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.81505776089858,
-        "pnl": 816.6080436490136
+        "commission": 59.657898620422365,
+        "pnl": -1378.8358389890702
       },
       {
         "close_datetime": "2020-11-11T00:00:00",
         "size": 0,
-        "price": 6.56655994272232,
+        "price": 18.648629159927367,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.542796920852176,
-        "pnl": 767.7237822269669
+        "commission": 63.237410762691496,
+        "pnl": 1782.8861574479117
       },
       {
         "close_datetime": "2020-11-11T00:00:00",
         "size": 0,
-        "price": 8.16815984725952,
+        "price": 10.410399618148803,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 61.820371811635965,
-        "pnl": 513.6889050724458
+        "commission": 66.02585624093628,
+        "pnl": 4309.44384601813
       },
       {
         "close_datetime": "2020-11-18T00:00:00",
         "size": 0,
-        "price": 6.1060999045372,
+        "price": 43.163118930816644,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 60.697649733510005,
-        "pnl": -2072.693935820544
+        "commission": 63.90224610644531,
+        "pnl": -733.6820601628347
+      },
+      {
+        "close_datetime": "2020-11-18T00:00:00",
+        "size": 0,
+        "price": 21.151129159927365,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.48733413565063,
+        "pnl": -1383.212944502469
       },
       {
         "close_datetime": "2020-11-18T00:00:00",
@@ -1965,161 +1974,152 @@
         "price": 20.830809465408322,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.76328666410827,
-        "pnl": -291.8444459506028
+        "commission": 64.46520118343925,
+        "pnl": -299.7582173024379
       },
       {
         "close_datetime": "2020-11-18T00:00:00",
         "size": 0,
-        "price": 11.84000015258789,
-        "direction": "Long",
+        "price": 11.888099618911744,
+        "direction": "Short",
         "return_pct": 0.0,
-        "commission": 61.21055029911231,
-        "pnl": -1792.1010623440213
+        "commission": 36.03616828393507,
+        "pnl": -871.5414806213305
       },
       {
         "close_datetime": "2020-11-25T00:00:00",
         "size": 0,
-        "price": 34.034,
+        "price": 65.5554878616333,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.3772525,
-        "pnl": 2120.743247500004
+        "commission": 64.22723724630737,
+        "pnl": 1491.9636133396323
       },
       {
         "close_datetime": "2020-11-25T00:00:00",
         "size": 0,
-        "price": 7.057050190925597,
+        "price": 3.203200047731399,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.44762166144419,
-        "pnl": 2792.3411004955615
+        "commission": 64.55388527609968,
+        "pnl": -433.12717659641953
       },
       {
-        "close_datetime": "2020-11-26T00:00:00",
+        "close_datetime": "2020-11-25T00:00:00",
         "size": 0,
-        "price": 30.23020076370239,
+        "price": 9.369359656333922,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 59.4479141418724,
-        "pnl": -3853.1137699348687
-      },
-      {
-        "close_datetime": "2020-12-02T00:00:00",
-        "size": 0,
-        "price": 5.995989770889282,
-        "direction": "Long",
-        "return_pct": 0.0,
-        "commission": 63.17225691214371,
-        "pnl": 654.8552016488005
+        "commission": 64.28807506077003,
+        "pnl": 1673.9419200239959
       },
       {
         "close_datetime": "2020-12-02T00:00:00",
         "size": 0,
-        "price": 8.383940870841323,
+        "price": 42.372331832885735,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 63.08108877141047,
-        "pnl": -2695.320863015241
+        "commission": 65.34298603682326,
+        "pnl": 1125.9326557974418
+      },
+      {
+        "close_datetime": "2020-12-02T00:00:00",
+        "size": 0,
+        "price": 78.37830305480956,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.56621517126465,
+        "pnl": -1609.8029427408412
+      },
+      {
+        "close_datetime": "2020-12-02T00:00:00",
+        "size": 0,
+        "price": 5.665659847259521,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.88543466119384,
+        "pnl": -1720.6477534478104
+      },
+      {
+        "close_datetime": "2020-12-04T00:00:00",
+        "size": 0,
+        "price": 17.46745076370239,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 59.79587488489469,
+        "pnl": -3076.873936264007
       },
       {
         "close_datetime": "2020-12-09T00:00:00",
         "size": 0,
-        "price": 12.362350381851195,
+        "price": 1.4714700286388396,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 60.92729136309815,
-        "pnl": 488.64480677380567
+        "commission": 56.88312110710143,
+        "pnl": -113.7662422142016
       },
       {
         "close_datetime": "2020-12-09T00:00:00",
         "size": 0,
-        "price": 22.242219312667846,
+        "price": 6.860000133514404,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 61.526309920248025,
-        "pnl": 1455.2759047499324
-      },
-      {
-        "close_datetime": "2020-12-09T00:00:00",
-        "size": 0,
-        "price": 9.739729541778564,
-        "direction": "Long",
-        "return_pct": 0.0,
-        "commission": 66.80503908676242,
-        "pnl": 6955.774120238838
+        "commission": 61.58487592708827,
+        "pnl": -1657.3101785064907
       },
       {
         "close_datetime": "2020-12-11T00:00:00",
         "size": 0,
-        "price": 26.946920076370237,
+        "price": 12.052039961814879,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 61.30192986044884,
-        "pnl": -3701.449453463887
+        "commission": 57.953501900093244,
+        "pnl": -3377.0227676737036
       },
       {
         "close_datetime": "2020-12-16T00:00:00",
         "size": 0,
-        "price": 10.810800190925598,
+        "price": 14.014,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.04852847713946,
-        "pnl": -3072.9156003279163
+        "commission": 61.929587502918245,
+        "pnl": 1887.7379154153275
       },
       {
         "close_datetime": "2020-12-23T00:00:00",
         "size": 0,
-        "price": 6.6566500954627985,
+        "price": 5.164902400331043,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 62.266451140365604,
-        "pnl": -4735.088670748669
+        "commission": 57.8080520617156,
+        "pnl": -1904.37871416966
       },
       {
         "close_datetime": "2020-12-23T00:00:00",
         "size": 0,
-        "price": 6.266260229110717,
+        "price": 29.00897954177856,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 58.981722156524654,
-        "pnl": -117.96344431304627
+        "commission": 56.53974021635055,
+        "pnl": -954.5790165873515
       },
       {
         "close_datetime": "2020-12-23T00:00:00",
         "size": 0,
-        "price": 2.0299999713897705,
+        "price": 48.56852045822143,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 58.405875560271745,
-        "pnl": -1411.6694730605968
+        "commission": 54.738839736946105,
+        "pnl": -1849.6569161605853
       },
       {
         "close_datetime": "2020-12-30T00:00:00",
         "size": 0,
-        "price": 5.83582992362976,
+        "price": 5.735730019092559,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 61.77029859727859,
-        "pnl": 3256.8557836056393
-      },
-      {
-        "close_datetime": "2020-12-30T00:00:00",
-        "size": 0,
-        "price": 14.074060420036314,
-        "direction": "Long",
-        "return_pct": 0.0,
-        "commission": 55.54287548469544,
-        "pnl": -2694.8331672193867
-      },
-      {
-        "close_datetime": "2020-12-30T00:00:00",
-        "size": 0,
-        "price": 5.724270019054413,
-        "direction": "Short",
-        "return_pct": 0.0,
-        "commission": 60.02255572663117,
-        "pnl": -3435.202173795322
+        "commission": 58.29356052963638,
+        "pnl": 3103.430025589066
       },
       {
         "close_datetime": "2020-12-30T00:00:00",
@@ -2127,8 +2127,17 @@
         "price": 11.731720267295836,
         "direction": "Long",
         "return_pct": 0.0,
-        "commission": 56.85819188542842,
-        "pnl": -1505.316034917311
+        "commission": 54.73029979474639,
+        "pnl": -1448.980263791633
+      },
+      {
+        "close_datetime": "2020-12-30T00:00:00",
+        "size": 0,
+        "price": 11.111100381851195,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 57.14635495179462,
+        "pnl": 622.5964562750556
       }
     ]
   },
@@ -2137,767 +2146,819 @@
       {
         "datetime": "2020-10-14T00:00:00",
         "type": "buy",
-        "price": 1.3513500238656997,
-        "size": 23114,
-        "comm": 31.235104451631784,
-        "value": 31235.10445163178,
-        "pos_size": 23114,
-        "cash": 5441.005709113091,
-        "total_value": 98790.96629065415,
-        "stock_code": "600157.SH",
-        "stock_name": "600157.SH"
+        "price": 145.03488938903806,
+        "size": 214,
+        "comm": 31.037466329254144,
+        "value": 31037.466329254145,
+        "pos_size": 214,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "603129.SH",
+        "stock_name": "603129.SH"
       },
       {
         "datetime": "2020-10-14T00:00:00",
         "type": "buy",
-        "price": 10.440430305480955,
-        "size": 3036,
-        "comm": 31.69714640744018,
-        "value": 31697.14640744018,
-        "pos_size": 3036,
-        "cash": 5441.005709113091,
-        "total_value": 98790.96629065415,
-        "stock_code": "000582.SZ",
-        "stock_name": "000582.SZ"
+        "price": 24.074049236297604,
+        "size": 1320,
+        "comm": 31.77774499191284,
+        "value": 31777.744991912838,
+        "pos_size": 1320,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
       },
       {
         "datetime": "2020-10-14T00:00:00",
         "type": "buy",
-        "price": 19.719999313354492,
-        "size": 1599,
-        "comm": 31.532278902053832,
-        "value": 31532.278902053833,
-        "pos_size": 1599,
-        "cash": 5441.005709113091,
-        "total_value": 98790.96629065415,
-        "stock_code": "002157.SZ",
-        "stock_name": "002157.SZ"
+        "price": 231.23099999999997,
+        "size": 136,
+        "comm": 31.447415999999997,
+        "value": 31447.415999999994,
+        "pos_size": 136,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "600763.SH",
+        "stock_name": "600763.SH"
       },
       {
         "datetime": "2020-10-21T00:00:00",
         "type": "sell",
-        "price": 18.521460914611815,
-        "size": -1599,
-        "comm": 29.615816002464292,
-        "value": 31532.278902053833,
+        "price": 162.13770304870604,
+        "size": -214,
+        "comm": 34.697468452423095,
+        "value": 31037.466329254145,
         "pos_size": 0,
-        "cash": 4457.742058096239,
-        "total_value": 97296.75168043167,
-        "stock_code": "002157.SZ",
-        "stock_name": "002157.SZ"
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "603129.SH",
+        "stock_name": "603129.SH"
       },
       {
         "datetime": "2020-10-21T00:00:00",
         "type": "sell",
-        "price": 1.3386600333452225,
-        "size": -23114,
-        "comm": 30.941788010741476,
-        "value": 31235.10445163178,
+        "price": 222.3873906097412,
+        "size": -136,
+        "comm": 30.244685122924807,
+        "value": 31447.415999999994,
         "pos_size": 0,
-        "cash": 4457.742058096239,
-        "total_value": 97296.75168043167,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "600763.SH",
+        "stock_name": "600763.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "buy",
+        "price": 1.3413400334119796,
+        "size": 23878,
+        "comm": 32.02851731781125,
+        "value": 32028.51731781125,
+        "pos_size": 23878,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
         "stock_code": "600157.SH",
         "stock_name": "600157.SH"
       },
       {
         "datetime": "2020-10-21T00:00:00",
-        "type": "sell",
-        "price": 10.699290038108826,
-        "size": -111,
-        "comm": 1.1876211942300796,
-        "value": 1158.887763908386,
-        "pos_size": 2925,
-        "cash": 4457.742058096239,
-        "total_value": 97296.75168043167,
-        "stock_code": "000582.SZ",
-        "stock_name": "000582.SZ"
+        "type": "buy",
+        "price": 10.560550190925596,
+        "size": 3073,
+        "comm": 32.45257073671436,
+        "value": 32452.57073671436,
+        "pos_size": 3073,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "603885.SH",
+        "stock_name": "603885.SH"
       },
       {
         "datetime": "2020-10-21T00:00:00",
         "type": "buy",
-        "price": 11.50148977088928,
-        "size": 2725,
-        "comm": 31.34155962567329,
-        "value": 31341.55962567329,
-        "pos_size": 2725,
-        "cash": 4457.742058096239,
-        "total_value": 97296.75168043167,
-        "stock_code": "603979.SH",
-        "stock_name": "603979.SH"
+        "price": 23.770000457763672,
+        "size": 40,
+        "comm": 0.950800018310547,
+        "value": 950.8000183105469,
+        "pos_size": 1360,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
       },
       {
-        "datetime": "2020-10-21T00:00:00",
-        "type": "buy",
-        "price": 2.259999990463257,
-        "size": 13833,
-        "comm": 31.262579868078234,
-        "value": 31262.57986807823,
-        "pos_size": 13833,
-        "cash": 4457.742058096239,
-        "total_value": 97296.75168043167,
-        "stock_code": "000683.SZ",
-        "stock_name": "000683.SZ"
+        "datetime": "2020-10-26T00:00:00",
+        "type": "sell",
+        "price": 21.850000381469727,
+        "size": -1320,
+        "comm": 28.842000503540042,
+        "value": 31765.940745216816,
+        "pos_size": 40,
+        "cash": 33836.16001541191,
+        "total_value": 98583.5998085218,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "sell",
-        "price": 10.309679695129395,
-        "size": -2925,
-        "comm": 30.155813108253483,
-        "value": 30538.258643531793,
+        "price": 1.298699952363968,
+        "size": -23878,
+        "comm": 31.01035746254683,
+        "value": 32028.51731781125,
         "pos_size": 0,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "000582.SZ",
-        "stock_name": "000582.SZ"
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600157.SH",
+        "stock_name": "600157.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "sell",
-        "price": 11.90808007621765,
-        "size": -2725,
-        "comm": 32.4495182076931,
-        "value": 31341.55962567329,
+        "price": 22.58739060974121,
+        "size": -40,
+        "comm": 0.9034956243896484,
+        "value": 962.6042650065701,
         "pos_size": 0,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "603979.SH",
-        "stock_name": "603979.SH"
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "sell",
-        "price": 2.087909914255142,
-        "size": -13833,
-        "comm": 28.88205784389138,
-        "value": 31262.57986807823,
+        "price": 10.679309580802917,
+        "size": -3073,
+        "comm": 32.817518341807364,
+        "value": 32452.57073671436,
         "pos_size": 0,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "000683.SZ",
-        "stock_name": "000683.SZ"
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "603885.SH",
+        "stock_name": "603885.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "buy",
-        "price": 20.740719312667846,
-        "size": 1453,
-        "comm": 30.13626516130638,
-        "value": 30136.26516130638,
-        "pos_size": 1453,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "002837.SZ",
-        "stock_name": "002837.SZ"
+        "price": 6.06605994272232,
+        "size": 5136,
+        "comm": 31.155283865821836,
+        "value": 31155.283865821835,
+        "pos_size": 5136,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600126.SH",
+        "stock_name": "600126.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "buy",
-        "price": 36.336299236297606,
-        "size": 810,
-        "comm": 29.43240238140106,
-        "value": 29432.40238140106,
-        "pos_size": 810,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "601865.SH",
-        "stock_name": "601865.SH"
+        "price": 17.317299236297604,
+        "size": 1799,
+        "comm": 31.15382132609939,
+        "value": 31153.82132609939,
+        "pos_size": 1799,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600131.SH",
+        "stock_name": "600131.SH"
       },
       {
         "datetime": "2020-10-28T00:00:00",
         "type": "buy",
-        "price": 36.25,
-        "size": 821,
-        "comm": 29.761250000000004,
-        "value": 29761.25,
-        "pos_size": 821,
-        "cash": 6434.396368524209,
-        "total_value": 94187.09941150821,
-        "stock_code": "600316.SH",
-        "stock_name": "600316.SH"
+        "price": 72.15208183288573,
+        "size": 432,
+        "comm": 31.169699351806635,
+        "value": 31169.699351806634,
+        "pos_size": 432,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600536.SH",
+        "stock_name": "600536.SH"
       },
       {
         "datetime": "2020-11-02T00:00:00",
         "type": "sell",
-        "price": 41.18000030517578,
-        "size": -405.0,
-        "comm": 16.677900123596192,
-        "value": 14716.20119070053,
-        "pos_size": 405.0,
-        "cash": 23095.618591996805,
-        "total_value": 96446.03759262242,
-        "stock_code": "601865.SH",
-        "stock_name": "601865.SH"
-      },
-      {
-        "datetime": "2020-11-04T00:00:00",
-        "type": "sell",
-        "price": 42.4575,
-        "size": -405.0,
-        "comm": 17.195287500000003,
-        "value": 14716.20119070053,
-        "pos_size": 0.0,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "601865.SH",
-        "stock_name": "601865.SH"
-      },
-      {
-        "datetime": "2020-11-04T00:00:00",
-        "type": "sell",
-        "price": 19.780199237823485,
-        "size": -1453,
-        "comm": 28.740629492557524,
-        "value": 30136.26516130638,
+        "price": 65.81586410703304,
+        "size": -432,
+        "comm": 28.43245329423827,
+        "value": 31169.699351806634,
         "pos_size": 0,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "002837.SZ",
-        "stock_name": "002837.SZ"
+        "cash": 33334.53756539944,
+        "total_value": 95505.05560510283,
+        "stock_code": "600536.SH",
+        "stock_name": "600536.SH"
       },
       {
         "datetime": "2020-11-04T00:00:00",
         "type": "sell",
-        "price": 34.99496878051758,
-        "size": -821,
-        "comm": 28.730869368804935,
-        "value": 29761.25,
+        "price": 18.061919923782348,
+        "size": -1799,
+        "comm": 32.493393942884445,
+        "value": 31153.82132609939,
         "pos_size": 0,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "600316.SH",
-        "stock_name": "600316.SH"
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "600131.SH",
+        "stock_name": "600131.SH"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "sell",
+        "price": 6.0239702095985415,
+        "size": -5136,
+        "comm": 30.93911099649811,
+        "value": 31155.283865821835,
+        "pos_size": 0,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "600126.SH",
+        "stock_name": "600126.SH"
       },
       {
         "datetime": "2020-11-04T00:00:00",
         "type": "buy",
-        "price": 3.943940057277679,
-        "size": 7852,
-        "comm": 30.96781732974434,
-        "value": 30967.817329744335,
-        "pos_size": 7852,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "603766.SH",
-        "stock_name": "603766.SH"
+        "price": 18.648629159927367,
+        "size": 1646,
+        "comm": 30.695643597240448,
+        "value": 30695.643597240447,
+        "pos_size": 1646,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "603688.SH",
+        "stock_name": "603688.SH"
       },
       {
         "datetime": "2020-11-04T00:00:00",
         "type": "buy",
-        "price": 6.56655994272232,
-        "size": 4699,
-        "comm": 30.85626517085218,
-        "value": 30856.26517085218,
-        "pos_size": 4699,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "000657.SZ",
-        "stock_name": "000657.SZ"
+        "price": 46.47643030548095,
+        "size": 656,
+        "comm": 30.488538280395506,
+        "value": 30488.538280395504,
+        "pos_size": 656,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
       },
       {
         "datetime": "2020-11-04T00:00:00",
         "type": "buy",
-        "price": 8.16815984725952,
-        "size": 3749,
-        "comm": 30.622431267375944,
-        "value": 30622.43126737594,
-        "pos_size": 3749,
-        "cash": 5148.777885257475,
-        "total_value": 97294.57970648931,
-        "stock_code": "001696.SZ",
-        "stock_name": "001696.SZ"
+        "price": 10.410399618148803,
+        "size": 2961,
+        "comm": 30.825193269338605,
+        "value": 30825.193269338608,
+        "pos_size": 2961,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
       },
       {
         "datetime": "2020-11-11T00:00:00",
         "type": "sell",
-        "price": 4.055939942836761,
-        "size": -7852,
-        "comm": 31.847240431154248,
-        "value": 30967.817329744335,
-        "pos_size": 0,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
-        "stock_code": "603766.SH",
-        "stock_name": "603766.SH"
+        "price": 11.888099618911744,
+        "size": -1480.5,
+        "comm": 17.600331485798836,
+        "value": 15412.596634669304,
+        "pos_size": -1480.5,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
       },
       {
         "datetime": "2020-11-11T00:00:00",
         "type": "sell",
-        "price": 6.74325,
-        "size": -4699,
-        "comm": 31.686531749999997,
-        "value": 30856.26517085218,
+        "price": 44.46548832321167,
+        "size": -656,
+        "comm": 29.16936034002686,
+        "value": 30488.538280395504,
         "pos_size": 0,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
-        "stock_code": "000657.SZ",
-        "stock_name": "000657.SZ"
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
       },
       {
         "datetime": "2020-11-11T00:00:00",
         "type": "sell",
-        "price": 8.321669923782348,
-        "size": -3749,
-        "comm": 31.197940544260025,
-        "value": 30622.43126737594,
+        "price": 19.770210914611816,
+        "size": -1646,
+        "comm": 32.54176716545105,
+        "value": 30695.643597240447,
         "pos_size": 0,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
-        "stock_code": "001696.SZ",
-        "stock_name": "001696.SZ"
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "603688.SH",
+        "stock_name": "603688.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "sell",
+        "price": 11.888099618911744,
+        "size": -2961.0,
+        "comm": 35.20066297159767,
+        "value": -2187.734851129533,
+        "pos_size": -1480.5,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "buy",
+        "price": 43.163118930816644,
+        "size": 748,
+        "comm": 32.28601296025085,
+        "value": 32286.01296025085,
+        "pos_size": 748,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "002773.SZ",
+        "stock_name": "002773.SZ"
       },
       {
         "datetime": "2020-11-11T00:00:00",
         "type": "buy",
         "price": 20.830809465408322,
-        "size": 1512,
-        "comm": 31.496183911697383,
-        "value": 31496.183911697382,
-        "pos_size": 1512,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
+        "size": 1553,
+        "comm": 32.350247099779125,
+        "value": 32350.247099779124,
+        "pos_size": 1553,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
         "stock_code": "600378.SH",
         "stock_name": "600378.SH"
       },
       {
         "datetime": "2020-11-11T00:00:00",
         "type": "buy",
-        "price": 6.1060999045372,
-        "size": 5135,
-        "comm": 31.354823009798523,
-        "value": 31354.82300979852,
-        "pos_size": 5135,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
-        "stock_code": "601216.SH",
-        "stock_name": "601216.SH"
-      },
-      {
-        "datetime": "2020-11-11T00:00:00",
-        "type": "buy",
-        "price": 11.84000015258789,
-        "size": 2658,
-        "comm": 31.47072040557861,
-        "value": 31470.720405578613,
-        "pos_size": 2658,
-        "cash": 5369.709843544736,
-        "total_value": 98753.50217953183,
-        "stock_code": "600060.SH",
-        "stock_name": "600060.SH"
+        "price": 21.151129159927365,
+        "size": 1532,
+        "comm": 32.40352987300872,
+        "value": 32403.529873008723,
+        "pos_size": 1532,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "603606.SH",
+        "stock_name": "603606.SH"
       },
       {
         "datetime": "2020-11-18T00:00:00",
         "type": "sell",
-        "price": 5.714279790401458,
-        "size": -5135,
-        "comm": 29.342826723711486,
-        "value": 31354.82300979852,
+        "price": 42.26769137191773,
+        "size": -748,
+        "comm": 31.61623314619446,
+        "value": 32286.01296025085,
         "pos_size": 0,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
-        "stock_code": "601216.SH",
-        "stock_name": "601216.SH"
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "002773.SZ",
+        "stock_name": "002773.SZ"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "sell",
+        "price": 20.28968946647644,
+        "size": -1532,
+        "comm": 31.083804262641905,
+        "value": 32403.529873008723,
+        "pos_size": 0,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "603606.SH",
+        "stock_name": "603606.SH"
       },
       {
         "datetime": "2020-11-18T00:00:00",
         "type": "sell",
         "price": 20.679300762176513,
-        "size": -1512,
-        "comm": 31.26710275241089,
-        "value": 31496.183911697382,
+        "size": -1553,
+        "comm": 32.11495408366012,
+        "value": 32350.247099779124,
         "pos_size": 0,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
         "stock_code": "600378.SH",
         "stock_name": "600378.SH"
       },
       {
         "datetime": "2020-11-18T00:00:00",
-        "type": "sell",
-        "price": 11.18879980945587,
-        "size": -2658,
-        "comm": 29.739829893533702,
-        "value": 31470.720405578613,
-        "pos_size": 0,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
-        "stock_code": "600060.SH",
-        "stock_name": "600060.SH"
-      },
-      {
-        "datetime": "2020-11-18T00:00:00",
         "type": "buy",
-        "price": 34.034,
-        "size": 899,
-        "comm": 30.596566,
-        "value": 30596.566,
-        "pos_size": 899.0,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
-        "stock_code": "601865.SH",
-        "stock_name": "601865.SH"
-      },
-      {
-        "datetime": "2020-11-18T00:00:00",
-        "type": "buy",
-        "price": 8.420000076293945,
-        "size": 3576,
-        "comm": 30.10992027282715,
-        "value": 30109.92027282715,
-        "pos_size": 3576,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
-        "stock_code": "600546.SH",
-        "stock_name": "600546.SH"
-      },
-      {
-        "datetime": "2020-11-18T00:00:00",
-        "type": "buy",
-        "price": 7.057050190925597,
-        "size": 4293,
-        "comm": 30.29591646964359,
-        "value": 30295.91646964359,
-        "pos_size": 4293,
-        "cash": 4535.714308617957,
-        "total_value": 95019.25430285776,
-        "stock_code": "601128.SH",
-        "stock_name": "601128.SH"
-      },
-      {
-        "datetime": "2020-11-25T00:00:00",
-        "type": "sell",
-        "price": 36.4635,
-        "size": -899.0,
-        "comm": 32.7806865,
-        "value": 30596.566,
+        "price": 12.452439579963682,
+        "size": 1480.5,
+        "comm": 18.43583679813623,
+        "value": -17600.331485798837,
         "pos_size": 0.0,
-        "cash": 4741.930234377058,
-        "total_value": 94533.98949522224,
-        "stock_code": "601865.SH",
-        "stock_name": "601865.SH"
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 65.5554878616333,
+        "size": 478,
+        "comm": 31.335523197860716,
+        "value": 31335.523197860715,
+        "pos_size": 478,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "603786.SH",
+        "stock_name": "603786.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 3.203200047731399,
+        "size": 10134,
+        "comm": 32.46122928371,
+        "value": 32461.22928371,
+        "pos_size": 10134,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "601866.SH",
+        "stock_name": "601866.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 9.369359656333922,
+        "size": 3338,
+        "comm": 31.27492253284263,
+        "value": 31274.92253284263,
+        "pos_size": 3338,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "000519.SZ",
+        "stock_name": "000519.SZ"
       },
       {
         "datetime": "2020-11-25T00:00:00",
         "type": "sell",
-        "price": 7.722270019054413,
-        "size": -4293,
-        "comm": 33.151705191800595,
-        "value": 30295.91646964359,
+        "price": 68.81111725616455,
+        "size": -478,
+        "comm": 32.89171404844666,
+        "value": 31335.523197860715,
         "pos_size": 0,
-        "cash": 4741.930234377058,
-        "total_value": 94533.98949522224,
-        "stock_code": "601128.SH",
-        "stock_name": "601128.SH"
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "603786.SH",
+        "stock_name": "603786.SH"
       },
       {
         "datetime": "2020-11-25T00:00:00",
-        "type": "buy",
-        "price": 5.995989770889282,
-        "size": 5208,
-        "comm": 31.22711472679138,
-        "value": 31227.11472679138,
-        "pos_size": 5208,
-        "cash": 4741.930234377058,
-        "total_value": 94533.98949522224,
-        "stock_code": "600517.SH",
-        "stock_name": "600517.SH"
-      },
-      {
-        "datetime": "2020-11-25T00:00:00",
-        "type": "buy",
-        "price": 8.008,
-        "size": 343,
-        "comm": 2.746744,
-        "value": 2746.7439999999997,
-        "pos_size": 3919,
-        "cash": 4741.930234377058,
-        "total_value": 94533.98949522224,
-        "stock_code": "600546.SH",
-        "stock_name": "600546.SH"
-      },
-      {
-        "datetime": "2020-11-25T00:00:00",
-        "type": "buy",
-        "price": 30.23020076370239,
-        "size": 1046,
-        "comm": 31.6207899988327,
-        "value": 31620.789998832697,
-        "pos_size": 1046,
-        "cash": 4741.930234377058,
-        "total_value": 94533.98949522224,
-        "stock_code": "600363.SH",
-        "stock_name": "600363.SH"
-      },
-      {
-        "datetime": "2020-11-26T00:00:00",
         "type": "sell",
-        "price": 26.603369161605833,
-        "size": -1046,
-        "comm": 27.827124143039704,
-        "value": 31620.789998832697,
+        "price": 3.1668300762176513,
+        "size": -10134,
+        "comm": 32.09265599238968,
+        "value": 32461.22928371,
         "pos_size": 0,
-        "cash": 32541.22725327372,
-        "total_value": 94811.69787485956,
-        "stock_code": "600363.SH",
-        "stock_name": "600363.SH"
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "601866.SH",
+        "stock_name": "601866.SH"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "sell",
+        "price": 9.890099618911742,
+        "size": -3338,
+        "comm": 33.013152527927396,
+        "value": 31274.92253284263,
+        "pos_size": 0,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "000519.SZ",
+        "stock_name": "000519.SZ"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 42.372331832885735,
+        "size": 757,
+        "comm": 32.0758551974945,
+        "value": 32075.8551974945,
+        "pos_size": 757,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 78.37830305480956,
+        "size": 409,
+        "comm": 32.056725949417114,
+        "value": 32056.725949417112,
+        "pos_size": 409,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "603899.SH",
+        "stock_name": "603899.SH"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 5.665659847259521,
+        "size": 5696,
+        "comm": 32.27159848999023,
+        "value": 32271.598489990232,
+        "pos_size": 5696,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
       },
       {
         "datetime": "2020-12-02T00:00:00",
         "type": "sell",
-        "price": 6.13385986661911,
-        "size": -5208,
-        "comm": 31.945142185352324,
-        "value": 31227.11472679138,
+        "price": 43.94601167678834,
+        "size": -757,
+        "comm": 33.267130839328765,
+        "value": 32075.8551974945,
         "pos_size": 0,
-        "cash": 4473.696078088493,
-        "total_value": 93261.98718145154,
-        "stock_code": "600517.SH",
-        "stock_name": "600517.SH"
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
       },
       {
         "datetime": "2020-12-02T00:00:00",
         "type": "sell",
-        "price": 7.712279790401459,
-        "size": -3919,
-        "comm": 30.224424498583318,
-        "value": 32856.66427282715,
+        "price": 74.59532817077637,
+        "size": -409,
+        "comm": 30.509489221847538,
+        "value": 32056.725949417112,
         "pos_size": 0,
-        "cash": 4473.696078088493,
-        "total_value": 93261.98718145154,
-        "stock_code": "600546.SH",
-        "stock_name": "600546.SH"
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "603899.SH",
+        "stock_name": "603899.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "sell",
+        "price": 5.374620114326477,
+        "size": -5696,
+        "comm": 30.613836171203612,
+        "value": 32271.598489990232,
+        "pos_size": 0,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
       },
       {
         "datetime": "2020-12-02T00:00:00",
         "type": "buy",
-        "price": 9.739729541778564,
-        "size": 3069,
-        "comm": 29.891229963718413,
-        "value": 29891.22996371841,
-        "pos_size": 3069,
-        "cash": 4473.696078088493,
-        "total_value": 93261.98718145154,
+        "price": 17.46745076370239,
+        "size": 1798,
+        "comm": 31.4064764731369,
+        "value": 31406.4764731369,
+        "pos_size": 1798,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "601965.SH",
+        "stock_name": "601965.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "buy",
+        "price": 6.860000133514404,
+        "size": 4605,
+        "comm": 31.590300614833836,
+        "value": 31590.30061483383,
+        "pos_size": 4605,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "000155.SZ",
+        "stock_name": "000155.SZ"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "buy",
+        "price": 1.4714700286388396,
+        "size": 19348,
+        "comm": 28.47000211410427,
+        "value": 28470.002114104267,
+        "pos_size": 19348,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "600816.SH",
+        "stock_name": "600816.SH"
+      },
+      {
+        "datetime": "2020-12-04T00:00:00",
+        "type": "sell",
+        "price": 15.789431819665065,
+        "size": -1798,
+        "comm": 28.38939841175779,
+        "value": 31406.4764731369,
+        "pos_size": 0,
+        "cash": 35459.932810175436,
+        "total_value": 94617.19261680843,
+        "stock_code": "601965.SH",
+        "stock_name": "601965.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "sell",
+        "price": 1.4685300285816192,
+        "size": -19348,
+        "comm": 28.413118992997166,
+        "value": 28470.002114104267,
+        "pos_size": 0,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "600816.SH",
+        "stock_name": "600816.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "sell",
+        "price": 6.513479980945587,
+        "size": -4605,
+        "comm": 29.994575312254433,
+        "value": 31590.30061483383,
+        "pos_size": 0,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "000155.SZ",
+        "stock_name": "000155.SZ"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "buy",
+        "price": 12.052039961814879,
+        "size": 2542,
+        "comm": 30.636285582933425,
+        "value": 30636.285582933422,
+        "pos_size": 2542,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
         "stock_code": "601717.SH",
         "stock_name": "601717.SH"
       },
       {
-        "datetime": "2020-12-02T00:00:00",
+        "datetime": "2020-12-09T00:00:00",
         "type": "buy",
-        "price": 12.362350381851195,
-        "size": 2442,
-        "comm": 30.18885963248062,
-        "value": 30188.85963248062,
-        "pos_size": 2442,
-        "cash": 4473.696078088493,
-        "total_value": 93261.98718145154,
-        "stock_code": "002126.SZ",
-        "stock_name": "002126.SZ"
-      },
-      {
-        "datetime": "2020-12-02T00:00:00",
-        "type": "buy",
-        "price": 22.242219312667846,
-        "size": 1349,
-        "comm": 30.004753852788923,
-        "value": 30004.753852788923,
-        "pos_size": 1349,
-        "cash": 4473.696078088493,
-        "total_value": 93261.98718145154,
-        "stock_code": "002335.SZ",
-        "stock_name": "002335.SZ"
-      },
-      {
-        "datetime": "2020-12-09T00:00:00",
-        "type": "sell",
-        "price": 12.587400381088257,
-        "size": -2442,
-        "comm": 30.738431730617524,
-        "value": 30188.85963248062,
-        "pos_size": 0,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "002126.SZ",
-        "stock_name": "002126.SZ"
-      },
-      {
-        "datetime": "2020-12-09T00:00:00",
-        "type": "sell",
-        "price": 23.366609390258787,
-        "size": -1349,
-        "comm": 31.521556067459105,
-        "value": 30004.753852788923,
-        "pos_size": 0,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "002335.SZ",
-        "stock_name": "002335.SZ"
-      },
-      {
-        "datetime": "2020-12-09T00:00:00",
-        "type": "sell",
-        "price": 12.027959961891174,
-        "size": -3069,
-        "comm": 36.91380912304401,
-        "value": 29891.22996371841,
-        "pos_size": 0,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "601717.SH",
-        "stock_name": "601717.SH"
+        "price": 14.014,
+        "size": 2140,
+        "comm": 29.98996,
+        "value": 29989.96,
+        "pos_size": 2140,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "600095.SH",
+        "stock_name": "600095.SH"
       },
       {
         "datetime": "2020-12-09T00:00:00",
         "type": "buy",
-        "price": 6.6566500954627985,
-        "size": 5028,
-        "comm": 33.469636679986955,
-        "value": 33469.63667998695,
-        "pos_size": 5028,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "600707.SH",
-        "stock_name": "600707.SH"
-      },
-      {
-        "datetime": "2020-12-09T00:00:00",
-        "type": "buy",
-        "price": 10.810800190925598,
-        "size": 3009,
-        "comm": 32.52969777449512,
-        "value": 32529.697774495122,
-        "pos_size": 3009,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "600295.SH",
-        "stock_name": "600295.SH"
-      },
-      {
-        "datetime": "2020-12-09T00:00:00",
-        "type": "buy",
-        "price": 26.946920076370237,
-        "size": 1205,
-        "comm": 32.471038692026134,
-        "value": 32471.038692026137,
-        "pos_size": 1205,
-        "cash": 4979.475682633297,
-        "total_value": 99010.32416953363,
-        "stock_code": "600363.SH",
-        "stock_name": "600363.SH"
+        "price": 5.165159847259521,
+        "size": 5764,
+        "comm": 29.77198135960388,
+        "value": 29771.98135960388,
+        "pos_size": 5764,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
       },
       {
         "datetime": "2020-12-11T00:00:00",
         "type": "sell",
-        "price": 23.926050762176512,
-        "size": -1205,
-        "comm": 28.8308911684227,
-        "value": 32471.038692026137,
+        "price": 10.74634788243895,
+        "size": -2542,
+        "comm": 27.317216317159815,
+        "value": 30636.285582933422,
         "pos_size": 0,
-        "cash": 33781.53595988757,
-        "total_value": 95517.84623019703,
-        "stock_code": "600363.SH",
-        "stock_name": "600363.SH"
+        "cash": 30610.493352484584,
+        "total_value": 90656.21179158676,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
       },
       {
         "datetime": "2020-12-16T00:00:00",
         "type": "sell",
-        "price": 9.810179695129394,
-        "size": -3009,
-        "comm": 29.518830702644344,
-        "value": 32529.697774495122,
+        "price": 14.925059580802918,
+        "size": -2140,
+        "comm": 31.939627502918245,
+        "value": 29989.96,
         "pos_size": 0,
-        "cash": 4284.179671775738,
-        "total_value": 93221.8805570716,
-        "stock_code": "600295.SH",
-        "stock_name": "600295.SH"
-      },
-      {
-        "datetime": "2020-12-16T00:00:00",
-        "type": "sell",
-        "price": 5.914080076217651,
-        "size": -80,
-        "comm": 0.4731264060974121,
-        "value": 532.5320076370239,
-        "pos_size": 4948,
-        "cash": 4284.179671775738,
-        "total_value": 93221.8805570716,
-        "stock_code": "600707.SH",
-        "stock_name": "600707.SH"
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "600095.SH",
+        "stock_name": "600095.SH"
       },
       {
         "datetime": "2020-12-16T00:00:00",
         "type": "buy",
-        "price": 2.0299999713897705,
-        "size": 14719,
-        "comm": 29.879569578886034,
-        "value": 29879.569578886032,
-        "pos_size": 14719,
-        "cash": 4284.179671775738,
-        "total_value": 93221.8805570716,
-        "stock_code": "600871.SH",
-        "stock_name": "600871.SH"
+        "price": 48.56852045822143,
+        "size": 582,
+        "comm": 28.26687890668487,
+        "value": 28266.87890668487,
+        "pos_size": 582,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "600511.SH",
+        "stock_name": "600511.SH"
       },
       {
         "datetime": "2020-12-16T00:00:00",
         "type": "buy",
-        "price": 6.266260229110717,
-        "size": 4711,
-        "comm": 29.52035193934059,
-        "value": 29520.351939340588,
-        "pos_size": 4711,
-        "cash": 4284.179671775738,
-        "total_value": 93221.8805570716,
-        "stock_code": "002583.SZ",
-        "stock_name": "002583.SZ"
+        "price": 5.03000020980835,
+        "size": 11,
+        "comm": 0.05533000230789184,
+        "value": 55.330002307891846,
+        "pos_size": 5775,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "type": "buy",
+        "price": 29.00897954177856,
+        "size": 990,
+        "comm": 28.718889746360777,
+        "value": 28718.889746360775,
+        "pos_size": 990,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "002294.SZ",
+        "stock_name": "002294.SZ"
       },
       {
         "datetime": "2020-12-23T00:00:00",
         "type": "sell",
-        "price": 5.724270019054413,
-        "size": -4948,
-        "comm": 28.323688054281238,
-        "value": 32937.104672349924,
-        "pos_size": -4948,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
-        "stock_code": "600707.SH",
-        "stock_name": "600707.SH"
-      },
-      {
-        "datetime": "2020-12-23T00:00:00",
-        "type": "sell",
-        "price": 6.253740228652954,
-        "size": -4711,
-        "comm": 29.46137021718407,
-        "value": 29520.351939340588,
+        "price": 4.845149904727935,
+        "size": -5775,
+        "comm": 27.980740699803828,
+        "value": 29827.311361911772,
         "pos_size": 0,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
-        "stock_code": "002583.SZ",
-        "stock_name": "002583.SZ"
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
       },
       {
         "datetime": "2020-12-23T00:00:00",
         "type": "sell",
-        "price": 1.9380600571632385,
-        "size": -14719,
-        "comm": 28.52630598138571,
-        "value": 29879.569578886032,
+        "price": 28.101869161605833,
+        "size": -990,
+        "comm": 27.820850469989775,
+        "value": 28718.889746360775,
         "pos_size": 0,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
-        "stock_code": "600871.SH",
-        "stock_name": "600871.SH"
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "002294.SZ",
+        "stock_name": "002294.SZ"
       },
       {
         "datetime": "2020-12-23T00:00:00",
         "type": "sell",
-        "price": 5.724270019054413,
-        "size": -4948,
-        "comm": 28.323688054281238,
-        "value": -28323.688054281236,
-        "pos_size": -4948,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
+        "price": 45.48446878051758,
+        "size": -582,
+        "comm": 26.47196083026123,
+        "value": 28266.87890668487,
+        "pos_size": 0,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "600511.SH",
+        "stock_name": "600511.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "buy",
+        "price": 11.111100381851195,
+        "size": 2541,
+        "comm": 28.233306070283884,
+        "value": 28233.306070283885,
+        "pos_size": 2541,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "buy",
+        "price": 5.735730019092559,
+        "size": 4806,
+        "comm": 27.565918471758838,
+        "value": 27565.91847175884,
+        "pos_size": 4806,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
         "stock_code": "600707.SH",
         "stock_name": "600707.SH"
       },
@@ -2905,90 +2966,25 @@
         "datetime": "2020-12-23T00:00:00",
         "type": "buy",
         "price": 11.731720267295836,
-        "size": 2485,
-        "comm": 29.15332486423015,
-        "value": 29153.32486423015,
-        "pos_size": 2485,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
+        "size": 2392,
+        "comm": 28.06227487937164,
+        "value": 28062.274879371642,
+        "pos_size": 2392,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
         "stock_code": "002670.SZ",
         "stock_name": "002670.SZ"
       },
       {
-        "datetime": "2020-12-23T00:00:00",
-        "type": "buy",
-        "price": 14.074060420036314,
-        "size": 2067,
-        "comm": 29.091082888215066,
-        "value": 29091.082888215064,
-        "pos_size": 2067,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
-        "stock_code": "600095.SH",
-        "stock_name": "600095.SH"
-      },
-      {
-        "datetime": "2020-12-23T00:00:00",
-        "type": "buy",
-        "price": 5.83582992362976,
-        "size": 5008,
-        "comm": 29.225836257537836,
-        "value": 29225.836257537838,
-        "pos_size": 5008,
-        "cash": 31246.882672607808,
-        "total_value": 90360.61337786904,
-        "stock_code": "601001.SH",
-        "stock_name": "601001.SH"
-      },
-      {
-        "datetime": "2020-12-29T00:00:00",
-        "type": "sell",
-        "price": 6.733259771347047,
-        "size": -2504.0,
-        "comm": 16.860082467453005,
-        "value": 14612.918128768919,
-        "pos_size": 2504.0,
-        "cash": 48090.10505759336,
-        "total_value": 87557.39347064114,
-        "stock_code": "601001.SH",
-        "stock_name": "601001.SH"
-      },
-      {
         "datetime": "2020-12-30T00:00:00",
         "type": "sell",
-        "price": 6.2637299809455875,
-        "size": -2504.0,
-        "comm": 15.684379872287751,
-        "value": 14612.918128768919,
-        "pos_size": 0.0,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
-        "stock_code": "601001.SH",
-        "stock_name": "601001.SH"
-      },
-      {
-        "datetime": "2020-12-30T00:00:00",
-        "type": "sell",
-        "price": 12.797190419197083,
-        "size": -2067,
-        "comm": 26.451792596480374,
-        "value": 29091.082888215064,
+        "price": 6.393600095272064,
+        "size": -4806,
+        "comm": 30.727642057877542,
+        "value": 27565.91847175884,
         "pos_size": 0,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
-        "stock_code": "600095.SH",
-        "stock_name": "600095.SH"
-      },
-      {
-        "datetime": "2020-12-30T00:00:00",
-        "type": "buy",
-        "price": 6.406400095462798,
-        "size": 4948,
-        "comm": 31.698867672349927,
-        "value": -28323.688054281236,
-        "pos_size": 0,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
         "stock_code": "600707.SH",
         "stock_name": "600707.SH"
       },
@@ -2996,53 +2992,66 @@
         "datetime": "2020-12-30T00:00:00",
         "type": "sell",
         "price": 11.148839847564696,
-        "size": -2485,
-        "comm": 27.704867021198268,
-        "value": 29153.32486423015,
+        "size": -2392,
+        "comm": 26.66802491537475,
+        "value": 28062.274879371642,
         "pos_size": 0,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
         "stock_code": "002670.SZ",
         "stock_name": "002670.SZ"
       },
       {
         "datetime": "2020-12-30T00:00:00",
-        "type": "buy",
-        "price": 109.99988938903807,
-        "size": 253,
-        "comm": 27.829972015426634,
-        "value": 27829.972015426632,
-        "pos_size": 253,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
-        "stock_code": "603659.SH",
-        "stock_name": "603659.SH"
+        "type": "sell",
+        "price": 11.378610342979432,
+        "size": -2541,
+        "comm": 28.913048881510736,
+        "value": 28233.306070283885,
+        "pos_size": 0,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
       },
       {
         "datetime": "2020-12-30T00:00:00",
         "type": "buy",
-        "price": 34.10406969451904,
-        "size": 807,
-        "comm": 27.52198424347687,
-        "value": 27521.984243476865,
-        "pos_size": 807,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
-        "stock_code": "002607.SZ",
-        "stock_name": "002607.SZ"
+        "price": 11.031020458221434,
+        "size": 2551,
+        "comm": 28.14013318892288,
+        "value": 28140.13318892288,
+        "pos_size": 2551,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "603979.SH",
+        "stock_name": "603979.SH"
       },
       {
         "datetime": "2020-12-30T00:00:00",
         "type": "buy",
-        "price": 6.456449809074401,
-        "size": 4278,
-        "comm": 27.620692283220293,
-        "value": 27620.692283220287,
-        "pos_size": 4278,
-        "cash": 3075.115777381616,
-        "total_value": 86682.79713381168,
-        "stock_code": "601699.SH",
-        "stock_name": "601699.SH"
+        "price": 18.42840984725952,
+        "size": 1533,
+        "comm": 28.250752295848848,
+        "value": 28250.752295848844,
+        "pos_size": 1533,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "601615.SH",
+        "stock_name": "601615.SH"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "buy",
+        "price": 8.608600381851195,
+        "size": 3232,
+        "comm": 27.822996434143064,
+        "value": 27822.996434143064,
+        "pos_size": 3232,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "600546.SH",
+        "stock_name": "600546.SH"
       }
     ]
   },
@@ -3150,231 +3159,231 @@
       },
       {
         "datetime": "2020-10-14T00:00:00",
-        "value": 98790.96629065415
+        "value": 101210.09090173156
       },
       {
         "datetime": "2020-10-15T00:00:00",
-        "value": 99455.22573441407
+        "value": 99806.5512136212
       },
       {
         "datetime": "2020-10-16T00:00:00",
-        "value": 99267.80736082932
+        "value": 100542.55200707824
       },
       {
         "datetime": "2020-10-19T00:00:00",
-        "value": 98639.96647328278
+        "value": 99763.90839135558
       },
       {
         "datetime": "2020-10-20T00:00:00",
-        "value": 98729.21608418366
+        "value": 101799.0513662091
       },
       {
         "datetime": "2020-10-21T00:00:00",
-        "value": 97296.75168043167
+        "value": 100998.73107990317
       },
       {
         "datetime": "2020-10-22T00:00:00",
-        "value": 97186.84113555939
+        "value": 102437.5409329801
       },
       {
         "datetime": "2020-10-23T00:00:00",
-        "value": 95841.93167310745
+        "value": 100581.2892082601
       },
       {
         "datetime": "2020-10-26T00:00:00",
-        "value": 94737.61277395279
+        "value": 98583.5998085218
       },
       {
         "datetime": "2020-10-27T00:00:00",
-        "value": 95029.86989456207
+        "value": 98295.49861795479
       },
       {
         "datetime": "2020-10-28T00:00:00",
-        "value": 94187.09941150821
+        "value": 98109.08819090134
       },
       {
         "datetime": "2020-10-29T00:00:00",
-        "value": 95723.13574649967
+        "value": 96808.92664991623
       },
       {
         "datetime": "2020-10-30T00:00:00",
-        "value": 95043.91462757267
+        "value": 96186.1178902269
       },
       {
         "datetime": "2020-11-02T00:00:00",
-        "value": 96446.03759262242
+        "value": 95505.05560510283
       },
       {
         "datetime": "2020-11-03T00:00:00",
-        "value": 97211.31014320531
+        "value": 96791.94860475187
       },
       {
         "datetime": "2020-11-04T00:00:00",
-        "value": 97294.57970648931
+        "value": 97740.7053780812
       },
       {
         "datetime": "2020-11-05T00:00:00",
-        "value": 99120.50684481786
+        "value": 98138.6082120198
       },
       {
         "datetime": "2020-11-06T00:00:00",
-        "value": 98727.39998561071
+        "value": 97502.85552456557
       },
       {
         "datetime": "2020-11-09T00:00:00",
-        "value": 100841.45842248129
+        "value": 102798.32439663589
       },
       {
         "datetime": "2020-11-10T00:00:00",
-        "value": 99571.40820246862
+        "value": 102254.80758526504
       },
       {
         "datetime": "2020-11-11T00:00:00",
-        "value": 98753.50217953183
+        "value": 100318.17597625323
       },
       {
         "datetime": "2020-11-12T00:00:00",
-        "value": 98495.81925573804
+        "value": 101643.22579095431
       },
       {
         "datetime": "2020-11-13T00:00:00",
-        "value": 97131.360371022
+        "value": 102178.18830297061
       },
       {
         "datetime": "2020-11-16T00:00:00",
-        "value": 97133.31901445844
+        "value": 100757.08478782244
       },
       {
         "datetime": "2020-11-17T00:00:00",
-        "value": 95994.16109505155
+        "value": 98894.08566186496
       },
       {
         "datetime": "2020-11-18T00:00:00",
-        "value": 95019.25430285776
+        "value": 96777.5210315038
       },
       {
         "datetime": "2020-11-19T00:00:00",
-        "value": 96032.79500758494
+        "value": 97544.88280118
       },
       {
         "datetime": "2020-11-20T00:00:00",
-        "value": 95903.29474580134
+        "value": 100897.80350506795
       },
       {
         "datetime": "2020-11-23T00:00:00",
-        "value": 98847.63407647455
+        "value": 100604.56366885197
       },
       {
         "datetime": "2020-11-24T00:00:00",
-        "value": 98520.77348267878
+        "value": 101279.10347950947
       },
       {
         "datetime": "2020-11-25T00:00:00",
-        "value": 94533.98949522224
+        "value": 97498.67389865697
       },
       {
         "datetime": "2020-11-26T00:00:00",
-        "value": 94811.69787485956
+        "value": 96688.8344249326
       },
       {
         "datetime": "2020-11-27T00:00:00",
-        "value": 94838.51784928201
+        "value": 96999.64377780736
       },
       {
         "datetime": "2020-11-30T00:00:00",
-        "value": 94485.80725129007
+        "value": 96776.10676379979
       },
       {
         "datetime": "2020-12-01T00:00:00",
-        "value": 94707.53797419427
+        "value": 98901.2256030637
       },
       {
         "datetime": "2020-12-02T00:00:00",
-        "value": 93261.98718145154
+        "value": 96571.88384216708
       },
       {
         "datetime": "2020-12-03T00:00:00",
-        "value": 93192.3080632951
+        "value": 95032.55206888598
       },
       {
         "datetime": "2020-12-04T00:00:00",
-        "value": 94590.50720098279
+        "value": 94617.19261680843
       },
       {
         "datetime": "2020-12-07T00:00:00",
-        "value": 98722.4534709718
+        "value": 94451.20387302639
       },
       {
         "datetime": "2020-12-08T00:00:00",
-        "value": 103211.92792680523
+        "value": 94110.29310022594
       },
       {
         "datetime": "2020-12-09T00:00:00",
-        "value": 99010.32416953363
+        "value": 92043.99545861215
       },
       {
         "datetime": "2020-12-10T00:00:00",
-        "value": 96757.78660334864
+        "value": 91754.67279435128
       },
       {
         "datetime": "2020-12-11T00:00:00",
-        "value": 95517.84623019703
+        "value": 90656.21179158676
       },
       {
         "datetime": "2020-12-14T00:00:00",
-        "value": 96334.56665008076
+        "value": 91061.4141536473
       },
       {
         "datetime": "2020-12-15T00:00:00",
-        "value": 93427.44582622059
+        "value": 91374.13385541427
       },
       {
         "datetime": "2020-12-16T00:00:00",
-        "value": 93221.8805570716
+        "value": 90385.20204546617
       },
       {
         "datetime": "2020-12-17T00:00:00",
-        "value": 98229.1492078418
+        "value": 91627.14237454103
       },
       {
         "datetime": "2020-12-18T00:00:00",
-        "value": 95368.91963268463
+        "value": 90959.6407623546
       },
       {
         "datetime": "2020-12-21T00:00:00",
-        "value": 95123.72981001083
+        "value": 90090.90261795686
       },
       {
         "datetime": "2020-12-22T00:00:00",
-        "value": 91267.34000517074
+        "value": 87884.34075262712
       },
       {
         "datetime": "2020-12-23T00:00:00",
-        "value": 90360.61337786904
+        "value": 86279.15932230755
       },
       {
         "datetime": "2020-12-24T00:00:00",
-        "value": 88743.34334212533
+        "value": 87269.01901964947
       },
       {
         "datetime": "2020-12-25T00:00:00",
-        "value": 88490.18249827615
+        "value": 86290.73938231273
       },
       {
         "datetime": "2020-12-28T00:00:00",
-        "value": 90782.0016205906
+        "value": 89196.72075037762
       },
       {
         "datetime": "2020-12-29T00:00:00",
-        "value": 87557.39347064114
+        "value": 89525.25987200542
       },
       {
         "datetime": "2020-12-30T00:00:00",
-        "value": 86682.79713381168
+        "value": 91772.3794957932
       },
       {
         "datetime": "2020-12-31T00:00:00",
-        "value": 87666.69648493167
+        "value": 93874.35057180485
       }
     ]
   },
@@ -3482,23 +3491,23 @@
       },
       {
         "datetime": "2020-10-14T00:00:00",
-        "size": 1599
+        "size": 0
       },
       {
         "datetime": "2020-10-15T00:00:00",
-        "size": 1599
+        "size": 0
       },
       {
         "datetime": "2020-10-16T00:00:00",
-        "size": 1599
+        "size": 0
       },
       {
         "datetime": "2020-10-19T00:00:00",
-        "size": 1599
+        "size": 0
       },
       {
         "datetime": "2020-10-20T00:00:00",
-        "size": 1599
+        "size": 0
       },
       {
         "datetime": "2020-10-21T00:00:00",
@@ -3823,117 +3832,117 @@
   "analysis_data": {
     "tradeanalyzer": {
       "total": {
-        "total": 34,
+        "total": 35,
         "open": 3,
-        "closed": 31
+        "closed": 32
       },
       "streak": {
         "won": {
-          "current": 0,
-          "longest": 3
+          "current": 1,
+          "longest": 2
         },
         "lost": {
-          "current": 3,
-          "longest": 5
+          "current": 0,
+          "longest": 6
         }
       },
       "pnl": {
         "gross": {
-          "total": -11967.454227866829,
-          "average": -386.0469105763493
+          "total": -8170.000298903413,
+          "average": -255.31250934073165
         },
         "net": {
-          "total": -13869.263031952525,
-          "average": -447.3955816758879
+          "total": -10111.633859981659,
+          "average": -315.98855812442685
         }
       },
       "won": {
-        "total": 12,
+        "total": 11,
         "pnl": {
-          "total": 25244.158052337585,
-          "average": 2103.6798376947986,
-          "max": 6955.774120238838
+          "total": 21167.802695824386,
+          "average": 1924.3456996203988,
+          "max": 4309.44384601813
         }
       },
       "lost": {
-        "total": 19,
+        "total": 21,
         "pnl": {
-          "total": -39113.42108429011,
-          "average": -2058.6011096994794,
-          "max": -4735.088670748669
+          "total": -31279.43655580605,
+          "average": -1489.496978847907,
+          "max": -3377.0227676737036
         }
       },
       "long": {
-        "total": 30,
+        "total": 31,
         "pnl": {
-          "total": -10434.060858157203,
-          "average": -347.8020286052401,
+          "total": -9240.092379360329,
+          "average": -298.0674961083977,
           "won": {
-            "total": 25244.158052337585,
-            "average": 2103.6798376947986,
-            "max": 6955.774120238838
+            "total": 21167.802695824386,
+            "average": 1924.3456996203988,
+            "max": 4309.44384601813
           },
           "lost": {
-            "total": -35678.21891049479,
-            "average": -1982.1232728052662,
-            "max": -4735.088670748669
+            "total": -30407.89507518472,
+            "average": -1520.394753759236,
+            "max": -3377.0227676737036
           }
         },
-        "won": 12,
-        "lost": 18
+        "won": 11,
+        "lost": 20
       },
       "short": {
         "total": 1,
         "pnl": {
-          "total": -3435.202173795322,
-          "average": -3435.202173795322,
+          "total": -871.5414806213305,
+          "average": -871.5414806213305,
           "won": {
             "total": 0.0,
             "average": 0.0,
             "max": 0.0
           },
           "lost": {
-            "total": -3435.202173795322,
-            "average": -3435.202173795322,
-            "max": -3435.202173795322
+            "total": -871.5414806213305,
+            "average": -871.5414806213305,
+            "max": -871.5414806213305
           }
         },
         "won": 0,
         "lost": 1
       },
       "len": {
-        "total": 163,
-        "average": 5.258064516129032,
+        "total": 162,
+        "average": 5.0625,
         "max": 10,
-        "min": 1,
+        "min": 2,
         "won": {
-          "total": 60,
+          "total": 55,
           "average": 5.0,
           "max": 5,
           "min": 5
         },
         "lost": {
-          "total": 103,
-          "average": 5.421052631578948,
+          "total": 107,
+          "average": 5.095238095238095,
           "max": 10,
-          "min": 1
+          "min": 2
         },
         "long": {
-          "total": 158,
-          "average": 5.266666666666667,
+          "total": 157,
+          "average": 5.064516129032258,
           "max": 10,
-          "min": 1,
+          "min": 2,
           "won": {
-            "total": 60,
+            "total": 55,
             "average": 5.0,
             "max": 5,
             "min": 5
           },
           "lost": {
-            "total": 98,
-            "average": 5.444444444444445,
+            "total": 102,
+            "average": 5.1,
             "max": 10,
-            "min": 1
+            "min": 2
           }
         },
         "short": {
@@ -3957,13 +3966,13 @@
       }
     },
     "drawdown": {
-      "len": 17,
-      "drawdown": 15.061467946706479,
-      "moneydown": 15545.231441873562,
+      "len": 38,
+      "drawdown": 8.681049887932874,
+      "moneydown": 8923.973824831031,
       "max": {
-        "len": 20,
-        "drawdown": 16.014748609981897,
-        "moneydown": 16529.130792993557
+        "len": 38,
+        "drawdown": 16.069488652938524,
+        "moneydown": 16519.16507432834
       }
     },
     "returns": {
@@ -3992,63 +4001,63 @@
       "2020-10-09T00:00:00": 0.0,
       "2020-10-12T00:00:00": 0.0,
       "2020-10-13T00:00:00": 0.0,
-      "2020-10-14T00:00:00": -0.012090337093458525,
-      "2020-10-15T00:00:00": 0.006723888516340537,
-      "2020-10-16T00:00:00": -0.001884449733041027,
-      "2020-10-19T00:00:00": -0.006324717995073614,
-      "2020-10-20T00:00:00": 0.0009048017156925159,
-      "2020-10-21T00:00:00": -0.014509022360013168,
-      "2020-10-22T00:00:00": -0.0011296424903606272,
-      "2020-10-23T00:00:00": -0.013838390534537615,
-      "2020-10-26T00:00:00": -0.011522293842336273,
-      "2020-10-27T00:00:00": 0.003084911177851035,
-      "2020-10-28T00:00:00": -0.008868479815756114,
-      "2020-10-29T00:00:00": 0.016308351617034367,
-      "2020-10-30T00:00:00": -0.0070956839601009625,
-      "2020-11-02T00:00:00": 0.014752369686622746,
-      "2020-11-03T00:00:00": 0.00793472256284189,
-      "2020-11-04T00:00:00": 0.0008565830782585326,
-      "2020-11-05T00:00:00": 0.018766997543304687,
-      "2020-11-06T00:00:00": -0.003965948840663147,
-      "2020-11-09T00:00:00": 0.02141308732103453,
-      "2020-11-10T00:00:00": -0.01259452451284182,
-      "2020-11-11T00:00:00": -0.008214265899239459,
-      "2020-11-12T00:00:00": -0.0026093547885048807,
-      "2020-11-13T00:00:00": -0.01385296244070322,
-      "2020-11-16T00:00:00": 2.0164892460483586e-05,
-      "2020-11-17T00:00:00": -0.011727777151703478,
-      "2020-11-18T00:00:00": -0.010155896786560259,
-      "2020-11-19T00:00:00": 0.01066668763255807,
-      "2020-11-20T00:00:00": -0.0013485003927394823,
-      "2020-11-23T00:00:00": 0.030701128031913827,
-      "2020-11-24T00:00:00": -0.0033067113527764924,
-      "2020-11-25T00:00:00": -0.0404664300383053,
-      "2020-11-26T00:00:00": 0.002937656404010669,
-      "2020-11-27T00:00:00": 0.0002828762170028476,
-      "2020-11-30T00:00:00": -0.003719064848234699,
-      "2020-12-01T00:00:00": 0.0023467093032767394,
-      "2020-12-02T00:00:00": -0.01526331297025818,
-      "2020-12-03T00:00:00": -0.0007471331060195929,
-      "2020-12-04T00:00:00": 0.015003374921651824,
-      "2020-12-07T00:00:00": 0.04368246235544104,
-      "2020-12-08T00:00:00": 0.04547571801539063,
-      "2020-12-09T00:00:00": -0.04070850958477634,
-      "2020-12-10T00:00:00": -0.022750532180139338,
-      "2020-12-11T00:00:00": -0.012814889805558005,
-      "2020-12-14T00:00:00": 0.008550448446203784,
-      "2020-12-15T00:00:00": -0.030177338466884862,
-      "2020-12-16T00:00:00": -0.0022002663920764887,
-      "2020-12-17T00:00:00": 0.05371344818242196,
-      "2020-12-18T00:00:00": -0.029117930860881658,
-      "2020-12-21T00:00:00": -0.00257096152098768,
-      "2020-12-22T00:00:00": -0.04054077581422,
-      "2020-12-23T00:00:00": -0.009934842269428756,
-      "2020-12-24T00:00:00": -0.017897953270642697,
-      "2020-12-25T00:00:00": -0.002852730518312696,
-      "2020-12-28T00:00:00": 0.025899134317630024,
-      "2020-12-29T00:00:00": -0.035520346460592656,
-      "2020-12-30T00:00:00": -0.009988834776388344,
-      "2020-12-31T00:00:00": 0.011350572243315593
+      "2020-10-14T00:00:00": 0.012100909017315642,
+      "2020-10-15T00:00:00": -0.01386758647883335,
+      "2020-10-16T00:00:00": 0.007374273376922202,
+      "2020-10-19T00:00:00": -0.007744418658359065,
+      "2020-10-20T00:00:00": 0.02039959147219883,
+      "2020-10-21T00:00:00": -0.007861765660535203,
+      "2020-10-22T00:00:00": 0.01424582108797634,
+      "2020-10-23T00:00:00": -0.01812081496503759,
+      "2020-10-26T00:00:00": -0.019861441580868555,
+      "2020-10-27T00:00:00": -0.0029224048536125036,
+      "2020-10-28T00:00:00": -0.0018964289278186053,
+      "2020-10-29T00:00:00": -0.013252202879056818,
+      "2020-10-30T00:00:00": -0.006433381520090098,
+      "2020-11-02T00:00:00": -0.007080671307488906,
+      "2020-11-03T00:00:00": 0.013474606045674964,
+      "2020-11-04T00:00:00": 0.009802021624789825,
+      "2020-11-05T00:00:00": 0.004071004321070104,
+      "2020-11-06T00:00:00": -0.006478109879862304,
+      "2020-11-09T00:00:00": 0.05431091062493176,
+      "2020-11-10T00:00:00": -0.005287214694995934,
+      "2020-11-11T00:00:00": -0.01893927194960443,
+      "2020-11-12T00:00:00": 0.013208471962396384,
+      "2020-11-13T00:00:00": 0.00526313984875415,
+      "2020-11-16T00:00:00": -0.013908090745692436,
+      "2020-11-17T00:00:00": -0.018490006235101553,
+      "2020-11-18T00:00:00": -0.021402337826329054,
+      "2020-11-19T00:00:00": 0.007929132318096999,
+      "2020-11-20T00:00:00": 0.034373107103137235,
+      "2020-11-23T00:00:00": -0.0029063054499619545,
+      "2020-11-24T00:00:00": 0.006704862941186329,
+      "2020-11-25T00:00:00": -0.037326846812159586,
+      "2020-11-26T00:00:00": -0.00830615885674646,
+      "2020-11-27T00:00:00": 0.003214532005927362,
+      "2020-11-30T00:00:00": -0.0023045137621290346,
+      "2020-12-01T00:00:00": 0.021959127209473905,
+      "2020-12-02T00:00:00": -0.02355220318750495,
+      "2020-12-03T00:00:00": -0.015939750909249262,
+      "2020-12-04T00:00:00": -0.004370707121244877,
+      "2020-12-07T00:00:00": -0.001754319053348885,
+      "2020-12-08T00:00:00": -0.0036093851514983344,
+      "2020-12-09T00:00:00": -0.021956128001994646,
+      "2020-12-10T00:00:00": -0.0031433084018062107,
+      "2020-12-11T00:00:00": -0.011971717290371608,
+      "2020-12-14T00:00:00": 0.004469659100603929,
+      "2020-12-15T00:00:00": 0.003434162588770162,
+      "2020-12-16T00:00:00": -0.0108228857360545,
+      "2020-12-17T00:00:00": 0.013740527220928556,
+      "2020-12-18T00:00:00": -0.007284976862619086,
+      "2020-12-21T00:00:00": -0.009550808876515271,
+      "2020-12-22T00:00:00": -0.024492615804805218,
+      "2020-12-23T00:00:00": -0.018264703547561045,
+      "2020-12-24T00:00:00": 0.011472755473244334,
+      "2020-12-25T00:00:00": -0.011209930492245612,
+      "2020-12-28T00:00:00": 0.03367663075860183,
+      "2020-12-29T00:00:00": 0.0036833094183725823,
+      "2020-12-30T00:00:00": 0.02510039766430716,
+      "2020-12-31T00:00:00": 0.022904179749507536
     },
     "sharpe": {},
     "sqn": {},
@@ -4061,21 +4070,21 @@
   },
   "metrics_data": {
     "initial_capital": 100000.0,
-    "final_value": 87666.69648493167,
-    "total_pnl": -13869.263031952525,
-    "total_roi": -0.12333303515068328,
-    "annual_roi": -0.32770629851025757,
-    "max_drawdown": 16.014748609981897,
-    "profit_factor": 0.6454091038964856,
-    "win_rate": 35.294117647058826,
+    "final_value": 93874.35057180485,
+    "total_pnl": -10111.633859981659,
+    "total_roi": -0.06125649428195146,
+    "annual_roi": -0.17360616782302496,
+    "max_drawdown": 16.069488652938524,
+    "profit_factor": 0.6767322249573976,
+    "win_rate": 31.428571428571427,
     "sharpe_ratio": null,
-    "volatility": 0.25704524174785753,
-    "sortino_ratio": -2.0361518689761713,
-    "calmar_ratio": -2.0462781308099975,
-    "max_loss_streak": 5,
-    "total_trades": 31,
-    "avg_pl_ratio": 1.0218977478361022,
-    "avg_pl": -447.3955816758879,
-    "sqn": -0.9765367399568831
+    "volatility": 0.22085668460552949,
+    "sortino_ratio": -1.166766831843904,
+    "calmar_ratio": -1.080346559697646,
+    "max_loss_streak": 6,
+    "total_trades": 32,
+    "avg_pl_ratio": 1.2919433385550319,
+    "avg_pl": -315.98855812442685,
+    "sqn": -0.9322588788634628
   }
 }

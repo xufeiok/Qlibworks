@@ -43,37 +43,28 @@ def orthogonalize_factors(
     - pd.Series: 正交化后的目标因子（残差）。
     
     性能/安全注意事项：
-    - 自动跳过含有 NaN 的行，以防线性代数计算报错。
+    - [AQR 改进] 弃用低效的 statsmodels，改用 numpy.linalg.lstsq 实现极速向量化求解。
     """
-    try:
-        import statsmodels.api as sm
-    except ImportError:
-        raise ImportError("正交化功能需要 statsmodels 库，请执行: pip install statsmodels")
+    print(f"[*] 正在将因子 '{target_factor}' 针对 {base_factors} 进行极速截面正交化 (NumPy)...")
     
     def _ortho_slice(sub_df):
-        # 提取有效数据（无 NaN）
         valid_df = sub_df[base_factors + [target_factor]].dropna()
         if valid_df.empty or len(valid_df) < len(base_factors) + 2:
             return pd.Series(np.nan, index=sub_df.index)
             
-        Y = valid_df[target_factor]
-        X = valid_df[base_factors]
-        X = sm.add_constant(X) # 截面回归一定要加截距项
+        y = valid_df[target_factor].values
+        X = valid_df[base_factors].values
+        # 添加截距项
+        X = np.hstack([np.ones((len(valid_df), 1)), X])
         
-        try:
-            # 使用 OLS 回归
-            model = sm.OLS(Y, X).fit()
-            # 提取残差 (这就是正交化后的纯净信号)
-            resid = model.resid
-            
-            # 将残差对齐回原始索引
-            res_series = pd.Series(np.nan, index=sub_df.index)
-            res_series.loc[valid_df.index] = resid
-            return res_series
-        except Exception:
-            return pd.Series(np.nan, index=sub_df.index)
+        # 使用 numpy 高效求解 OLS
+        beta, _, _, _ = np.linalg.lstsq(X, y, rcond=None)
+        resid = y - X @ beta
+        
+        res_series = pd.Series(np.nan, index=sub_df.index)
+        res_series.loc[valid_df.index] = resid
+        return res_series
 
-    print(f"[*] 正在将因子 '{target_factor}' 针对 {base_factors} 进行截面正交化...")
     result = factors_df.groupby(level='datetime', group_keys=False).apply(_ortho_slice)
     result.name = f"{target_factor}_ortho"
     return result

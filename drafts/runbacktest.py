@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 from qlworks.data import QlibDataAccessor
 from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
-from qlworks.backtest.bt_strategy import BaseQlibStrategy
+from qlworks.backtest.bt_strategy import EnhancedQlibStrategy # [Virtu/Two Sigma 改进] 使用带有严格风控和容量限制的增强策略
 
 def main():
     print("="*60)
@@ -48,9 +48,13 @@ def main():
     for inst in instruments:
         if inst in price_data.index.get_level_values('instrument'):
             df = price_data.xs(inst, level='instrument').copy()
-            # 清理缺失值，保证能跑通回测
+            # [Renaissance 改进] 幸存者偏差防范。截断退市后的冗余数据
             df.dropna(subset=['close'], inplace=True)
             if not df.empty:
+                valid_volume = df[df['volume'] > 0]
+                if not valid_volume.empty:
+                    last_valid_date = valid_volume.index[-1]
+                    df = df[df.index <= last_valid_date]
                 price_df_dict[inst] = df
                 
     print(f"    成功拉取 {len(price_df_dict)} 只股票的行情。")
@@ -61,7 +65,18 @@ def main():
         top_k=5,             # 每天买入预测分数最高的 5 只股票
         rebalance_days=5,    # 调仓周期: 5天 (每周换仓，降低摩擦成本)
         buy_pct=0.95,        # 最大资金使用率 95% (留5%现金防滑点)
-        log_enabled=False    # 关闭详细的买卖日志以保持终端整洁
+        log_enabled=True,    # 开启日志以查看真实的挂单与止损执行情况
+        
+        # [Two Sigma & Virtu 改进] 严格风控与执行参数
+        use_risk_control=True,
+        stop_type='ATR',
+        atr_period=14,
+        atr_multiplier=2.0,
+        trailing_stop=True,
+        trailing_start_pct=0.10,
+        trailing_callback_pct=0.02,
+        take_profit_pct=1.0,
+        volume_limit_pct=0.10  # 单笔订单不超过当日真实成交量的10%
     )
     
     # 调用现成的 run_qlib_backtrader
@@ -69,7 +84,7 @@ def main():
         pred_df=pred_df,
         price_df_dict=price_df_dict,
         benchmark_df=None,               # 暂不使用对比基准
-        strategy_class=BaseQlibStrategy, # 使用基础多头截面策略
+        strategy_class=EnhancedQlibStrategy, # 使用增强多头截面策略
         strategy_params=strategy_params,
         initial_cash=1000000.0,
         commission=0.001,      # 千分之一手续费 (含印花税)

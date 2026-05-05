@@ -47,6 +47,8 @@ CONFIG = {
         "label_col": "LABEL0",  
         "k": 50,                # 强制最多保留 50 个因子，避免内存爆炸
         "max_features": 50,
+        "remove_collinearity": True,    # [AQR 改进] 是否在模型特征选择前进行共线性过滤
+        "collinearity_threshold": 0.7   # 共线性相关系数阈值
     }
 }
 # ==============================================================================
@@ -171,8 +173,8 @@ def screen_and_rank_factors():
     # [第 3 步] 构建 DatasetH (特征工程/中性化/去极值)
     # -------------------------------------------------------------------------
     # 【量化逻辑】机器学习模型最怕“离群极大值”和“量纲不统一”。
-    # DatasetH 内部会执行 RobustZScoreNorm（去极值+标准化）和 Fillna（缺失值填充）。
-    print("\n[3] 构建 DatasetH (特征工程/标准化/去极值)...")
+    # DatasetH 内部会执行标准化、去极值、中性化和缺失值填充。
+    print("\n[3] 构建 DatasetH (特征工程/标准化/去极值/中性化)...")
     _, dataset = create_custom_dataset(
         instruments=CONFIG["instruments"],
         feature_bundle=bundle,
@@ -180,9 +182,12 @@ def screen_and_rank_factors():
         end_time=CONFIG["end_time"],
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
-        segments=CONFIG["segments"]
+        segments=CONFIG["segments"],
+        model_type="tree",             # 假设后续使用树模型，自动采用截面分位数化
+        neutralize_features=False,     # 【Point72修正】树模型关闭特征中性化，保留特征原始非线性排序
+        neutralize_labels=True         # 【Point72修正】仅开启标签中性化，强制模型拟合纯 Alpha
     )
-    print(">>> 数据已经被加工成了适合机器学习的形态。")
+    print(">>> 数据已经被加工成了适合机器学习的形态 (已完成标签截面中性化)。")
     
     # -------------------------------------------------------------------------
     # [第 4 步] 初步特征选择 (降维)
@@ -205,7 +210,9 @@ def screen_and_rank_factors():
         method=fs_conf["method"], 
         algo=fs_conf["algo"], 
         threshold=fs_conf.get("threshold", 0.0001),
-        model_kwargs={"max_features": fs_conf.get("max_features")}
+        model_kwargs={"max_features": fs_conf.get("max_features")},
+        remove_collinearity=fs_conf.get("remove_collinearity", True),
+        collinearity_threshold=fs_conf.get("collinearity_threshold", 0.7)
     )
     
     selected_features = list(fs_result.selected_features)

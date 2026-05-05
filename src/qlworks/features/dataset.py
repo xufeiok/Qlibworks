@@ -37,6 +37,9 @@ def create_alpha158_dataset(
     fit_start_time: str = "2020-01-01",
     fit_end_time: str = "2020-06-30",
     freq: str = "day",
+    model_type: str = "tree", # ["tree", "linear", "nn"]
+    neutralize_features: bool = False, # 是否对特征 X 进行中性化 (推荐线性模型开启)
+    neutralize_labels: bool = False,   # 是否对标签 Y 进行中性化 (推荐树模型开启)
     infer_processors: Optional[list] = None,
     learn_processors: Optional[list] = None,
     segments: Optional[Dict[str, tuple]] = None,
@@ -57,15 +60,65 @@ def create_alpha158_dataset(
     """
     from qlib.contrib.data.handler import Alpha158
 
-    infer_processors = infer_processors or [
-        {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
-        {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
-    ]
-    learn_processors = learn_processors or [
-        {"class": "DropnaLabel"},
-        {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
-        {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
-    ]
+    # [Point72 ML 研究员提示] 
+    # 对于 XGBoost/LightGBM 等基于树的模型，截面 Z-Score 会破坏时间序列上的绝对动量信息（单调性）。
+    # 推荐将 `RobustZScoreNorm` 替换为 `CSQuantileNorm` (截面分位数化)，或在树模型中直接传入原始值。
+    # 仅当使用 Ridge/Lasso 线性模型或 神经网络 时，才需要保留 Z-Score 标准化。
+    if infer_processors is None and learn_processors is None:
+        base_infer = []
+        base_learn = [{"class": "DropnaLabel"}]
+
+        # 1. 标签(Label)中性化：常用于树模型，强制模型去拟合纯 Alpha 收益
+        if neutralize_labels:
+            label_neutralize = {
+                "class": "CSNeutralize",
+                "module_path": "qlworks.processors.neutralize",
+                "kwargs": {"fields_group": "label"}
+            }
+            # Infer 阶段不需要用到 Label，所以只加到 learn_processors
+            base_learn.append(label_neutralize)
+
+        # 2. 特征标准化与特征中性化
+        if model_type == "tree":
+            # 树模型使用分位数标准化保留截面排名特征，避免极值影响
+            # 【修复】Qlib 原生不支持 CSQuantileNorm，需指明 module_path 调用自定义实现
+            base_infer.append({
+                "class": "CSQuantileNorm", 
+                "module_path": "qlworks.processors.quantile_norm",
+                "kwargs": {"fields_group": "feature"}
+            })
+            base_learn.append({
+                "class": "CSQuantileNorm", 
+                "module_path": "qlworks.processors.quantile_norm",
+                "kwargs": {"fields_group": "feature"}
+            })
+        else:
+            # 线性模型/神经网络保留 Z-Score
+            base_infer.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
+            base_learn.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
+            
+        # 是否对特征进行线性中性化（树模型会破坏非线性，通常线性模型开启）
+        if neutralize_features:
+            feat_neutralize = {
+                "class": "CSNeutralize",
+                "module_path": "qlworks.processors.neutralize",
+                "kwargs": {"fields_group": "feature"}
+            }
+            base_infer.append(feat_neutralize)
+            base_learn.append(feat_neutralize)
+
+        # 3. 缺失值填充（必须在最后）
+        if model_type == "tree":
+            # 经过分位数化后，特征在 [0, 1] 之间。默认填 0 会变成最差排名产生偏误，所以中性填充 0.5
+            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0.5}})
+            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0.5}})
+        else:
+            # Z-Score 标准化后，均值为 0，所以填充 0 是中性的
+            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+        
+        infer_processors = base_infer
+        learn_processors = base_learn
     segments = segments or {
         "train": (fit_start_time, fit_end_time),
         "valid": ("2020-07-01", "2020-09-30"),
@@ -123,6 +176,9 @@ def create_custom_dataset(
     fit_start_time: str = "2020-01-01",
     fit_end_time: str = "2020-06-30",
     freq: str = "day",
+    model_type: str = "tree", # ["tree", "linear", "nn"]
+    neutralize_features: bool = False, # 是否对特征 X 进行中性化
+    neutralize_labels: bool = False,   # 是否对标签 Y 进行中性化
     infer_processors: Optional[list] = None,
     learn_processors: Optional[list] = None,
     segments: Optional[Dict[str, tuple]] = None,
@@ -174,15 +230,50 @@ def create_custom_dataset(
         },
     }
 
-    infer_processors = infer_processors or [
-        {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
-        {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
-    ]
-    learn_processors = learn_processors or [
-        {"class": "DropnaLabel"},
-        {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}},
-        {"class": "Fillna", "kwargs": {"fields_group": "feature"}},
-    ]
+    if infer_processors is None and learn_processors is None:
+        base_infer = []
+        base_learn = [{"class": "DropnaLabel"}]
+
+        # 1. 标签(Label)中性化
+        if neutralize_labels:
+            label_neutralize = {
+                "class": "CSNeutralize",
+                "module_path": "qlworks.processors.neutralize",
+                "kwargs": {"fields_group": "label"}
+            }
+            base_learn.append(label_neutralize)
+
+        # 2. 特征标准化与特征中性化
+        if model_type == "tree":
+            base_infer.append({
+                "class": "CSQuantileNorm", 
+                "module_path": "qlworks.processors.quantile_norm",
+                "kwargs": {"fields_group": "feature"}
+            })
+            base_learn.append({
+                "class": "CSQuantileNorm", 
+                "module_path": "qlworks.processors.quantile_norm",
+                "kwargs": {"fields_group": "feature"}
+            })
+        else:
+            base_infer.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
+            base_learn.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
+            
+        if neutralize_features:
+            feat_neutralize = {
+                "class": "CSNeutralize",
+                "module_path": "qlworks.processors.neutralize",
+                "kwargs": {"fields_group": "feature"}
+            }
+            base_infer.append(feat_neutralize)
+            base_learn.append(feat_neutralize)
+
+        # 3. 缺失值填充
+        base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+        base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+        
+        infer_processors = base_infer
+        learn_processors = base_learn
     
     segments = segments or {
         "train": (fit_start_time, fit_end_time),

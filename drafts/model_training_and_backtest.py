@@ -74,9 +74,12 @@ def run_ml_pipeline():
         end_time=CONFIG["end_time"],
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
-        segments=CONFIG["segments"]
+        segments=CONFIG["segments"],
+        model_type="tree",             # 集成模型全是树模型
+        neutralize_features=False,     # 【Point72修正】树模型关闭特征中性化
+        neutralize_labels=True         # 【Point72修正】仅开启标签中性化
     )
-    print(">>> 训练/验证/测试集 切分完成！")
+    print(">>> 训练/验证/测试集 切分完成 (已完成标签截面中性化)！")
 
     # 4. 训练集成机器学习模型
     # 【量化逻辑】单个模型容易过拟合（比如只背题不懂变通）。

@@ -228,11 +228,18 @@ def run_duckdb_backtrader(
         strategy_params = {}
     cerebro.addstrategy(strategy_class, **strategy_params)
 
-    print(f"正在连接 DuckDB: {duckdb_path}")
+    print(f"正在连接 ClickHouse+DuckDB...")
     try:
-        conn = duckdb.connect(duckdb_path, read_only=True)
+        import clickhouse_connect
+        ch_client = clickhouse_connect.get_client(
+            host="192.168.10.102",
+            port=18123,
+            user="xufei",
+            password="xf1987216",
+            database="quant_db"
+        )
     except Exception as e:
-        print(f"连接 DuckDB 失败: {e}")
+        print(f"连接 ClickHouse 失败: {e}")
         return None, None
 
     def fetch_data(code):
@@ -244,7 +251,11 @@ def run_duckdb_backtrader(
             ORDER BY trade_date
         """
         try:
-            df = conn.execute(query).df()
+            arrow_table = ch_client.query_arrow(query)
+            conn = duckdb.connect()
+            conn.register("kline_data", arrow_table)
+            df = conn.execute("SELECT * FROM kline_data").df()
+            conn.close()
             if not df.empty:
                 df['datetime'] = pd.to_datetime(df['datetime'])
                 df.set_index('datetime', inplace=True)
@@ -279,8 +290,6 @@ def run_duckdb_backtrader(
             print(f"已加载标的数据: {code} ({len(df)} 行)")
         else:
             print(f"跳过无数据标的: {code}")
-            
-    conn.close()
     
     if added_count == 0:
         print("错误: 没有加载到任何有效标的数据，回测终止。")
