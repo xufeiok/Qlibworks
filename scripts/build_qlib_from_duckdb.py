@@ -109,6 +109,9 @@ def _export_parquet_for_symbol(
         {cmap['total_mv']} as total_mv,
         {cmap['circ_mv']} as circ_mv,
         {cmap['turnover_rate']} as turnover_rate,
+        {cmap['dv_ttm']} as dv_ttm,
+        {cmap['rzye']} as rzye,
+        {cmap['north_hold']} as north_hold,
         {cmap['roe_ttm']} as roe_ttm,
         {cmap['roa']} as roa,
         {cmap['grossprofit_margin']} as grossprofit_margin,
@@ -119,6 +122,12 @@ def _export_parquet_for_symbol(
         {cmap['debt_to_assets']} as debt_to_assets,
         {cmap['current_ratio']} as current_ratio,
         {cmap['inv_turn']} as inv_turn,
+        {cmap['ocfps']} as ocfps,
+        {cmap['eps']} as eps,
+        {cmap['dt_netprofit_yoy']} as dt_netprofit_yoy,
+        {cmap['stk_holdernumber']} as stk_holdernumber,
+        {cmap['pledge_ratio']} as pledge_ratio,
+        {cmap['eps_forecast']} as eps_forecast,
         1.0 as factor
       from {sch}.{tbl}
       where {cmap['symbol']} = '{symbol.replace("'", "''")}'
@@ -144,7 +153,7 @@ def _run_dump_bin(temp_parquet_dir: Path, qlib_dir: Path) -> None:
         "--qlib_dir",
         str(qlib_dir),
         "--include_fields",
-        "open,close,high,low,volume,amount,vwap,pe,pe_ttm,pb,ps,ps_ttm,total_mv,circ_mv,turnover_rate,roe_ttm,roa,grossprofit_margin,netprofit_margin,netprofit_yoy,tr_yoy,basic_eps_yoy,debt_to_assets,current_ratio,inv_turn,factor",
+        "open,close,high,low,volume,amount,vwap,pe,pe_ttm,pb,ps,ps_ttm,total_mv,circ_mv,turnover_rate,dv_ttm,rzye,north_hold,roe_ttm,roa,grossprofit_margin,netprofit_margin,netprofit_yoy,tr_yoy,basic_eps_yoy,debt_to_assets,current_ratio,inv_turn,ocfps,eps,dt_netprofit_yoy,stk_holdernumber,pledge_ratio,eps_forecast,factor",
         "--file_suffix",
         ".csv",
         "--date_field_name",
@@ -196,6 +205,9 @@ def main() -> int:
                 di.total_mv as total_mv,
                 di.circ_mv as circ_mv,
                 di.turnover_rate as turnover_rate,
+                di.dv_ttm as dv_ttm,
+                di.rzye as rzye,
+                di.north_hold as north_hold,
                 fi.roe as roe_ttm,
                 fi.roa as roa,
                 fi.grossprofit_margin as grossprofit_margin,
@@ -205,7 +217,13 @@ def main() -> int:
                 fi.basic_eps_yoy as basic_eps_yoy,
                 fi.debt_to_assets as debt_to_assets,
                 fi.current_ratio as current_ratio,
-                fi.inv_turn as inv_turn
+                fi.inv_turn as inv_turn,
+                fi.ocfps as ocfps,
+                fi.eps as eps,
+                fi.dt_netprofit_yoy as dt_netprofit_yoy,
+                fi.stk_holdernumber as stk_holdernumber,
+                fi.pledge_ratio as pledge_ratio,
+                fi.eps_forecast as eps_forecast
             FROM daily_prices dp
             JOIN stock_universe su ON dp.ts_code = su.ts_code
             LEFT JOIN daily_indicators di ON dp.ts_code = di.ts_code AND dp.trade_date = di.trade_date
@@ -236,6 +254,9 @@ def main() -> int:
             "total_mv": "total_mv",
             "circ_mv": "circ_mv",
             "turnover_rate": "turnover_rate",
+            "dv_ttm": "dv_ttm",
+            "rzye": "rzye",
+            "north_hold": "north_hold",
             "roe_ttm": "roe_ttm",
             "roa": "roa",
             "grossprofit_margin": "grossprofit_margin",
@@ -245,7 +266,13 @@ def main() -> int:
             "basic_eps_yoy": "basic_eps_yoy",
             "debt_to_assets": "debt_to_assets",
             "current_ratio": "current_ratio",
-            "inv_turn": "inv_turn"
+            "inv_turn": "inv_turn",
+            "ocfps": "ocfps",
+            "eps": "eps",
+            "dt_netprofit_yoy": "dt_netprofit_yoy",
+            "stk_holdernumber": "stk_holdernumber",
+            "pledge_ratio": "pledge_ratio",
+            "eps_forecast": "eps_forecast"
         }
         
         sch, tbl = target

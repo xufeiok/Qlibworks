@@ -108,8 +108,8 @@ factors:
   - name: ocf_to_netprofit
     category: 质量
     expression:
-      qlib: $ocf / $net_profit
-      duckdb: ocf / net_profit
+      qlib: $ocfps / $eps
+      duckdb: ocfps / eps
     meaning: 盈利现金流含量
     usage_scenario: 排雷、提升夏普
     strategy_hint: 正向
@@ -117,8 +117,8 @@ factors:
   - name: q_profit_yoy
     category: 质量
     expression:
-      qlib: $q_profit_yoy
-      duckdb: q_profit_yoy
+      qlib: $dt_netprofit_yoy
+      duckdb: dt_netprofit_yoy
     meaning: 扣非净利润同比
     usage_scenario: 排雷
     strategy_hint: 正向
