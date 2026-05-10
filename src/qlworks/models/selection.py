@@ -263,6 +263,12 @@ def embedded_feature_selection(
     scaler = StandardScaler()
     x_train_scaled = scaler.fit_transform(x_train)
     
+    # 移除 y 中的无穷大/过大值，否则 sklearn 会报错
+    finite_mask = np.isfinite(y_train)
+    if not finite_mask.all():
+        x_train_scaled = x_train_scaled[finite_mask]
+        y_train = y_train[finite_mask]
+
     model.fit(x_train_scaled, y_train)
     if algo == "lasso":
         scores = pd.Series(np.abs(model.coef_), index=x_train.columns, name="importance")

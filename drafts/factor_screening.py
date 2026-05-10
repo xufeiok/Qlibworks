@@ -45,8 +45,8 @@ CONFIG = {
         "algo": "random_forest", # 换回更强的非线性随机森林过滤
         "threshold": 0.0001,    
         "label_col": "LABEL0",  
-        "k": 50,                # 强制最多保留 50 个因子，避免内存爆炸
-        "max_features": 50,
+        "k": 70,                # 强制最多保留 70 个因子
+        "max_features": 70,
         "remove_collinearity": True,    # [AQR 改进] 是否在模型特征选择前进行共线性过滤
         "collinearity_threshold": 0.7   # 共线性相关系数阈值
     }
