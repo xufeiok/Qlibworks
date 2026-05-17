@@ -81,13 +81,16 @@ def clear_qlib_data(qlib_data_dir):
     print("    qlib_data目录已清空")
 
 
+import numpy as np
+
 def save_calendars(client, calendars_dir):
     """保存交易日历"""
-    dates = [str(row[0]) for row in client.query("SELECT DISTINCT trade_date FROM daily_prices ORDER BY trade_date").result_rows]
+    dates = [str(row[0])[:10] for row in client.query("SELECT DISTINCT trade_date FROM daily_prices ORDER BY trade_date").result_rows]
     with open(os.path.join(calendars_dir, "day.txt"), 'w') as f:
         for d in dates:
             f.write(d + "\n")
     print(f"    已保存 {len(dates)} 个交易日")
+    return dates
 
 
 def save_instruments(instruments_dir, stocks):
@@ -97,20 +100,8 @@ def save_instruments(instruments_dir, stocks):
     for slist, fname in [(sh+sz, "all.txt"), (sh, "all_sh.txt"), (sz, "all_sz.txt")]:
         with open(os.path.join(instruments_dir, fname), 'w') as f:
             for s in slist:
-                code = s.replace('.SH','').replace('.SZ','')
-                f.write(f"{code}\t2010-01-01\t9999-99-99\n")
+                f.write(f"{s}\t2010-01-01\t9999-99-99\n")
         print(f"    {fname}: {len(slist)} 只")
-
-
-def qlib_date_float(dt):
-    """日期转Qlib float格式 YYYYMMDD"""
-    if isinstance(dt, str):
-        dt = datetime.datetime.strptime(dt[:10], '%Y-%m-%d')
-    if hasattr(dt, 'date'):
-        dt = dt.date() if not isinstance(dt, datetime.date) else dt
-    elif hasattr(dt, 'year'):
-        pass
-    return float(dt.year * 10000 + dt.month * 100 + dt.day)
 
 
 def to_float(v):
@@ -122,14 +113,10 @@ def to_float(v):
     return float(v)
 
 
-def write_bin(filepath, dates, values):
+def write_bin(filepath, start_index, values_array):
     """写Qlib .bin文件"""
-    with open(filepath, 'wb') as f:
-        for d, v in zip(dates, values):
-            if math.isnan(v):
-                continue
-            f.write(struct.pack('<d', d))
-            f.write(struct.pack('<d', v))
+    # 转换为小端 float32 并写入文件，Qlib 规范：第一个元素为 start_index
+    np.hstack([start_index, values_array]).astype("<f").tofile(filepath)
 
 
 def col_safe(c):
@@ -137,7 +124,8 @@ def col_safe(c):
     return c.replace('.', '_').replace('"', '').replace('`', '')
 
 
-def fetch_and_save(client, stocks, features_dir, start_date="2010-01-01", end_date="2025-12-31"):
+
+def fetch_and_save(client, stocks, features_dir, calendar_list, start_date="2010-01-01", end_date="2025-12-31"):
     """
     分批下载所有主板股票数据，保存为Qlib .bin格式
 
@@ -146,6 +134,8 @@ def fetch_and_save(client, stocks, features_dir, start_date="2010-01-01", end_da
     - 每个前缀只查一次 daily_prices + daily_indicators (LEFT JOIN)
     - 财务表 financial_indicators 单独一次性查完，用ASOF逻辑在客户端Join
     """
+    cal_map = {d: i for i, d in enumerate(calendar_list)}
+
     # 按前缀分组
     prefix_map = defaultdict(list)
     for s in stocks:
@@ -239,7 +229,7 @@ def fetch_and_save(client, stocks, features_dir, start_date="2010-01-01", end_da
             # 基础行情 + 日频指标
             base_cols = {
                 'open': 'open', 'high': 'high', 'low': 'low',
-                'close': 'close', 'vol': 'vol', 'amount': 'amount',
+                'close': 'close', 'volume': 'vol', 'amount': 'amount',
                 'circ_mv': 'circ_mv', 'total_mv': 'total_mv',
                 'pe': 'pe', 'pe_ttm': 'pe_ttm', 'pb': 'pb', 'ps': 'ps', 'ps_ttm': 'ps_ttm',
                 'turnover_rate': 'turnover_rate', 'turnover_rate_f': 'turnover_rate_f',
@@ -250,10 +240,22 @@ def fetch_and_save(client, stocks, features_dir, start_date="2010-01-01", end_da
                 if ch_col in df.columns:
                     s = df[ch_col].dropna()
                     if len(s) > 0:
-                        dates = [qlib_date_float(d) for d in s.index]
-                        vals = [to_float(v) for v in s.values]
-                        write_bin(os.path.join(stock_dir, f"{qlib_name}.day.bin"), dates, vals)
-                        written += len(s)
+                        s_dates = [d.strftime('%Y-%m-%d') for d in s.index]
+                        valid_pairs = [(cal_map[d], to_float(v)) for d, v in zip(s_dates, s.values) if d in cal_map]
+                        
+                        if valid_pairs:
+                            valid_pairs.sort(key=lambda x: x[0])
+                            start_index = valid_pairs[0][0]
+                            end_index = valid_pairs[-1][0]
+                            
+                            length = end_index - start_index + 1
+                            values_array = np.full(length, np.nan, dtype=np.float32)
+                            
+                            for idx, val in valid_pairs:
+                                values_array[idx - start_index] = val
+                                
+                            write_bin(os.path.join(stock_dir, f"{qlib_name}.day.bin"), start_index, values_array)
+                            written += len(valid_pairs)
 
             # 财务指标（ASOF Join：取最近一期财务数据）
             fi_records = fi_by_stock.get(stock_code, [])
@@ -286,17 +288,28 @@ def fetch_and_save(client, stocks, features_dir, start_date="2010-01-01", end_da
                     'eps_forecast': 18,
                 }
                 for qlib_name, fi_idx_col in fi_field_map.items():
-                    valid_dates = []
-                    valid_vals = []
+                    valid_pairs = []
                     for di, fi_row in zip(df.index, fi_vals):
                         if fi_row is not None and fi_idx_col < len(fi_row) and fi_row[fi_idx_col] is not None:
                             v = to_float(fi_row[fi_idx_col])
                             if not math.isnan(v):
-                                valid_dates.append(qlib_date_float(di))
-                                valid_vals.append(v)
-                    if valid_dates:
-                        write_bin(os.path.join(stock_dir, f"{qlib_name}.day.bin"), valid_dates, valid_vals)
-                        written += len(valid_dates)
+                                d_str = di.strftime('%Y-%m-%d')
+                                if d_str in cal_map:
+                                    valid_pairs.append((cal_map[d_str], v))
+                                    
+                    if valid_pairs:
+                        valid_pairs.sort(key=lambda x: x[0])
+                        start_index = valid_pairs[0][0]
+                        end_index = valid_pairs[-1][0]
+                        
+                        length = end_index - start_index + 1
+                        values_array = np.full(length, np.nan, dtype=np.float32)
+                        
+                        for idx, val in valid_pairs:
+                            values_array[idx - start_index] = val
+                            
+                        write_bin(os.path.join(stock_dir, f"{qlib_name}.day.bin"), start_index, values_array)
+                        written += len(valid_pairs)
 
             if written > 0:
                 unit_stats["success"] += 1
@@ -326,10 +339,10 @@ def main():
         return
 
     backup_existing_features(QLIB_DATA_DIR)
-    save_calendars(client, cald)
+    calendar_list = save_calendars(client, cald)
     clear_qlib_data(QLIB_DATA_DIR)
 
-    success, failed = fetch_and_save(client, stocks, fd)
+    success, failed = fetch_and_save(client, stocks, fd, calendar_list)
     save_instruments(insd, stocks)
 
     print("\n" + "=" * 60)

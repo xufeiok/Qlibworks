@@ -10,6 +10,7 @@ from qlworks.data import QlibDataAccessor
 from qlworks.features.builder import FeatureBundle
 from qlworks.features.dataset import create_custom_dataset
 from qlworks.models.training import train_lgb_model, train_xgb_model, train_catboost_model, predict_ensemble_models
+import qlib
 
 # ==============================================================================
 # [全局配置区]
@@ -17,9 +18,9 @@ from qlworks.models.training import train_lgb_model, train_xgb_model, train_catb
 def load_csi500_instruments():
     file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
     if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'])
-        df = df[df['start_date'] <= '2020-01-02'].drop_duplicates(subset=['instrument'])
-        return df['instrument'].tolist()
+        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
+        insts = df['instrument'].dropna().unique().tolist()
+        return insts
     return ["000001.SZ", "000002.SZ", "600000.SH"]
 
 CONFIG = {
@@ -34,6 +35,34 @@ CONFIG = {
     "top_k_factors": 20 # 我们选取筛选出来的 Top 20 因子来建模
 }
 
+def load_factor_expressions(selected_factor_names, factor_files):
+    """
+    根据给定的因子名称列表，从 YAML 文件中提取对应的 Qlib 表达式
+    """
+    expr_map = {}
+    repo_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "../factors_repo"))
+    for file_name in factor_files:
+        yaml_path = os.path.join(repo_path, f"{file_name}.yaml")
+        if not os.path.exists(yaml_path): continue
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            data = yaml.safe_load(f)
+        if not data or 'factors' not in data: continue
+        for factor in data['factors']:
+            name = factor.get('name')
+            expr = factor.get('expression')
+            if name in selected_factor_names and expr:
+                expr_map[name] = expr
+                
+    # 按照输入的顺序重新排列
+    ordered_exprs = []
+    ordered_names = []
+    for name in selected_factor_names:
+        if name in expr_map:
+            ordered_names.append(name)
+            ordered_exprs.append(expr_map[name])
+            
+    return ordered_exprs, ordered_names
+
 def run_ml_pipeline():
     print("="*60)
     print("=== 第二阶段：多因子机器学习建模与预测 ===")
@@ -41,22 +70,27 @@ def run_ml_pipeline():
 
     # 1. 初始化 Qlib
     print("\n[1] 初始化 Qlib 环境...")
+    qlib.init(provider_uri=r"e:\Quant\Qlibworks\qlib_data", region="cn", joblib_backend="threading")
     accessor = QlibDataAccessor()
     accessor.ensure_init()
     
-    # 2. 读取第一阶段筛选出的高质量因子
+    # 2. 读取第一阶段筛选出的高质量因子 (树模型流派)
     print("\n[2] 读取第一阶段筛选出的高质量因子...")
-    csv_path = os.path.join(os.path.dirname(__file__), "factor_screening_results_with_meaning.csv")
+    csv_path = os.path.join(os.path.dirname(__file__), "tree_model_selected_factors.csv")
     if not os.path.exists(csv_path):
-        raise FileNotFoundError(f"找不到因子筛选结果文件: {csv_path}。请先运行 factor_screening.py！")
+        raise FileNotFoundError(f"找不到因子筛选结果文件: {csv_path}。请先运行 factor_screening_tree.py！")
         
     screened_df = pd.read_csv(csv_path)
-    # 按综合得分降序排列，取前 Top K 个因子
-    top_factors_df = screened_df.sort_values(by="综合得分 (Score)", ascending=False).head(CONFIG["top_k_factors"])
-    selected_factor_names = top_factors_df["因子名称 (Factor)"].tolist()
-    selected_factor_exprs = top_factors_df["计算公式 (Expression)"].tolist()
     
-    print(f">>> 成功读取排名前 {CONFIG['top_k_factors']} 的因子用于机器学习建模。")
+    # 取前 Top K 个因子
+    top_factors_df = screened_df.head(CONFIG["top_k_factors"])
+    selected_factor_names = top_factors_df["因子名称"].tolist()
+    
+    # 从 YAML 中反查对应的 Qlib 公式
+    factor_files = ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"]
+    selected_factor_exprs, selected_factor_names = load_factor_expressions(selected_factor_names, factor_files)
+    
+    print(f">>> 成功读取排名前 {len(selected_factor_names)} 的因子，并提取了其公式。")
     
     # 3. 重新构建专属的 DatasetH (只包含这 Top K 个好因子)
     print("\n[3] 为机器学习模型构建专属 DatasetH 数据集...")
@@ -84,14 +118,15 @@ def run_ml_pipeline():
     # 4. 训练集成机器学习模型
     # 【量化逻辑】单个模型容易过拟合（比如只背题不懂变通）。
     # 业界标配是：LightGBM + XGBoost + CatBoost 三大树模型融合（Ensemble）。
-    print("\n[4] 开始训练机器学习模型 (LGBM + XGBoost + CatBoost)...")
-    print("    - 正在训练 LightGBM 模型...")
+    print("\n[4] 开始训练机器学习模型 (LGBM + XGBoost + CatBoost) [GPU加速]...")
+    
+    print("    - 正在训练 LightGBM 模型 (GPU)...")
     lgb_model = train_lgb_model(dataset)
     
-    print("    - 正在训练 XGBoost 模型...")
+    print("    - 正在训练 XGBoost 模型 (GPU)...")
     xgb_model = train_xgb_model(dataset)
     
-    print("    - 正在训练 CatBoost 模型...")
+    print("    - 正在训练 CatBoost 模型 (GPU)...")
     cat_model = train_catboost_model(dataset)
     
     print(">>> 所有模型训练完毕！")
@@ -99,7 +134,7 @@ def run_ml_pipeline():
     # 5. 模型集成与样本外预测
     print("\n[5] 在测试集上进行模型集成与预测 (生成 Alpha 预测得分)...")
     # 把三个模型的预测结果等权平均，得到最终的综合打分 (score)
-    predictions = predict_ensemble_models([lgb_model, xgb_model, cat_model], dataset)
+    predictions = predict_ensemble_models([lgb_model, xgb_model, cat_model], dataset, segment="test")
     
     print(f">>> 预测完成！测试集共产生 {len(predictions)} 条预测得分。")
     print("    【预测得分 (Score) 抽样展示】(Score越高，代表模型认为该股票明天越能涨):")

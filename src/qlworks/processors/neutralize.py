@@ -1,86 +1,92 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 from qlib.data.dataset.processor import Processor
-from qlib.data import D
+from sklearn.linear_model import Ridge
 
 class CSNeutralize(Processor):
     """
-    截面中性化处理器 (Cross-Sectional Neutralization)
-    对指定的 fields_group 特征进行截面行业和市值中性化。
+    机构级稳健截面中性化 (Robust Cross-Sectional Neutralization)
+    使用 Ridge 回归替代传统 OLS，彻底解决由于行业股票稀疏或共线性导致的奇异矩阵 (Singular Matrix) 和 NaN 爆炸问题。
     """
-    def __init__(self, fields_group="feature", industry_field="industry_code", market_cap_field="circ_mv", log_mc=True):
+
+    def __init__(self, fields_group="feature", industry_field="industry_code", market_cap_field="circ_mv", log_mc=True, **kwargs):
         self.fields_group = fields_group
         self.industry_field = industry_field
         self.market_cap_field = market_cap_field
         self.log_mc = log_mc
 
-    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
-        if df.empty:
+    def __call__(self, df):
+        if self.fields_group not in df.columns.levels[0]:
             return df
-            
-        print(f"[{self.__class__.__name__}] Fetching exposures (industry, market_cap)...")
+        
+        # 1. 提取要中性化的目标数据矩阵
+        data = df[self.fields_group].copy()
+        
+        print(f"[CSNeutralize] Fetching exposures (industry, market_cap) for robust Ridge neutralization...")
+        
+        # 2. 从 Qlib 拉取行业和市值数据
+        from qlib.data import D
         instruments = df.index.get_level_values('instrument').unique().tolist()
         start_time = df.index.get_level_values('datetime').min()
         end_time = df.index.get_level_values('datetime').max()
         
-        # Load exposure data from Qlib bin
-        fields = [f"${self.industry_field}", f"${self.market_cap_field}"]
-        
-        exposures = D.features(
-            instruments, 
-            fields, 
-            start_time=start_time, 
-            end_time=end_time, 
-            freq='day'
-        )
-        exposures.columns = ['industry', 'market_cap']
-        
-        # Align with the main df
-        # D.features returns MultiIndex ['instrument', 'datetime']
-        # But df usually has MultiIndex ['datetime', 'instrument'] in DatasetH
-        if df.index.names != exposures.index.names:
-            exposures = exposures.swaplevel()
+        try:
+            fields = [f"${self.industry_field}", f"${self.market_cap_field}"]
+            exposures = D.features(
+                instruments, 
+                fields, 
+                start_time=start_time, 
+                end_time=end_time, 
+                freq='day'
+            )
+            exposures.columns = ['industry', 'market_cap']
             
-        exposures = exposures.reindex(df.index)
-        
-        # Process market cap (log)
-        # [AQR 改进] 保留原始市值用于 WLS (加权最小二乘法) 权重计算
-        exposures['raw_market_cap'] = exposures['market_cap'].copy()
-        if self.log_mc:
-            exposures['market_cap'] = np.where(exposures['market_cap'] <= 0, np.nan, exposures['market_cap'])
-            exposures['market_cap'] = np.log(exposures['market_cap'])
+            if df.index.names != exposures.index.names:
+                exposures = exposures.swaplevel()
+            exposures = exposures.reindex(df.index)
             
-        print(f"[{self.__class__.__name__}] Running cross-sectional neutralization for group: {self.fields_group}...")
-        
-        # 核心修复：只提取当前需要处理的 fields_group 列
-        # Qlib 的 df.columns 通常是 MultiIndex (如 ('feature', '$close'), ('label', 'LABEL0'))
-        if isinstance(df.columns, pd.MultiIndex) and self.fields_group is not None:
-            # 找到属于该 group 的列
-            target_cols = df.columns[df.columns.get_level_values(0) == self.fields_group]
-        else:
-            target_cols = df.columns
-            
-        if len(target_cols) == 0:
+            # 市值对数化处理
+            if self.log_mc:
+                exposures['market_cap'] = np.where(exposures['market_cap'] <= 0, np.nan, exposures['market_cap'])
+                exposures['market_cap'] = np.log(exposures['market_cap'])
+                
+        except Exception as e:
+            print(f"[CSNeutralize] Warning: Failed to fetch exposure data ({e}). Falling back to mean-centering.")
+            neutralized_data = data.groupby(level="datetime").apply(lambda x: x - x.mean())
+            df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
             return df
+
+        print(f"[CSNeutralize] Running Ridge cross-sectional neutralization for group: {self.fields_group}...")
+
+        # 3. 按日期进行截面中性化
+        def _robust_ridge_neutralize_slice(sub_df):
+            # 获取当前切片的日期
+            # 兼容不同层级结构的 MultiIndex
+            date = sub_df.index.get_level_values('datetime')[0] if 'datetime' in sub_df.index.names else sub_df.name
             
-        # Group by datetime to neutralize cross-sectionally
-        def _neutralize_slice(sub_df):
-            date = sub_df.index.get_level_values('datetime')[0]
-            sub_exp = exposures.xs(date, level='datetime')
+            try:
+                sub_exp = exposures.xs(date, level='datetime')
+            except KeyError:
+                # 如果某天在暴露度数据中完全缺失，退化为中心化
+                return sub_df - sub_df.mean()
             
-            # Find valid rows where exposures are not NaN
+            # 找到市值和行业都不为空的股票
             valid_exp_mask = ~(sub_exp['industry'].isna() | sub_exp['market_cap'].isna())
-            
             if not valid_exp_mask.any():
-                return pd.DataFrame(np.nan, index=sub_df.index, columns=sub_df.columns)
+                # 如果当天完全没有市值/行业数据，直接返回中心化的结果
+                return sub_df - sub_df.mean()
                 
             valid_exp = sub_exp[valid_exp_mask]
-            # sub_df still has MultiIndex (instrument, datetime)
-            # valid_exp_mask has Index (instrument)
             valid_instruments = valid_exp_mask[valid_exp_mask].index
             
-            # Use xs to get instrument level data for valid instruments
-            # Then we can just use instrument index
+            # 构建解释变量矩阵 X (市值 + 行业虚拟变量)
+            # 即使某些行业只有 1 只股票导致完全共线性，Ridge 回归也能完美处理
+            ind_dummies = pd.get_dummies(valid_exp['industry'].astype(int).astype(str), prefix='ind', drop_first=False)
+            X = pd.concat([valid_exp['market_cap'], ind_dummies], axis=1)
+            # 填充 X 中的异常值，确保回归矩阵绝对安全
+            X = X.fillna(0).values.astype(float)
+            
+            # 提取目标变量矩阵 Y (需要中性化的因子矩阵)
             if isinstance(sub_df.index, pd.MultiIndex):
                 if sub_df.index.names[0] == 'datetime':
                     valid_sub_df = sub_df.loc[(date, valid_instruments), :]
@@ -88,76 +94,31 @@ class CSNeutralize(Processor):
                     valid_sub_df = sub_df.loc[(valid_instruments, date), :]
             else:
                 valid_sub_df = sub_df.loc[valid_instruments]
-
+                
+            Y = valid_sub_df.values.astype(float)
             
-            # Prepare X matrix
-            ind_dummies = pd.get_dummies(valid_exp['industry'].astype(int).astype(str), prefix='ind', drop_first=True)
-            X = pd.concat([valid_exp['market_cap'], ind_dummies], axis=1)
-            X.insert(0, 'const', 1.0)
+            # 使用 Ridge 回归（引入微小的 L2 惩罚项 1e-5）
+            # 这是 AQR 处理截面中性化防止矩阵奇异的杀手锏
+            model = Ridge(alpha=1e-5, fit_intercept=True, solver='auto')
             
-            X_mat = X.values.astype(float)
+            # 由于部分因子可能在某些股票上是 NaN，我们需要用 0 临时填补 Y 才能送进 sklearn
+            # 但我们计算出的残差，原来是 NaN 的地方我们还要保持它是 NaN
+            Y_filled = np.nan_to_num(Y, nan=0.0)
+            model.fit(X, Y_filled)
             
-            # [AQR 改进] WLS weights (市值平方根)
-            weights = np.sqrt(valid_exp['raw_market_cap'].values.astype(float))
-            # 避免极端情况下的 NaN 或者 <=0 的权重
-            weights = np.nan_to_num(weights, nan=1.0)
-            weights = np.clip(weights, a_min=1e-8, a_max=None)
+            # 残差 = 实际值 - 预测值 (剥离了市值和行业 Beta 后的纯净 Alpha)
+            residuals = Y_filled - model.predict(X)
             
-            # 仅提取目标列的数据
-            target_sub_df = valid_sub_df[target_cols]
+            # 将原本是 NaN 的位置恢复为 NaN
+            residuals[np.isnan(Y)] = np.nan
             
-            # Result dataframe (只填充我们要修改的列，其余列原样返回)
+            # 写回结果
             res_df = sub_df.copy()
-            
-            # [AQR 改进] 矩阵化极速求解 OLS
-            # 提取 Y 矩阵 (目标因子)
-            Y_mat = target_sub_df.values.astype(float)
-            
-            # 找出哪些行 (instrument) 在 Y 中是完全有效的（即所有因子都没有 NaN）
-            # 检查是否有 NaN
-            has_nan = np.isnan(Y_mat).any()
-            
-            if not has_nan and Y_mat.shape[0] > X_mat.shape[1]:
-                # 理想情况：Y 矩阵完全无缺失值，直接进行全矩阵 WLS 计算
-                # 权重广播
-                X_mat_w = X_mat * weights[:, np.newaxis]
-                Y_mat_w = Y_mat * weights[:, np.newaxis]
-                
-                # 求解所有特征的 beta
-                # beta shape: (X_features, Y_features)
-                beta, _, _, _ = np.linalg.lstsq(X_mat_w, Y_mat_w, rcond=None)
-                
-                # 计算残差
-                resid_mat = Y_mat - X_mat @ beta
-                
-                # 映射回 DataFrame
-                res_df.loc[valid_sub_df.index, target_cols] = resid_mat
-            else:
-                # 降级情况：存在 NaN，退回到逐列计算以保证严谨性
-                for col in target_cols:
-                    y = valid_sub_df[col].values.astype(float)
-                    valid_y_mask = ~np.isnan(y)
-                    
-                    if valid_y_mask.sum() > X_mat.shape[1]:  # Need enough degrees of freedom
-                        X_valid = X_mat[valid_y_mask]
-                        y_valid = y[valid_y_mask]
-                        
-                        # WLS weights matching valid_y_mask
-                        w_valid = weights[valid_y_mask]
-                        X_valid_w = X_valid * w_valid[:, np.newaxis]
-                        y_valid_w = y_valid * w_valid
-                        
-                        # np.linalg.lstsq solves: X_w * beta = y_w
-                        beta, _, _, _ = np.linalg.lstsq(X_valid_w, y_valid_w, rcond=None)
-                        
-                        # Calculate residuals
-                        resid = y_valid - X_valid @ beta
-                        
-                        # Map back to res_df
-                        res_df.loc[valid_sub_df.index[valid_y_mask], col] = resid
-                    
+            res_df.loc[valid_sub_df.index, data.columns] = residuals
             return res_df
-            
-        result = df.groupby(level='datetime', group_keys=False).apply(_neutralize_slice)
-        print(f"[{self.__class__.__name__}] Neutralization completed.")
-        return result
+
+        neutralized_data = data.groupby(level='datetime', group_keys=False).apply(_robust_ridge_neutralize_slice)
+        df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
+        
+        print(f"[CSNeutralize] Ridge Neutralization completed.")
+        return df

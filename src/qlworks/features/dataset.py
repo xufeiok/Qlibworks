@@ -260,17 +260,22 @@ def create_custom_dataset(
             base_learn.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
             
         if neutralize_features:
+            # 【重要修复】：在线性模型流派中，如果先做中性化再 Fillna，
+            # 会因为某些因子带有大量 NaN 导致 OLS 回归矩阵计算完全崩溃，最终把所有特征都变成 NaN！
+            # 正确的做法是：必须先用 0 (截面均值) 填充缺失值，然后再进行行业和市值中性化
             feat_neutralize = {
                 "class": "CSNeutralize",
                 "module_path": "qlworks.processors.neutralize",
                 "kwargs": {"fields_group": "feature"}
             }
+            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
+            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
             base_infer.append(feat_neutralize)
             base_learn.append(feat_neutralize)
-
-        # 3. 缺失值填充
-        base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
-        base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+        else:
+            # 3. 缺失值填充 (非中性化流派)
+            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
         
         infer_processors = base_infer
         learn_processors = base_learn

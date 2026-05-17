@@ -4,6 +4,9 @@ import pandas as pd
 import numpy as np
 import yaml
 
+# 全局开启：将 inf 视为 NaN，防止计算收益率或因子时除以 0 导致溢出报错
+pd.options.mode.use_inf_as_na = True
+
 # 【基础知识】将项目根目录 src 文件夹加入 sys.path，这样 Python 就能找到并导入我们自己写的 qlworks 包
 # 无论是否是主入口运行，都需要确保模块能被找到
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
@@ -20,9 +23,24 @@ def load_csi500_instruments():
     """读取中证500股票池"""
     file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
     if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'])
+        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
         df = df[df['start_date'] <= '2020-01-02'].drop_duplicates(subset=['instrument'])
-        return df['instrument'].tolist()
+        insts = []
+        for code in df['instrument']:
+            code = str(code).strip()
+            if '.' in code:
+                insts.append(code)
+                continue
+            code = code.zfill(6)
+            if code.startswith(('6', '9')):
+                insts.append(f"{code}.SH")
+            elif code.startswith(('0', '3')):
+                insts.append(f"{code}.SZ")
+            elif code.startswith(('4', '8')):
+                insts.append(f"{code}.BJ")
+            else:
+                insts.append(code)
+        return insts
     return ["000001.SZ", "000002.SZ", "600000.SH"]
 
 CONFIG = {
@@ -109,6 +127,15 @@ def screen_and_rank_factors():
     # -------------------------------------------------------------------------
     # 【量化逻辑】Qlib 需要知道数据存在哪里（通常是 .bin 文件）。初始化就是告诉它去哪里找数据。
     print("\n[0] 初始化 Qlib 环境...")
+    import qlib
+    
+    # 修复 Windows 下 multiprocessing 的内存与 pickle 报错
+    qlib.init(
+        provider_uri=r"e:\Quant\Qlibworks\qlib_data",
+        region="cn",
+        joblib_backend="threading",
+        maxtasksperchild=None
+    )
     accessor = QlibDataAccessor()
     accessor.ensure_init()
     print(">>> 恭喜！Qlib 底层引擎已成功启动，随时待命提取数据。")
@@ -145,12 +172,36 @@ def screen_and_rank_factors():
         end_time=CONFIG["end_time"],           # 结束时间
     )
     
-    # 真正去本地 .bin 文件里把庞大的表格拉出来
-    raw_data = accessor.fetch_feature_label_frame(
-        feature_spec=spec,
-        label_fields=bundle.label_fields,      # 收益率标签 (如：明天收盘价/今天收盘价 - 1)
-        label_names=bundle.label_names,        # 标签列名叫 "LABEL0"
-    )
+    # 真正去本地 .bin 文件里把庞大的表格拉出来 (加入容错提取机制)
+    print("    - 正在启用容错提取机制 (剔除底层数据损坏的标的)...")
+    from qlib.data import D
+    valid_dfs = []
+    failed_insts = []
+    
+    import warnings
+    # 忽略 Pandas 类型转换的溢出警告，避免刷屏
+    warnings.filterwarnings('ignore', category=RuntimeWarning, message='overflow encountered in cast')
+    
+    for inst in spec.instruments:
+        try:
+            # 逐个提取特征和标签
+            f_df = D.features([inst], list(spec.fields), start_time=spec.start_time, end_time=spec.end_time)
+            l_df = D.features([inst], list(bundle.label_fields), start_time=spec.start_time, end_time=spec.end_time)
+            if not f_df.empty and not l_df.empty:
+                # 拼接特征和标签
+                l_df.columns = list(bundle.label_names)
+                merged = f_df.join(l_df, how="left")
+                valid_dfs.append(merged)
+        except Exception as e:
+            failed_insts.append(inst)
+            
+    if failed_insts:
+        print(f"    ⚠ 警告: 发现 {len(failed_insts)} 只股票的数据底层损坏或无法解析，已自动剔除。")
+        
+    if not valid_dfs:
+        raise RuntimeError("所有标的数据提取均失败，请检查底层 .bin 数据文件集！")
+        
+    raw_data = pd.concat(valid_dfs)
     
     # 给拉出来的表格列名换成好懂的名字
     raw_data.columns = bundle_names_with_price + list(bundle.label_names)
@@ -159,8 +210,18 @@ def screen_and_rank_factors():
     print(f"    - 总列数 (因子数量 + 行情 + LABEL0): {raw_data.shape[1]} 列")
     print(f"    - 【数据抽样展示】表格的右上角一瞥:")
     # iloc[:3, -5:] 意思是取前3行，以及最后5列展示，不让屏幕刷屏
-    print(raw_data.iloc[:3, -5:]) 
-    
+    print(raw_data.iloc[:3, -5:])
+
+    print("\n[1.3] 数据质量体检 (raw_data)...")
+    raw_report = generate_data_quality_report(raw_data, expected_freq="D")
+    print(f"- 综合得分: {raw_report['overall_score']:.4f}")
+    print(f"- 完整性: {raw_report['completeness']['completeness']:.4f}")
+    print(f"- 一致性: {raw_report['consistency']['consistency_score']:.4f} (违规点数: {raw_report['consistency']['consistency_issues']})")
+    print(f"- 时效性: {raw_report['timeliness']['timeliness_score']:.4f} (延迟天数: {raw_report['timeliness']['data_lag_days']})")
+    missing_ratio = raw_report["completeness"]["missing_ratio"].sort_values(ascending=False)
+    print("- 缺失比例 Top 10:")
+    print(missing_ratio.head(10))
+
     # -------------------------------------------------------------------------
     # [第 2 步] 数据清洗
     # -------------------------------------------------------------------------
@@ -175,6 +236,20 @@ def screen_and_rank_factors():
     # 【量化逻辑】机器学习模型最怕“离群极大值”和“量纲不统一”。
     # DatasetH 内部会执行标准化、去极值、中性化和缺失值填充。
     print("\n[3] 构建 DatasetH (特征工程/标准化/去极值/中性化)...")
+    
+    # [Point72 改进] 流派一致性校验 (Paradigm Consistency)
+    # 假设后续使用树模型进行因子打分，必须强制对齐预处理与特征选择逻辑
+    pipeline_model_type = "tree"
+    fs_conf = CONFIG["feature_selection"]
+    
+    if fs_conf["enable"]:
+        if fs_conf["method"] == "embedded" and fs_conf["algo"] == "lasso":
+            raise ValueError("流派冲突：树模型流派不应使用 Lasso (线性) 进行特征选择，建议改为 random_forest。")
+        if fs_conf["method"] == "filter" and fs_conf["algo"] == "f_regression":
+            raise ValueError("流派冲突：树模型流派不应使用 f_regression (线性) 进行特征选择，建议改为 mutual_info。")
+        if fs_conf["method"] == "wrapper":
+            print("警告：Wrapper 默认使用线性回归，在树模型流派下可能会剔除有效的非线性特征！")
+
     _, dataset = create_custom_dataset(
         instruments=CONFIG["instruments"],
         feature_bundle=bundle,
@@ -183,9 +258,9 @@ def screen_and_rank_factors():
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
         segments=CONFIG["segments"],
-        model_type="tree",             # 假设后续使用树模型，自动采用截面分位数化
-        neutralize_features=False,     # 【Point72修正】树模型关闭特征中性化，保留特征原始非线性排序
-        neutralize_labels=True         # 【Point72修正】仅开启标签中性化，强制模型拟合纯 Alpha
+        model_type=pipeline_model_type, # 假设后续使用树模型，自动采用截面分位数化
+        neutralize_labels=True,         # 树模型推荐开启标签中性化
+        neutralize_features=False       # 树模型不强制特征中性化
     )
     print(">>> 数据已经被加工成了适合机器学习的形态 (已完成标签截面中性化)。")
     

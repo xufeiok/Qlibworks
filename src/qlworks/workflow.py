@@ -154,6 +154,20 @@ def run_quant_research_workflow():
     
     # 3. 构建 DatasetH
     print("\n[3] 构建 DatasetH (特征工程/中性化/去极值)...")
+    
+    # [Point72 改进] 流派一致性校验 (Paradigm Consistency)
+    # 本工作流后续使用 train_lgb_model (树模型)，必须强制对齐预处理与特征选择逻辑
+    pipeline_model_type = "tree"
+    fs_conf = CONFIG["feature_selection"]
+    
+    if fs_conf["enable"]:
+        if fs_conf["method"] == "embedded" and fs_conf["algo"] == "lasso":
+            raise ValueError("流派冲突：树模型 (LGBM) 不应使用 Lasso (线性) 进行特征选择，建议改为 random_forest。")
+        if fs_conf["method"] == "filter" and fs_conf["algo"] == "f_regression":
+            raise ValueError("流派冲突：树模型 (LGBM) 不应使用 f_regression (线性) 进行特征选择，建议改为 mutual_info。")
+        if fs_conf["method"] == "wrapper":
+            print("警告：Wrapper 默认使用线性回归，在树模型流派下可能会剔除有效的非线性特征！")
+
     _, dataset = create_custom_dataset(
         instruments=CONFIG["instruments"],
         feature_bundle=bundle,
@@ -161,7 +175,10 @@ def run_quant_research_workflow():
         end_time=CONFIG["end_time"],
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
-        segments=CONFIG["segments"]
+        segments=CONFIG["segments"],
+        model_type=pipeline_model_type,
+        neutralize_labels=True,   # 树模型推荐开启标签中性化
+        neutralize_features=False # 树模型不强制特征中性化
     )
     
     # 4. 特征选择 (降维)

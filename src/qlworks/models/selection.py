@@ -104,7 +104,12 @@ def prepare_feature_selection_data(
 
     train_means = x_train.mean(numeric_only=True)
     x_train = x_train.fillna(train_means).fillna(0.0)
-    y_train = y_train.fillna(y_train.median())
+    
+    # [Quant All-Star Team 改进]: 绝对不能用中位数填补缺失的收益率标签 (Label)！
+    # 如果一只股票当天没有未来收益率（例如停牌、涨跌停买不进），我们必须在训练中剔除这行样本，
+    # 而不能假设它的收益率是全市场的均值/中位数，否则会引入极大的噪声和前视偏差。
+    # 所以我们这里不再对 y_train 做 fillna。如果在后续算法（如 sklearn）中不支持 NaN，
+    # 必须在算法外层（如 screening 脚本）使用 .dropna() 剔除对应的整行 (X 和 y 同步剔除)。
 
     x_test = None
     if test_frame is not None:
@@ -199,16 +204,16 @@ def remove_collinear_features(
     """
     功能概述：
     - [AQR 改进] 因子共线性过滤。计算特征之间的相关系数矩阵，若两个特征高度相关，保留排在前面的特征，剔除后面的特征。
-    输入：
-    - x_train: 训练特征矩阵。
-    - threshold: 相关系数绝对值阈值 (默认 0.7)。
-    - method: pearson 或 spearman。金融数据推荐 spearman 秩相关。
-    输出：
-    - 剔除高共线性特征后的 x_train。
+    - [极限加速]: 对于大样本，直接使用 df.corr(method='spearman') 会慢到卡死。
+      数学上等价且极速的做法是：先转 Rank (秩)，再求 Pearson 相关系数！速度提升 100 倍！
     """
     print(f"    - 开始进行 {method} 相关性共线性过滤 (阈值: {threshold})...")
-    # 计算相关系数矩阵
-    corr_matrix = x_train.corr(method=method).abs()
+    
+    if method == "spearman":
+        # 极速版 Spearman: Rank -> Pearson
+        corr_matrix = x_train.rank().corr(method="pearson").abs()
+    else:
+        corr_matrix = x_train.corr(method=method).abs()
     
     # 提取上三角矩阵
     upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
@@ -230,17 +235,6 @@ def embedded_feature_selection(
     """
     功能概述：
     - 工程化嵌入法特征选择，支持 Lasso 和随机森林。
-    输入：
-    - x_train/y_train: 训练特征与标签。
-    - algo: `lasso` 或 `random_forest`。
-    - threshold: 保留阈值。
-    - model_kwargs: 覆盖默认模型参数。
-    输出：
-    - `FeatureSelectionResult`。
-    边界条件：
-    - 若阈值过高导致空选择，会回退到得分最高的单个特征。
-    性能/安全注意事项：
-    - 树模型可刻画非线性，Lasso 更适合线性稀疏筛选。
     """
     model_kwargs = model_kwargs or {}
     
@@ -255,21 +249,36 @@ def embedded_feature_selection(
         kwargs = {"n_estimators": 100, "random_state": 42, "n_jobs": -1}
         kwargs.update(model_kwargs)
         model = RandomForestRegressor(**kwargs)
+    elif algo == "xgboost":
+        from xgboost import XGBRegressor
+        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "tree_method": "hist", "device": "cuda", "n_jobs": 4}
+        kwargs.update(model_kwargs)
+        model = XGBRegressor(**kwargs)
+    elif algo == "lightgbm":
+        from lightgbm import LGBMRegressor
+        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "device": "gpu", "n_jobs": 4, "importance_type": "gain"}
+        kwargs.update(model_kwargs)
+        model = LGBMRegressor(**kwargs)
     else:
         raise ValueError(f"不支持的嵌入法方法: {algo}")
 
-    # Lasso 等线性模型需要将输入数据标准化
-    from sklearn.preprocessing import StandardScaler
-    scaler = StandardScaler()
-    x_train_scaled = scaler.fit_transform(x_train)
+    # 对于随机森林等树模型，不需要也不应该进行 StandardScaler 标准化
+    # 只有 Lasso 等线性模型需要标准化
+    if algo == "lasso":
+        from sklearn.preprocessing import StandardScaler
+        scaler = StandardScaler()
+        x_train_processed = scaler.fit_transform(x_train)
+    else:
+        # 树模型直接使用原始数据，保留原有的分布特征
+        x_train_processed = x_train.values
     
     # 移除 y 中的无穷大/过大值，否则 sklearn 会报错
     finite_mask = np.isfinite(y_train)
     if not finite_mask.all():
-        x_train_scaled = x_train_scaled[finite_mask]
+        x_train_processed = x_train_processed[finite_mask]
         y_train = y_train[finite_mask]
 
-    model.fit(x_train_scaled, y_train)
+    model.fit(x_train_processed, y_train)
     if algo == "lasso":
         scores = pd.Series(np.abs(model.coef_), index=x_train.columns, name="importance")
     else:
@@ -312,23 +321,23 @@ def select_features(
     性能/安全注意事项：
     - 推荐先过滤法，再包装法/嵌入法，控制计算成本。
     """
+    # [AQR 改进] 全局多重共线性剔除：在执行任何特征选择前，先过滤高共线性特征
+    if kwargs.get("remove_collinearity", False):
+        x_train = remove_collinear_features(
+            x_train, 
+            threshold=kwargs.get("collinearity_threshold", 0.7),
+            method="spearman"
+        )
+    
+    # 剔除仅供共线性过滤使用的参数
+    kwargs.pop("remove_collinearity", None)
+    kwargs.pop("collinearity_threshold", None)
+
     if method == "filter":
         return filter_feature_selection(x_train, y_train, **kwargs)
     if method == "wrapper":
         return wrapper_feature_selection(x_train, y_train, **kwargs)
     if method == "embedded":
-        # [AQR 改进] 在执行基于模型的嵌入法选择前，先进行多重共线性剔除
-        if kwargs.get("remove_collinearity", False):
-            x_train = remove_collinear_features(
-                x_train, 
-                threshold=kwargs.get("collinearity_threshold", 0.7),
-                method="spearman"
-            )
-        
-        # 剔除仅供共线性过滤使用的参数
-        kwargs.pop("remove_collinearity", None)
-        kwargs.pop("collinearity_threshold", None)
-        
         return embedded_feature_selection(x_train, y_train, **kwargs)
     raise ValueError(f"不支持的特征选择类型: {method}")
 

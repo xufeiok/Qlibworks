@@ -56,6 +56,7 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
         "num_leaves": 64,
         "min_child_samples": 20,
         "verbose": -1,
+        "device": "gpu", # 开启 GPU 加速
     }
     if params:
         base_params.update(params)
@@ -78,7 +79,9 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "n_estimators": 100,
-        "n_jobs": -1,
+        "tree_method": "hist", # GPU 必需参数
+        "device": "cuda",      # 开启 GPU 加速
+        "n_jobs": 4,
     }
     if params:
         base_params.update(params)
@@ -99,7 +102,8 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
         "learning_rate": 0.1,
         "iterations": 100,
         "depth": 6,
-        "thread_count": -1,
+        "task_type": "GPU", # 开启 GPU 加速
+        "thread_count": 4,
     }
     if params:
         base_params.update(params)
