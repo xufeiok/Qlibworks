@@ -22,13 +22,13 @@ try:
 except ImportError:
     SuperPlot = None
 
-from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy
+from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy, AShareStrategy, AShareCommission
 
 def run_qlib_backtrader(
     pred_df: pd.DataFrame, 
     price_df_dict: dict, 
     benchmark_df: pd.DataFrame = None,
-    strategy_class=EnhancedQlibStrategy, 
+    strategy_class=AShareStrategy, 
     strategy_params=None,
     initial_cash=100000.0,
     commission=0.001,
@@ -55,7 +55,10 @@ def run_qlib_backtrader(
     
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
-    cerebro.broker.setcommission(commission=commission)
+    
+    # [Virtu 改进] 注入 A 股真实手续费模型（区分买卖、印花税）
+    comminfo = AShareCommission(stamp_duty=0.001, commission=0.0003)
+    cerebro.broker.addcommissioninfo(comminfo)
     
     if set_slippage_perc > 0:
         cerebro.broker.set_slippage_perc(set_slippage_perc)

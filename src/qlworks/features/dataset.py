@@ -222,10 +222,6 @@ def create_custom_dataset(
                 "feature": (feature_exprs, feature_names),
                 "label": (label_exprs, label_names),
             },
-            "filter_pipe": [
-                # 过滤停牌和未上市股票（可选）
-                {"class": "NameDFFilter", "kwargs": {"name_rule_re": ".*", "F_v": "True"}},
-            ],
             "freq": freq,
         },
     }

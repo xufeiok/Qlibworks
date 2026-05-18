@@ -25,13 +25,29 @@ def load_csi500_instruments():
 
 CONFIG = {
     "instruments": load_csi500_instruments(),
-    "start_time": "2023-01-01",
+    "start_time": "2020-01-01",
     "end_time": "2025-12-31",
-    "segments": {
-        "train": ("2023-01-01", "2023-12-31"),
-        "valid": ("2024-01-01", "2024-12-31"),
-        "test":  ("2025-01-01", "2025-12-31"),
-    },
+    # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
+    "rolling_windows": [
+        {
+            "name": "Test_2023",
+            "train": ("2020-01-01", "2021-12-31"), # 2年训练
+            "valid": ("2022-01-01", "2022-12-31"), # 1年验证
+            "test":  ("2023-01-01", "2023-12-31"), # 1年样本外测试
+        },
+        {
+            "name": "Test_2024",
+            "train": ("2021-01-01", "2022-12-31"),
+            "valid": ("2023-01-01", "2023-12-31"),
+            "test":  ("2024-01-01", "2024-12-31"),
+        },
+        {
+            "name": "Test_2025",
+            "train": ("2022-01-01", "2023-12-31"),
+            "valid": ("2024-01-01", "2024-12-31"),
+            "test":  ("2025-01-01", "2025-12-31"),
+        }
+    ],
     "top_k_factors": 20 # 我们选取筛选出来的 Top 20 因子来建模
 }
 
@@ -50,6 +66,11 @@ def load_factor_expressions(selected_factor_names, factor_files):
         for factor in data['factors']:
             name = factor.get('name')
             expr = factor.get('expression')
+            
+            # 【修复】：处理 YAML 中 expression 是字典的情况（区分 qlib 和 duckdb 公式）
+            if isinstance(expr, dict):
+                expr = expr.get('qlib', '')
+            
             if name in selected_factor_names and expr:
                 expr_map[name] = expr
                 
@@ -92,8 +113,7 @@ def run_ml_pipeline():
     
     print(f">>> 成功读取排名前 {len(selected_factor_names)} 的因子，并提取了其公式。")
     
-    # 3. 重新构建专属的 DatasetH (只包含这 Top K 个好因子)
-    print("\n[3] 为机器学习模型构建专属 DatasetH 数据集...")
+    # 3. 准备 FeatureBundle
     bundle = FeatureBundle(
         fields=selected_factor_exprs,
         names=selected_factor_names,
@@ -101,48 +121,74 @@ def run_ml_pipeline():
         label_names=["LABEL0"]
     )
     
-    _, dataset = create_custom_dataset(
-        instruments=CONFIG["instruments"],
-        feature_bundle=bundle,
-        start_time=CONFIG["start_time"],
-        end_time=CONFIG["end_time"],
-        fit_start_time=CONFIG["segments"]["train"][0],
-        fit_end_time=CONFIG["segments"]["train"][1],
-        segments=CONFIG["segments"],
-        model_type="tree",             # 集成模型全是树模型
-        neutralize_features=False,     # 【Point72修正】树模型关闭特征中性化
-        neutralize_labels=True         # 【Point72修正】仅开启标签中性化
-    )
-    print(">>> 训练/验证/测试集 切分完成 (已完成标签截面中性化)！")
+    all_predictions = []
+    
+    # 4. 【Renaissance 级改进】遍历所有滚动窗口 (Walk-Forward Optimization)
+    for window in CONFIG["rolling_windows"]:
+        window_name = window["name"]
+        print(f"\n{'='*40}")
+        print(f"=== 正在处理滚动窗口: {window_name} ===")
+        print(f"    [训练集]: {window['train'][0]} 到 {window['train'][1]}")
+        print(f"    [验证集]: {window['valid'][0]} 到 {window['valid'][1]}")
+        print(f"    [测试集]: {window['test'][0]} 到 {window['test'][1]}")
+        print(f"{'='*40}")
+        
+        segments = {
+            "train": window["train"],
+            "valid": window["valid"],
+            "test":  window["test"],
+        }
+        
+        print(f"\n[3-{window_name}] 为该窗口构建专属 DatasetH 数据集...")
+        _, dataset = create_custom_dataset(
+            instruments=CONFIG["instruments"],
+            feature_bundle=bundle,
+            start_time=CONFIG["start_time"],
+            end_time=CONFIG["end_time"],
+            fit_start_time=segments["train"][0],
+            fit_end_time=segments["train"][1],
+            segments=segments,
+            model_type="tree",             # 集成模型全是树模型
+            neutralize_features=False,     # 树模型关闭特征中性化
+            neutralize_labels=True         # 仅开启标签中性化
+        )
+        print(f">>> {window_name} 训练/验证/测试集 切分完成！")
 
-    # 4. 训练集成机器学习模型
-    # 【量化逻辑】单个模型容易过拟合（比如只背题不懂变通）。
-    # 业界标配是：LightGBM + XGBoost + CatBoost 三大树模型融合（Ensemble）。
-    print("\n[4] 开始训练机器学习模型 (LGBM + XGBoost + CatBoost) [GPU加速]...")
-    
-    print("    - 正在训练 LightGBM 模型 (GPU)...")
-    lgb_model = train_lgb_model(dataset)
-    
-    print("    - 正在训练 XGBoost 模型 (GPU)...")
-    xgb_model = train_xgb_model(dataset)
-    
-    print("    - 正在训练 CatBoost 模型 (GPU)...")
-    cat_model = train_catboost_model(dataset)
-    
-    print(">>> 所有模型训练完毕！")
+        print(f"\n[4-{window_name}] 开始训练机器学习模型 (LGBM + XGBoost + CatBoost) [GPU加速]...")
+        print("    - 正在训练 LightGBM 模型 (GPU)...")
+        lgb_model = train_lgb_model(dataset)
+        
+        print("    - 正在训练 XGBoost 模型 (GPU)...")
+        xgb_model = train_xgb_model(dataset)
+        
+        print("    - 正在训练 CatBoost 模型 (GPU)...")
+        cat_model = train_catboost_model(dataset)
+        print(f">>> {window_name} 所有模型训练完毕！")
 
-    # 5. 模型集成与样本外预测
-    print("\n[5] 在测试集上进行模型集成与预测 (生成 Alpha 预测得分)...")
-    # 把三个模型的预测结果等权平均，得到最终的综合打分 (score)
-    predictions = predict_ensemble_models([lgb_model, xgb_model, cat_model], dataset, segment="test")
+        print(f"\n[5-{window_name}] 在测试集上进行模型集成与预测 (生成 Alpha 预测得分)...")
+        predictions = predict_ensemble_models([lgb_model, xgb_model, cat_model], dataset, segment="test")
+        
+        # 将原始得分进行横截面百分位排序 (Cross-Sectional Ranking)
+        if isinstance(predictions, pd.Series):
+            predictions = predictions.to_frame("score")
+        predictions["score"] = predictions.groupby(level="datetime")["score"].rank(pct=True)
+        
+        print(f">>> {window_name} 预测完成！共产生 {len(predictions)} 条测试集打分。")
+        all_predictions.append(predictions)
     
-    print(f">>> 预测完成！测试集共产生 {len(predictions)} 条预测得分。")
-    print("    【预测得分 (Score) 抽样展示】(Score越高，代表模型认为该股票明天越能涨):")
-    print(predictions.head(10))
+    # 5. 合并所有滚动窗口的样本外预测结果
+    print("\n[6] 所有滚动窗口执行完毕！正在合并预测结果...")
+    final_predictions = pd.concat(all_predictions)
+    # 按时间排序，确保回测顺序正确
+    final_predictions.sort_index(level=["datetime", "instrument"], inplace=True)
+    
+    print(f">>> 合并完成！总测试集跨度: {final_predictions.index.get_level_values('datetime').min().date()} 至 {final_predictions.index.get_level_values('datetime').max().date()}")
+    print("    【预测排名 (Score) 抽样展示】(1.0代表当天全市场最强):")
+    print(final_predictions.head(10))
     
     # 6. 保存预测结果，为 Backtrader 回测做准备
     output_path = os.path.join(os.path.dirname(__file__), "ml_predictions_score.csv")
-    predictions.to_csv(output_path)
+    final_predictions.to_csv(output_path)
     print(f"\n>>> 预测得分已保存至: {output_path}")
     print("="*60)
     print("【下一步指引】")

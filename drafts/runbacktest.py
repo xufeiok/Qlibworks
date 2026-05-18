@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 from qlworks.data import QlibDataAccessor
 from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
-from qlworks.backtest.bt_strategy import EnhancedQlibStrategy # [Virtu/Two Sigma 改进] 使用带有严格风控和容量限制的增强策略
+from qlworks.backtest.bt_strategy import AShareStrategy # [Virtu/Man Group 改进] 使用专门针对A股 T+1 及印花税的截面选股策略
 
 def main():
     print("="*60)
@@ -62,21 +62,10 @@ def main():
     # 4. 运行 Backtrader 回测
     print("\n[4] 启动 Backtrader 引擎进行交易撮合...")
     strategy_params = dict(
-        top_k=5,             # 每天买入预测分数最高的 5 只股票
-        rebalance_days=5,    # 调仓周期: 5天 (每周换仓，降低摩擦成本)
-        buy_pct=0.95,        # 最大资金使用率 95% (留5%现金防滑点)
-        log_enabled=True,    # 开启日志以查看真实的挂单与止损执行情况
-        
-        # [Two Sigma & Virtu 改进] 严格风控与执行参数
-        use_risk_control=True,
-        stop_type='ATR',
-        atr_period=14,
-        atr_multiplier=2.0,
-        trailing_stop=True,
-        trailing_start_pct=0.10,
-        trailing_callback_pct=0.02,
-        take_profit_pct=1.0,
-        volume_limit_pct=0.10  # 单笔订单不超过当日真实成交量的10%
+        top_k=10,             # 每天买入预测分数最高的 10 只股票
+        score_threshold=0.9,  # 仅买入分数 > 0.9 的股票
+        buy_pct=0.95,         # 最大资金使用率 95% (留5%现金防滑点)
+        log_enabled=True,     # 开启日志以查看真实的挂单与止损执行情况
     )
     
     # 调用现成的 run_qlib_backtrader
@@ -84,10 +73,10 @@ def main():
         pred_df=pred_df,
         price_df_dict=price_df_dict,
         benchmark_df=None,               # 暂不使用对比基准
-        strategy_class=EnhancedQlibStrategy, # 使用增强多头截面策略
+        strategy_class=AShareStrategy,   # 使用定制的 A 股截面策略
         strategy_params=strategy_params,
         initial_cash=1000000.0,
-        commission=0.001,      # 千分之一手续费 (含印花税)
+        commission=0.0,          # 佣金已由 AShareCommission 内部处理
         set_slippage_perc=0.001, # 千分之一滑点 (模拟买卖损耗)
         output_dir=os.path.dirname(__file__)
     )
