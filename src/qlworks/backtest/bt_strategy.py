@@ -136,7 +136,8 @@ class AShareStrategy(bt.Strategy):
     - 每日买入得分 > score_threshold 的前 top_k 只股票。
     - 如果没有 10 只满足条件，有几只买几只；0 只则空仓。
     - 次日分数 <= threshold 或跌出前 top_k，则卖出。
-    - 严格 T+1 限制：当日买入的股票当日不可卖出。
+    - [A股优化] 严格遵守 100 股（1手）的整数倍委托限制。
+    - [A股优化] T+1 机制：Backtrader 日线级别由于是次日开盘执行，买入(T+1开盘)后最早卖出信号在(T+1收盘)生成，执行在(T+2开盘)，天然满足A股T+1限制，因此去除了多余的持仓天数判断以防变相导致T+2。
     """
     params = dict(
         top_k=10,               # 最多持仓数量
@@ -148,7 +149,6 @@ class AShareStrategy(bt.Strategy):
     def __init__(self):
         self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']
         self.all_orders = []
-        self.buy_dates = {}  # 记录买入日期以控制 T+1
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -161,11 +161,8 @@ class AShareStrategy(bt.Strategy):
             
             if order.isbuy():
                 self.log(f"[Virtu 撮合] 买入成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.0f}")
-                self.buy_dates[d._name] = self.datetime.date(0)
             elif order.issell():
                 self.log(f"[Virtu 撮合] 卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.0f}")
-                if self.getposition(d).size == 0:
-                    self.buy_dates.pop(d._name, None)
                     
             self.all_orders.append({
                 'datetime': self.datetime.datetime().isoformat(),
@@ -192,8 +189,6 @@ class AShareStrategy(bt.Strategy):
             self.log(f"订单异常 | {order.data._name} | 状态: {status_name}")
 
     def next(self):
-        current_date = self.datetime.date(0)
-        
         # 1. 筛选得分 > threshold 的股票
         valid_scores = []
         for d in self.instruments:
@@ -205,149 +200,31 @@ class AShareStrategy(bt.Strategy):
         top_k_feeds = [x[1] for x in valid_scores[:self.p.top_k]]
         top_k_names = [x[0] for x in valid_scores[:self.p.top_k]]
         
-        # 3. 平仓逻辑 (结合 T+1 限制)
+        # 3. 平仓逻辑
         for d in self.instruments:
             pos = self.getposition(d)
             if pos.size > 0:
-                # 检查是否满足 T+1 (当日买入的不可当日生成卖单)
-                # 由于 Backtrader 是在次日开盘撮合，所以在这里(收盘时)生成的卖单会在次日开盘执行，
-                # 只要 buy_date < current_date 即可保证持仓超过1天。
-                buy_date = self.buy_dates.get(d._name)
-                is_t_plus_1 = (buy_date is None or buy_date < current_date)
-                
-                # 如果不在新的目标列表里，且满足 T+1，则全部卖出
-                if d not in top_k_feeds and is_t_plus_1:
+                # 如果不在新的目标列表里，则全部卖出
+                if d not in top_k_feeds:
                     self.close(d)
                     self.log(f"[Man Group 风控] 调仓平仓单下达: {d._name} (跌出前 {self.p.top_k} 或得分 <= {self.p.score_threshold})")
 
         # 4. 开仓逻辑
         if top_k_feeds:
             # 严格控制每只股票的权重为 1/top_k，避免在标的不足时单只股票满仓导致风险失控
-            # 注意：Backtrader 的 order_target_percent 是相对于总资产(Value)而言的
-            # 为防止可用现金不足导致 Margin 被拒，计算目标权重时稍微保守一点
             target_weight = (self.p.buy_pct / self.p.top_k) * 0.98
             
             for d in top_k_feeds:
                 pos = self.getposition(d)
                 # 仅在无持仓时买入；对于已持仓的股票，避免微调引发的零碎交易手续费
                 if pos.size == 0:
-                    self.order_target_percent(d, target=target_weight)
-                    
-        self.log(f"今日选股分析完成. 明日目标持仓: {top_k_names}")
-
-class AShareCommission(bt.CommInfoBase):
-    """
-    【Virtu 交易执行引擎】A股真实手续费模型：
-    - 印花税：仅卖出收取 (目前 A 股为 0.05% 或 0.1%，此处按保守的 0.1% 测算)
-    - 券商佣金：双向收取 (通常为万分之三)
-    """
-    params = (
-        ('stamp_duty', 0.001),     
-        ('commission', 0.0003),    
-        ('stocklike', True),
-        ('commtype', bt.CommInfoBase.COMM_PERC),
-    )
-
-    def _getcommission(self, size, price, pseudoexec):
-        if size > 0:  # 买入只收佣金
-            return size * price * self.p.commission
-        elif size < 0:  # 卖出收佣金 + 印花税
-            return abs(size) * price * (self.p.commission + self.p.stamp_duty)
-        return 0
-
-class AShareStrategy(bt.Strategy):
-    """
-    【Man Group & Virtu 联合定制】A股专属截面策略：
-    - 每日买入得分 > score_threshold 的前 top_k 只股票。
-    - 如果没有 10 只满足条件，有几只买几只；0 只则空仓。
-    - 次日分数 <= threshold 或跌出前 top_k，则卖出。
-    - 严格 T+1 限制：当日买入的股票当日不可卖出。
-    """
-    params = dict(
-        top_k=10,               # 最多持仓数量
-        score_threshold=0.9,    # 选股得分阈值
-        buy_pct=0.95,           # 最大资金使用率
-        log_enabled=True,
-    )
-
-    def __init__(self):
-        self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']
-        self.all_orders = []
-        self.buy_dates = {}  # 记录买入日期以控制 T+1
-
-    def notify_order(self, order):
-        if order.status in [order.Submitted, order.Accepted]:
-            return
-            
-        if order.status == order.Completed:
-            d = order.data
-            price = order.executed.price
-            size = order.executed.size
-            
-            if order.isbuy():
-                self.log(f"[Virtu 撮合] 买入成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.0f}")
-                self.buy_dates[d._name] = self.datetime.date(0)
-            elif order.issell():
-                self.log(f"[Virtu 撮合] 卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.0f}")
-                if self.getposition(d).size == 0:
-                    self.buy_dates.pop(d._name, None)
-                    
-            self.all_orders.append({
-                'datetime': self.datetime.datetime().isoformat(),
-                'type': 'buy' if order.isbuy() else 'sell',
-                'price': price,
-                'size': size,
-                'comm': order.executed.comm,
-                'value': order.executed.value,
-                'pos_size': self.getposition(d).size,
-                'cash': self.broker.getcash(),
-                'total_value': self.broker.getvalue(),
-                'stock_code': d._name,
-                'stock_name': d._name
-            })
-            
-        elif order.status in [order.Canceled, order.Margin, order.Rejected]:
-            self.log(f"订单异常 | {order.data._name} | 状态: {order.status}")
-
-    def next(self):
-        current_date = self.datetime.date(0)
-        
-        # 1. 筛选得分 > threshold 的股票
-        valid_scores = []
-        for d in self.instruments:
-            if len(d) > 0 and not np.isnan(d.score[0]) and d.score[0] > self.p.score_threshold:
-                valid_scores.append((d._name, d, d.score[0]))
-                
-        # 2. 按得分降序排序并选取前 top_k
-        valid_scores.sort(key=lambda x: x[2], reverse=True)
-        top_k_feeds = [x[1] for x in valid_scores[:self.p.top_k]]
-        top_k_names = [x[0] for x in valid_scores[:self.p.top_k]]
-        
-        # 3. 平仓逻辑 (结合 T+1 限制)
-        for d in self.instruments:
-            pos = self.getposition(d)
-            if pos.size > 0:
-                # 检查是否满足 T+1 (当日买入的不可当日生成卖单)
-                # 由于 Backtrader 是在次日开盘撮合，所以在这里(收盘时)生成的卖单会在次日开盘执行，
-                # 只要 buy_date < current_date 即可保证持仓超过1天。
-                buy_date = self.buy_dates.get(d._name)
-                is_t_plus_1 = (buy_date is None or buy_date < current_date)
-                
-                # 如果不在新的目标列表里，且满足 T+1，则全部卖出
-                if d not in top_k_feeds and is_t_plus_1:
-                    self.close(d)
-                    self.log(f"[Man Group 风控] 调仓平仓单下达: {d._name} (跌出前 {self.p.top_k} 或得分 <= {self.p.score_threshold})")
-
-        # 4. 开仓逻辑
-        if top_k_feeds:
-            # 严格控制每只股票的权重为 1/top_k，避免在标的不足时单只股票满仓导致风险失控
-            target_weight = self.p.buy_pct / self.p.top_k
-            
-            for d in top_k_feeds:
-                pos = self.getposition(d)
-                # 仅在无持仓时买入；对于已持仓的股票，避免微调引发的零碎交易手续费
-                if pos.size == 0:
-                    self.order_target_percent(d, target=target_weight)
+                    # [A股优化] 计算目标买入股数，强制向下取整至 100 的倍数 (一手)
+                    target_value = self.broker.getvalue() * target_weight
+                    target_shares = int((target_value / d.close[0]) // 100 * 100)
+                    if target_shares >= 100:
+                        self.order_target_size(d, target=target_shares)
+                    else:
+                        self.log(f"[Virtu 撮合] 资金不足以购买1手 | {d._name}")
                     
         self.log(f"今日选股分析完成. 明日目标持仓: {top_k_names}")
 
@@ -579,10 +456,14 @@ class EnhancedQlibStrategy(bt.Strategy):
                         self.log(f"  [容量受限] {d._name} 目标买入金额 {delta_value:.2f} 超过容量上限 {max_allowed_value:.2f}")
                         # 降级：只买入最大允许量
                         adjusted_target_weight = (current_value + max_allowed_value) / self.broker.getvalue()
-                        self.order_target_percent(d, target=adjusted_target_weight)
-                        continue
+                        target_weight = adjusted_target_weight
                         
-                self.order_target_percent(d, target=target_weight)
+                # [A股优化] 强制将目标金额转换为 100 的整数倍股数 (一手)
+                final_target_value = self.broker.getvalue() * target_weight
+                target_shares = int((final_target_value / d.close[0]) // 100 * 100)
+                
+                if target_shares >= 100 or target_shares < self.getposition(d).size: # 允许卖出非整手，但买入必须整手
+                    self.order_target_size(d, target=target_shares)
                 
         self.log(f"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}")
 

@@ -155,6 +155,9 @@ def run_qlib_backtrader(
         try:
             dd = strat.analyzers.drawdown.get_analysis()
             trade_analyzer = strat.analyzers.tradeanalyzer.get_analysis()
+            sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+            sqn_analysis = strat.analyzers.sqn.get_analysis()
+            returns_analysis = strat.analyzers.returns.get_analysis()
             
             # 安全地获取总收益率
             total_ret = 0.0
@@ -164,8 +167,35 @@ def run_qlib_backtrader(
             else:
                 total_ret = ((final_value - initial_cash) / initial_cash) * 100
                 
-            print(f"总收益率: {total_ret:.2f}%")
-            print(f"最大回撤: {dd.get('max', {}).get('drawdown', 0):.2f}%")
+            # [Renaissance Backtest Engine] 提取一流量化机构关注的核心绩效指标
+            max_dd = dd.get('max', {}).get('drawdown', 0)
+            sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
+            if sharpe_ratio is None: sharpe_ratio = 0.0
+            
+            sqn = sqn_analysis.get('sqn', 0.0)
+            
+            # 计算胜率 (Win Rate)
+            total_trades = trade_analyzer.get('total', {}).get('closed', 0)
+            won_trades = trade_analyzer.get('won', {}).get('total', 0)
+            win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0.0
+            
+            # 计算年化收益率 (Annualized Return)
+            days = len(returns_analysis)
+            annual_ret = ((1 + total_ret/100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
+            
+            print("\n" + "="*40)
+            print("【量化回测核心绩效报告 (Institutional Metrics)】")
+            print("="*40)
+            print(f"期末资金:   {final_value:.2f}")
+            print(f"总收益率:   {total_ret:.2f}%")
+            print(f"年化收益率: {annual_ret:.2f}%")
+            print(f"最大回撤:   {max_dd:.2f}%")
+            print(f"夏普比率:   {sharpe_ratio:.3f} (Sharpe Ratio)")
+            print(f"系统质量:   {sqn:.3f} (SQN)")
+            print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
+            print(f"收益回撤比: {annual_ret/max_dd if max_dd > 0 else float('inf'):.2f} (Calmar Ratio Proxy)")
+            print("="*40 + "\n")
+            
         except Exception as e:
             print(f"解析基础分析器结果时出错: {e}")
         
@@ -333,6 +363,9 @@ def run_duckdb_backtrader(
         try:
             dd = strat.analyzers.drawdown.get_analysis()
             trade_analyzer = strat.analyzers.tradeanalyzer.get_analysis()
+            sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+            sqn_analysis = strat.analyzers.sqn.get_analysis()
+            returns_analysis = strat.analyzers.returns.get_analysis()
             
             total_ret = 0.0
             if 'pnl' in trade_analyzer and 'net' in trade_analyzer['pnl'] and 'total' in trade_analyzer['pnl']:
@@ -341,8 +374,35 @@ def run_duckdb_backtrader(
             else:
                 total_ret = ((final_value - initial_cash) / initial_cash) * 100
                 
-            print(f"总收益率: {total_ret:.2f}%")
-            print(f"最大回撤: {dd.get('max', {}).get('drawdown', 0):.2f}%")
+            # [Renaissance Backtest Engine] 提取一流量化机构关注的核心绩效指标
+            max_dd = dd.get('max', {}).get('drawdown', 0)
+            sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
+            if sharpe_ratio is None: sharpe_ratio = 0.0
+            
+            sqn = sqn_analysis.get('sqn', 0.0)
+            
+            # 计算胜率 (Win Rate)
+            total_trades = trade_analyzer.get('total', {}).get('closed', 0)
+            won_trades = trade_analyzer.get('won', {}).get('total', 0)
+            win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0.0
+            
+            # 计算年化收益率 (Annualized Return)
+            days = len(returns_analysis)
+            annual_ret = ((1 + total_ret/100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
+            
+            print("\n" + "="*40)
+            print("【量化回测核心绩效报告 (Institutional Metrics)】")
+            print("="*40)
+            print(f"期末资金:   {final_value:.2f}")
+            print(f"总收益率:   {total_ret:.2f}%")
+            print(f"年化收益率: {annual_ret:.2f}%")
+            print(f"最大回撤:   {max_dd:.2f}%")
+            print(f"夏普比率:   {sharpe_ratio:.3f} (Sharpe Ratio)")
+            print(f"系统质量:   {sqn:.3f} (SQN)")
+            print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
+            print(f"收益回撤比: {annual_ret/max_dd if max_dd > 0 else float('inf'):.2f} (Calmar Ratio Proxy)")
+            print("="*40 + "\n")
+            
         except Exception as e:
             print(f"解析基础分析器结果时出错: {e}")
         

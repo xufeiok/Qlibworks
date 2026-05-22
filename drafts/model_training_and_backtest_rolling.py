@@ -2,6 +2,7 @@ import os
 import sys
 import pandas as pd
 import yaml
+import gc # [Bloomberg Eng] 添加 gc 模块进行内存回收
 
 # 将项目根目录 src 文件夹加入 sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
@@ -29,23 +30,24 @@ CONFIG = {
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
+    # [Point] 引入 Embargo (隔离期)：训练集到验证集、验证集到测试集之间留出约10天安全垫，防止 T+N 标签导致的未来数据泄漏 (Look-ahead Bias)
     "rolling_windows": [
         {
             "name": "Test_2023",
-            "train": ("2020-01-01", "2021-12-31"), # 2年训练+因子筛选
-            "valid": ("2022-01-01", "2022-12-31"), # 1年验证
+            "train": ("2020-01-01", "2021-12-20"), # 提前结束，留出Embargo
+            "valid": ("2022-01-01", "2022-12-20"), # 提前结束
             "test":  ("2023-01-01", "2023-12-31"), # 1年样本外测试
         },
         {
             "name": "Test_2024",
-            "train": ("2021-01-01", "2022-12-31"),
-            "valid": ("2023-01-01", "2023-12-31"),
+            "train": ("2021-01-01", "2022-12-20"),
+            "valid": ("2023-01-01", "2023-12-20"),
             "test":  ("2024-01-01", "2024-12-31"),
         },
         {
             "name": "Test_2025",
-            "train": ("2022-01-01", "2023-12-31"),
-            "valid": ("2024-01-01", "2024-12-31"),
+            "train": ("2022-01-01", "2023-12-20"),
+            "valid": ("2024-01-01", "2024-12-20"),
             "test":  ("2025-01-01", "2025-12-31"),
         }
     ],
@@ -96,16 +98,17 @@ def run_ml_pipeline():
         
         # 3.1 为该窗口构建包含【全量因子】的 DatasetH，用于挑选因子
         print(f"\n[3.1 - {window_name}] 构建全量因子的 DatasetH (用于特征筛选)...")
+        # [Point72 改进] 仅提取当前 Window 所需时间段，避免每次循环计算全量(2020-2025)数据的巨大算力浪费
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_all,
-            start_time=CONFIG["start_time"],
-            end_time=CONFIG["end_time"],
+            start_time=segments["train"][0],
+            end_time=segments["test"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments=segments,
             model_type="tree",
-            neutralize_features=False,
+            neutralize_features=False, # 若出现严重截面偏移，可设为 True
             neutralize_labels=True
         )
         
@@ -131,6 +134,10 @@ def run_ml_pipeline():
         print(f">>> {window_name} 动态因子筛选完成！本期入选的因子为:")
         print(f"    {selected_factor_names}")
         
+        # [Bloomberg Data Pipeline 改进] 内存核弹危机解除：因子筛选完成后，全量数百个因子的庞大 DataFrame 必须立即销毁
+        del dataset_full, train_frame_full, x_train, y_train, fs_result
+        gc.collect()
+        
         # 3.3 构建仅包含 Top K 因子的小数据集，防止过多无用特征干扰模型
         # 由于 dataset_full 的底层数据是通用的，我们可以利用它的 _data 结构，或者直接用切片，
         # 为了符合 Qlib 的原生训练模式，这里直接传入全量 dataset_full 也可以，
@@ -152,8 +159,8 @@ def run_ml_pipeline():
         _, dataset_sub = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_sub,
-            start_time=CONFIG["start_time"],
-            end_time=CONFIG["end_time"],
+            start_time=segments["train"][0],
+            end_time=segments["test"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments=segments,
@@ -179,10 +186,17 @@ def run_ml_pipeline():
         # 将原始得分进行横截面百分位排序 (Cross-Sectional Ranking)
         if isinstance(predictions, pd.Series):
             predictions = predictions.to_frame("score")
-        predictions["score"] = predictions.groupby(level="datetime")["score"].rank(pct=True)
+            
+        # [Two Sigma 改进] 严格处理 NaN 值（停牌、缺失等），防止影响横截面排序结果
+        predictions = predictions.dropna(subset=["score"])
+        predictions["score"] = predictions.groupby(level="datetime")["score"].rank(pct=True, na_option="keep")
         
         print(f">>> {window_name} 预测完成！共产生 {len(predictions)} 条测试集打分。")
         all_predictions.append(predictions)
+        
+        # [Bloomberg Data Pipeline 改进] 当前 Window 结束，彻底释放轻量数据集与模型占用的显存/内存
+        del dataset_sub, lgb_model, xgb_model, cat_model
+        gc.collect()
     
     # 4. 合并所有滚动窗口的样本外预测结果
     print("\n[4] 所有滚动窗口执行完毕！正在合并预测结果...")
