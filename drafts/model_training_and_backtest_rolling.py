@@ -17,16 +17,10 @@ import qlib
 # ==============================================================================
 # [全局配置区]
 # ==============================================================================
-def load_csi500_instruments():
-    file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
-        insts = df['instrument'].dropna().unique().tolist()
-        return insts
-    return ["000001.SZ", "000002.SZ", "600000.SH"]
-
 CONFIG = {
-    "instruments": load_csi500_instruments(),
+    # [Renaissance 改进] 摒弃静态的 List 股票池，直接使用 Qlib 内置的动态别名
+    # 这样 Qlib 内部会根据每一天的日期，动态过滤出当天真实属于 csi500 且未退市的成分股，彻底杜绝前视偏差与幸存者偏差
+    "instruments": "csi500", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
@@ -75,7 +69,13 @@ def run_ml_pipeline():
     print("\n[2] 读取因子库 (Factor Library) 的所有因子公式...")
     factor_files = ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"]
     bundle_all = build_factor_library_bundle(factor_files)
-    print(f">>> 成功加载 {len(bundle_all.fields)} 个因子候选池。")
+    
+    # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，并在底层通过 CSQuantileNorm 转换为横截面排名，防范日内跳空带来的前视偏差错位
+    bundle_all.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
+    bundle_all.label_names = ["LABEL_5D"]
+    CONFIG["feature_selection"]["label_col"] = "LABEL_5D"
+    
+    print(f">>> 成功加载 {len(bundle_all.fields)} 个因子候选池，并将预测标签设为 {bundle_all.label_names[0]} (5天收益率)。")
     
     all_predictions = []
     fs_conf = CONFIG["feature_selection"]

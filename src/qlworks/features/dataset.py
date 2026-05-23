@@ -68,15 +68,15 @@ def create_alpha158_dataset(
         base_infer = []
         base_learn = [{"class": "DropnaLabel"}]
 
-        # 1. 标签(Label)中性化：常用于树模型，强制模型去拟合纯 Alpha 收益
+        # 1. 标签(Label)处理：转换为横截面分位数 (CSRank)
         if neutralize_labels:
-            label_neutralize = {
-                "class": "CSNeutralize",
-                "module_path": "qlworks.processors.neutralize",
+            label_rank = {
+                "class": "CSQuantileNorm",
+                "module_path": "qlworks.processors.quantile_norm",
                 "kwargs": {"fields_group": "label"}
             }
             # Infer 阶段不需要用到 Label，所以只加到 learn_processors
-            base_learn.append(label_neutralize)
+            base_learn.append(label_rank)
 
         # 2. 特征标准化与特征中性化
         if model_type == "tree":
@@ -230,14 +230,15 @@ def create_custom_dataset(
         base_infer = []
         base_learn = [{"class": "DropnaLabel"}]
 
-        # 1. 标签(Label)中性化
+        # 1. 标签(Label)处理：转换为横截面分位数 (CSRank)
         if neutralize_labels:
-            label_neutralize = {
-                "class": "CSNeutralize",
-                "module_path": "qlworks.processors.neutralize",
+            # [Citadel Alpha Lab 改进] 将标签转换为截面百分位排名，剥离大盘涨跌的 Beta 影响
+            label_rank = {
+                "class": "CSQuantileNorm",
+                "module_path": "qlworks.processors.quantile_norm",
                 "kwargs": {"fields_group": "label"}
             }
-            base_learn.append(label_neutralize)
+            base_learn.append(label_rank)
 
         # 2. 特征标准化与特征中性化
         if model_type == "tree":

@@ -101,7 +101,8 @@ class BaseQlibStrategy(bt.Strategy):
         
         # 对 Top K 分配权重
         if top_k_feeds:
-            target_weight = self.p.buy_pct / len(top_k_feeds)
+            # 严格控制每只股票的最大权重，避免符合条件的标的不足时单只股票满仓导致风险失控
+            target_weight = self.p.buy_pct / self.p.top_k
             for d in top_k_feeds:
                 # [Virtu 改进] 检查成交量容量
                 # 预估目标持仓所需资金
@@ -137,18 +138,25 @@ class AShareStrategy(bt.Strategy):
     - 如果没有 10 只满足条件，有几只买几只；0 只则空仓。
     - 次日分数 <= threshold 或跌出前 top_k，则卖出。
     - [A股优化] 严格遵守 100 股（1手）的整数倍委托限制。
+    - [A股优化] 引入 volume_limit_pct 控制市场冲击，单笔成交不超过当日成交量的 10%。
     - [A股优化] T+1 机制：Backtrader 日线级别由于是次日开盘执行，买入(T+1开盘)后最早卖出信号在(T+1收盘)生成，执行在(T+2开盘)，天然满足A股T+1限制，因此去除了多余的持仓天数判断以防变相导致T+2。
+    - [风险解耦] 移除了高频日频得分恶化强制平仓（Score Drop Whipsaw），风控纯粹基于硬止损。
     """
     params = dict(
         top_k=10,               # 最多持仓数量
-        score_threshold=0.9,    # 选股得分阈值
+        score_threshold=0.7,    # 选股得分阈值
         buy_pct=0.95,           # 最大资金使用率
+        rebalance_days=5,       # [A股优化] 换仓周期，默认5个交易日(一周)
+        daily_sell_enabled=True, # 开启非换仓日每天盘中风控检查
+        stop_loss_pct=-0.08,     # 盘中硬止损: 入场后跌幅超过 8%
+        volume_limit_pct=0.10,  # [Virtu 改进] 单笔订单不能超过当日成交量的10%，防止吃不掉流动性
         log_enabled=True,
     )
 
     def __init__(self):
         self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']
         self.all_orders = []
+        self.days_since_rebalance = 0  # 记录距离上次换仓的天数
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
@@ -189,6 +197,29 @@ class AShareStrategy(bt.Strategy):
             self.log(f"订单异常 | {order.data._name} | 状态: {status_name}")
 
     def next(self):
+        self.days_since_rebalance += 1
+        is_rebalance_day = (self.days_since_rebalance >= self.p.rebalance_days)
+
+        # [Two Sigma 风险管理] 每日盘中评估卖出条件 (Stop-loss & Score Drop)
+        if self.p.daily_sell_enabled:
+            for d in self.instruments:
+                pos = self.getposition(d)
+                if pos.size > 0:
+                    ret_since_entry = (d.close[0] - pos.price) / pos.price if pos.price > 0 else 0
+                    
+                    # 触发硬止损（不在换仓日也强制平仓）
+                    # 【优化】去除了高频得分恶化检查，隔离价格风控与信号预测
+                    if not is_rebalance_day:
+                        if ret_since_entry < self.p.stop_loss_pct:
+                            self.log(f"[Two Sigma 风控] 触发非换仓日强制卖出: {d._name} (收益: {ret_since_entry:.2%})")
+                            self.close(d)
+        
+        # 如果还没到换仓日，则不进行选股和调仓动作
+        if not is_rebalance_day:
+            return
+            
+        self.days_since_rebalance = 0
+        
         # 1. 筛选得分 > threshold 的股票
         valid_scores = []
         for d in self.instruments:
@@ -218,9 +249,26 @@ class AShareStrategy(bt.Strategy):
                 pos = self.getposition(d)
                 # 仅在无持仓时买入；对于已持仓的股票，避免微调引发的零碎交易手续费
                 if pos.size == 0:
-                    # [A股优化] 计算目标买入股数，强制向下取整至 100 的倍数 (一手)
+                    # [Virtu 改进] 检查成交量容量
+                    # 预估目标持仓所需资金
                     target_value = self.broker.getvalue() * target_weight
-                    target_shares = int((target_value / d.close[0]) // 100 * 100)
+                    
+                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)
+                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0
+                    max_allowed_shares = available_volume * self.p.volume_limit_pct
+                    max_allowed_value = max_allowed_shares * d.close[0]
+                    
+                    if target_value > max_allowed_value:
+                        self.log(f"  [容量受限] {d._name} 目标买入金额 {target_value:.2f} 超过容量上限 {max_allowed_value:.2f}")
+                        # 降级：只买入最大允许量
+                        adjusted_target_weight = max_allowed_value / self.broker.getvalue()
+                        current_target_weight = adjusted_target_weight
+                    else:
+                        current_target_weight = target_weight
+
+                    # [A股优化] 计算目标买入股数，强制向下取整至 100 的倍数 (一手)
+                    final_target_value = self.broker.getvalue() * current_target_weight
+                    target_shares = int((final_target_value / d.close[0]) // 100 * 100)
                     if target_shares >= 100:
                         self.order_target_size(d, target=target_shares)
                     else:
@@ -240,7 +288,8 @@ class EnhancedQlibStrategy(bt.Strategy):
     以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。
     """
     params = dict(
-        top_k=5,             # 持仓数量
+        top_k=10,            # 持仓数量
+        score_threshold=0.7, # [新增] 选股得分阈值
         rebalance_days=5,    # 调仓周期（天）
         buy_pct=0.95,        # 最大资金使用率
         log_enabled=True,
@@ -251,6 +300,8 @@ class EnhancedQlibStrategy(bt.Strategy):
         stop_loss_pct=0.05,         # 固定止损比例 (5%)，仅在 stop_type='FIXED' 时有效
         atr_period=14,              # ATR 周期
         atr_multiplier=2.0,         # ATR 止损倍数
+        
+        score_drop_threshold=0.3,   # [新增小市值策略逻辑] 分数恶化平仓: 模型得分跌破 0.3
         
         trailing_stop=True,         # 是否启用移动止盈
         trailing_start_pct=0.10,    # 盈利超过 10% 启动移动止盈
@@ -374,6 +425,17 @@ class EnhancedQlibStrategy(bt.Strategy):
                 if high_price > state['max_high']:
                     state['max_high'] = high_price
                     
+                # [Two Sigma & 小市值策略风控] 每天检查得分是否恶化
+                # 【优化】移除日频得分恶化平仓，避免 A 股高波动带来的双面打脸 (Score Drop Whipsaw)
+                # score = d.score[0] if not np.isnan(d.score[0]) else 0.0
+                # if score < self.p.score_drop_threshold:
+                #     if state.get('stop_order'):
+                #         self.cancel(state['stop_order'])
+                #     self.close(d)
+                #     self.log(f"!!! [小市值风控] 触发非换仓日强制卖出(得分恶化) !!! {d._name} (当前得分: {score:.2f} < {self.p.score_drop_threshold})")
+                #     del self.trade_states[d]
+                #     continue
+                    
                 # 真实的止损现在由 Broker 底层撮合引擎（盘中 Low 刺穿 Stop 价格）自动执行。
                 # 所以我们不再需要在 next() 的收盘后手动触发止损。
                 # 但我们需要更新移动止盈/追踪止损的订单。
@@ -414,10 +476,10 @@ class EnhancedQlibStrategy(bt.Strategy):
                                 self.log(f"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损单挂单价: {state['stop_loss']:.4f}")
 
     def rebalance(self):
-        # 获取当前所有有效股票的 score
+        # 获取当前所有有效股票的 score，并根据 score_threshold 进行初步过滤
         scores = []
         for d in self.instruments:
-            if len(d) > 0 and not np.isnan(d.score[0]):
+            if len(d) > 0 and not np.isnan(d.score[0]) and d.score[0] > self.p.score_threshold:
                 scores.append((d._name, d, d.score[0]))
         
         # 按 score 降序排列
@@ -437,7 +499,8 @@ class EnhancedQlibStrategy(bt.Strategy):
         
         # 对 Top K 分配权重
         if top_k_feeds:
-            target_weight = self.p.buy_pct / len(top_k_feeds)
+            # 严格控制每只股票的最大权重，避免符合条件的标的不足时单只股票满仓导致风险失控
+            target_weight = self.p.buy_pct / self.p.top_k
             for d in top_k_feeds:
                 # [Virtu 改进] 检查成交量容量
                 # 预估目标持仓所需资金

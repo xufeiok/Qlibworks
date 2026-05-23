@@ -19,33 +19,9 @@ from qlworks.models import prepare_feature_selection_data, select_features
 # ==============================================================================
 # [全局配置区] 将本文件需要用到的参数提取到此处，方便您对照学习修改
 # ==============================================================================
-def load_csi500_instruments():
-    """读取中证500股票池"""
-    file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
-        df = df[df['start_date'] <= '2020-01-02'].drop_duplicates(subset=['instrument'])
-        insts = []
-        for code in df['instrument']:
-            code = str(code).strip()
-            if '.' in code:
-                insts.append(code)
-                continue
-            code = code.zfill(6)
-            if code.startswith(('6', '9')):
-                insts.append(f"{code}.SH")
-            elif code.startswith(('0', '3')):
-                insts.append(f"{code}.SZ")
-            elif code.startswith(('4', '8')):
-                insts.append(f"{code}.BJ")
-            else:
-                insts.append(code)
-        return insts
-    return ["000001.SZ", "000002.SZ", "600000.SH"]
-
 CONFIG = {
     # 1. 股票池与时间范围
-    "instruments": load_csi500_instruments(),
+    "instruments": "csi500",  # [Renaissance 改进] 使用 Qlib 动态股票池名称以杜绝前视和幸存者偏差
     "start_time": "2023-01-01",
     "end_time": "2025-12-31",
     
@@ -62,7 +38,7 @@ CONFIG = {
         "method": "embedded",   # filter / wrapper / embedded
         "algo": "random_forest", # 换回更强的非线性随机森林过滤
         "threshold": 0.0001,    
-        "label_col": "LABEL0",  
+        "label_col": "LABEL_5D",  
         "k": 70,                # 强制最多保留 70 个因子
         "max_features": 70,
         "remove_collinearity": True,    # [AQR 改进] 是否在模型特征选择前进行共线性过滤
@@ -155,6 +131,11 @@ def screen_and_rank_factors():
         "risk_factors"
     ]
     bundle = build_factor_library_bundle(factor_files)
+    
+    # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，防范日内跳空带来的前视偏差错位
+    bundle.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
+    bundle.label_names = ["LABEL_5D"]
+    
     print(f">>> 成功从 5 个 YAML 文件中解析出 {len(bundle.fields)} 个有效因子的计算公式。")
     
     # 1.2 额外拉取基础行情数据（OHLCV），不仅为了后续的回测，也是为了方便我们人眼检查
@@ -207,7 +188,7 @@ def screen_and_rank_factors():
     raw_data.columns = bundle_names_with_price + list(bundle.label_names)
     print(f">>> 数据拉取完毕！我们得到了一个超级大表格：")
     print(f"    - 总行数 (不同日期 * 不同股票): {raw_data.shape[0]} 行")
-    print(f"    - 总列数 (因子数量 + 行情 + LABEL0): {raw_data.shape[1]} 列")
+    print(f"    - 总列数 (因子数量 + 行情 + {bundle.label_names[0]}): {raw_data.shape[1]} 列")
     print(f"    - 【数据抽样展示】表格的右上角一瞥:")
     # iloc[:3, -5:] 意思是取前3行，以及最后5列展示，不让屏幕刷屏
     print(raw_data.iloc[:3, -5:])

@@ -13,16 +13,8 @@ from qlworks.features.dataset import create_custom_dataset
 from qlworks.models import prepare_feature_selection_data, select_features
 import qlib
 
-def load_csi500_instruments():
-    file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
-        insts = df['instrument'].dropna().unique().tolist()
-        return insts
-    return ["000001.SZ", "000002.SZ", "600000.SH"]
-
 CONFIG = {
-    "instruments": load_csi500_instruments(),
+    "instruments": "csi500",  # [Renaissance 改进] 使用 Qlib 动态股票池名称以杜绝前视和幸存者偏差
     "start_time": "2023-01-01",
     "end_time": "2025-12-31",
     "segments": {
@@ -77,6 +69,11 @@ def screen_factors_for_linear_model():
     print("\n[1] 数据拉取 (使用 Qlib 原生 DatasetH)...")
     factor_files = ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"]
     bundle = build_factor_library_bundle(factor_files)
+    
+    # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，防范日内跳空带来的前视偏差错位
+    bundle.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
+    bundle.label_names = ["LABEL_5D"]
+    CONFIG["feature_selection"]["label_col"] = "LABEL_5D"
     
     print("\n[2] 构建 DatasetH (线性模型专属处理)...")
     # 【关键修改】：线性模型必须同时中性化特征和标签，否则市值会污染所有因子

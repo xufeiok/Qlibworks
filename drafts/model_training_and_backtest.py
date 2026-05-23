@@ -15,16 +15,8 @@ import qlib
 # ==============================================================================
 # [全局配置区]
 # ==============================================================================
-def load_csi500_instruments():
-    file_path = r"e:\Quant\Qlibworks\qlib_data\instruments\csi500.txt"
-    if os.path.exists(file_path):
-        df = pd.read_csv(file_path, sep='\t', header=None, names=['instrument', 'start_date', 'end_date'], dtype={'instrument': str})
-        insts = df['instrument'].dropna().unique().tolist()
-        return insts
-    return ["000001.SZ", "000002.SZ", "600000.SH"]
-
 CONFIG = {
-    "instruments": load_csi500_instruments(),
+    "instruments": "csi500",  # [Renaissance 改进] 使用 Qlib 动态股票池名称以杜绝前视和幸存者偏差
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
@@ -117,8 +109,9 @@ def run_ml_pipeline():
     bundle = FeatureBundle(
         fields=selected_factor_exprs,
         names=selected_factor_names,
-        label_fields=["Ref($close, -2)/Ref($close, -1) - 1"],
-        label_names=["LABEL0"]
+        # [Citadel Alpha Lab 改进] 标签改为未来 5 天收益，匹配每周调仓
+        label_fields=["Ref($close, -5)/$close - 1"],
+        label_names=["LABEL_5D"]
     )
     
     all_predictions = []

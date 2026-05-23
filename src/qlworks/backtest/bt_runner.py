@@ -25,21 +25,23 @@ except ImportError:
 from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy, AShareStrategy, AShareCommission
 
 def run_qlib_backtrader(
-    pred_df: pd.DataFrame, 
-    price_df_dict: dict, 
+    pred_df: pd.DataFrame,
+    price_df_dict: dict,
     benchmark_df: pd.DataFrame = None,
-    strategy_class=AShareStrategy, 
+    strategy_class=AShareStrategy,
     strategy_params=None,
     initial_cash=100000.0,
     commission=0.001,
     set_slippage_perc=0.0,
     server_url='http://localhost:5888/api/backtest/upload',
     timeframe_label='1d',
-    output_dir='./bt_output'
+    output_dir='./bt_output',
+    start_date=None,
+    end_date=None
 ):
     """
     运行基于 Qlib 预测结果的 Backtrader 回测，并支持上传至 SuperPlotView 前端。
-    
+
     参数:
         pred_df: Qlib 预测结果，必须包含 MultiIndex ['datetime', 'instrument'] 和一列名为 'score'
         price_df_dict: 字典，键为股票代码(instrument)，值为包含 OHLCV 数据的 DataFrame
@@ -51,7 +53,17 @@ def run_qlib_backtrader(
         server_url: SuperPlot 前端上传接口地址
         timeframe_label: 时间框标签
         output_dir: 结果及 SuperPlot JSON 本地保存目录
+        start_date: 回测起始日期，若不指定则从 pred_df 推断
+        end_date: 回测结束日期，若不指定则从 pred_df 推断
     """
+
+    # 确定回测日期范围
+    if start_date is None:
+        start_date = pred_df.index.get_level_values('datetime').min()
+    if end_date is None:
+        end_date = pred_df.index.get_level_values('datetime').max()
+    full_calendar = pd.bdate_range(start_date, end_date)
+    print(f"回测日期范围: {start_date.date()} ~ {end_date.date()} ({len(full_calendar)} 个交易日)")
     
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
@@ -87,23 +99,21 @@ def run_qlib_backtrader(
     added_count = 0
     for inst, price_df in price_df_dict.items():
         df = price_df.copy()
-        
+
         # 确保 datetime 为索引
         if 'datetime' in df.columns:
             df = df.set_index('datetime')
         elif df.index.name != 'datetime':
-            # 如果没有 datetime 列，且索引不是 datetime，尝试转换
             try:
                 df.index = pd.to_datetime(df.index)
                 df.index.name = 'datetime'
             except:
                 pass
-        
+
         # 提取当前股票的预测分数
         if 'instrument' in pred_df.index.names:
             if inst in pred_df.index.get_level_values('instrument'):
                 inst_pred = pred_df.xs(inst, level='instrument')
-                # 如果预测结果只有一列且没有命名为 score，强制重命名
                 if 'score' not in inst_pred.columns and len(inst_pred.columns) == 1:
                     inst_pred.columns = ['score']
                 df = df.join(inst_pred['score'], how='left')
@@ -111,8 +121,24 @@ def run_qlib_backtrader(
                 df['score'] = np.nan
         else:
             df['score'] = np.nan
-            
-        # 丢弃没有价格数据的行
+
+        # 移除重复索引（Qlib 可能存在重复日期）
+        df = df[~df.index.duplicated(keep='first')]
+
+        # 对齐到统一日期范围，避免新股上市日期偏斜整个回测起点
+        df = df.reindex(full_calendar)
+
+        # 对未上市前的日期，用首日价格回填 OHLC，成交量设为 0
+        valid_mask = df['close'].notna()
+        if valid_mask.any():
+            first_valid_idx = valid_mask.idxmax()
+            df.loc[:first_valid_idx, ['open', 'high', 'low', 'close']] = \
+                df.loc[first_valid_idx, ['open', 'high', 'low', 'close']].values
+            df['volume'] = df['volume'].fillna(0)
+        else:
+            df['volume'] = df['volume'].fillna(0)
+
+        # 丢弃没有价格数据的行（防御性检查，理论上已被 reindex 覆盖）
         df = df.dropna(subset=['close'])
         
         if len(df) > 0:
