@@ -30,10 +30,17 @@ CONFIG = {
         "method": "embedded",   
         "algo": "lightgbm",     # 改为 lightgbm (或者 xgboost) 以使用 GPU 加速
         "threshold": 0.0,    
-        "label_col": "LABEL0",  
         "max_features": 50,            
         "remove_collinearity": False,  # 【关键修改】：对树模型关闭共线性剔除
-    }
+    },
+    
+    # --- 模型与标签配置 ---
+    "model_type": "tree", # 机器学习模型类型 (tree / linear 等)
+    "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
+    "label_names": ["LABEL_5D"], # 预测标签名称
+    "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"], # 待加载的因子文件
+    "neutralize_features": False, # 树模型保留特征的原始非线性分布
+    "neutralize_labels": True, # 树模型只中性化标签
 }
 
 def load_factor_metadata(factor_files):
@@ -65,13 +72,12 @@ def screen_factors_for_tree_model():
     accessor.ensure_init()
     
     print("\n[1] 数据拉取 (使用 Qlib 原生 DatasetH)...")
-    factor_files = ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"]
+    factor_files = CONFIG["factor_files"]
     bundle = build_factor_library_bundle(factor_files)
     
     # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，防范日内跳空带来的前视偏差错位
-    bundle.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
-    bundle.label_names = ["LABEL_5D"]
-    CONFIG["feature_selection"]["label_col"] = "LABEL_5D"
+    bundle.label_fields = CONFIG["label_fields"]
+    bundle.label_names = CONFIG["label_names"]
     
     print("\n[2] 构建 DatasetH (树模型专属处理)...")
     _, dataset = create_custom_dataset(
@@ -82,16 +88,16 @@ def screen_factors_for_tree_model():
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
         segments=CONFIG["segments"],
-        model_type="tree",
-        neutralize_labels=True,      # 树模型只中性化标签
-        neutralize_features=False    # 树模型保留特征的原始非线性分布
+        model_type=CONFIG["model_type"],
+        neutralize_labels=CONFIG["neutralize_labels"],      
+        neutralize_features=CONFIG["neutralize_features"]    
     )
     
     print("\n[3] 训练树模型 (GPU加速) 提取特征重要性 (Feature Importance)...")
     fs_conf = CONFIG["feature_selection"]
     train_frame = dataset.prepare("train")
     
-    x_train, y_train, _ = prepare_feature_selection_data(train_frame, label_col=fs_conf["label_col"])
+    x_train, y_train, _ = prepare_feature_selection_data(train_frame, label_col=CONFIG["label_names"][0])
     
     # [Point72 级数据对齐]: 树模型虽然能处理 X 中的 NaN，但不能用带有 NaN 的 y_train 去训练
     valid_idx = y_train.dropna().index

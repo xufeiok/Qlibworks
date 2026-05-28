@@ -87,6 +87,7 @@ from qlworks.data import DataFetchSpec, QlibDataAccessor, clean_ohlcv_data, gene
 from qlworks.features.builder import build_factor_library_bundle
 from qlworks.features.dataset import create_custom_dataset
 from qlworks.models import (
+    cached_select_features,
     apply_feature_selection,
     evaluate_prediction_frame,
     prepare_feature_selection_data,
@@ -205,7 +206,7 @@ def run_quant_research_workflow():
             "collinearity_threshold": fs_conf.get("collinearity_threshold", 0.7)
         }
         
-        fs_result = select_features(
+        fs_result = cached_select_features(
             x_train, y_train, 
             method=fs_conf["method"], 
             **fs_kwargs

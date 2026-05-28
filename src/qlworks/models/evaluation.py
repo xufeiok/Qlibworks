@@ -66,7 +66,7 @@ def evaluate_prediction_frame(pred_frame: pd.DataFrame) -> Dict[str, object]:
     if missing:
         raise ValueError(f"预测评估缺少必要列: {sorted(missing)}")
 
-    frame = pred_frame[["pred", "label"]].dropna().copy()
+    frame = pred_frame[["pred", "label"]].copy()
     pred = frame["pred"].to_numpy(dtype=float)
     label = frame["label"].to_numpy(dtype=float)
     

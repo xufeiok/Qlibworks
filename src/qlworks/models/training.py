@@ -168,6 +168,72 @@ def predict_ensemble_models(models: list, dataset, segment: str = "test") -> pd.
     return pd.DataFrame(ensemble_pred, columns=["score"])
 
 
+def train_ridge_model(dataset, params: Dict[str, object] = None):
+    """
+    功能概述：
+    - 使用带时间序列交叉验证 (TimeSeriesSplit) 的 Ridge 回归训练，并加入样本时间衰减权重。
+    """
+    from sklearn.linear_model import RidgeCV
+    from sklearn.model_selection import TimeSeriesSplit
+    import numpy as np
+
+    train_frame = dataset.prepare("train")
+    
+    # 动态识别标签列名 (支持 LABEL0, LABEL_5D 等)
+    label_col = next((col for col in train_frame.columns if "LABEL" in str(col)), None)
+    if label_col is None:
+        raise ValueError("训练数据缺少 LABEL 标签列。")
+
+    x_train = train_frame.drop(columns=[label_col]).fillna(0.0)
+    y_train = train_frame[label_col].fillna(train_frame[label_col].median())
+
+    # [Citadel Alpha Lab 改进] 指数时间衰减权重 (Exponential Decay Weighting)
+    # 距离当前越近的样本权重越大。半衰期设定为 252 个交易日 (约1年)。
+    dates = x_train.index.get_level_values('datetime')
+    unique_dates = np.sort(dates.unique())
+    # 映射每一天到距离最后一天的天数差
+    # 修复 numpy.ndarray 没有 days 属性的问题：先转换为 pd.Series 计算 diff，再转换为天数
+    dates_series = pd.Series(unique_dates)
+    days_diff = (dates_series.iloc[-1] - dates_series).dt.days.values
+    # 计算每一天的权重: w = 0.5 ^ (days / half_life)
+    half_life = 252.0
+    date_weights = np.power(0.5, days_diff / half_life)
+    weight_map = dict(zip(unique_dates, date_weights))
+    sample_weights = dates.map(weight_map).values
+
+    # [Point72 改进] 使用 TimeSeriesSplit 进行时间序列交叉验证
+    tscv = TimeSeriesSplit(n_splits=5)
+
+    base_params = {
+        "alphas": np.logspace(-4, 4, 20),
+        "cv": tscv,
+    }
+    if params:
+        base_params.update(params)
+
+    model = RidgeCV(**base_params)
+    model.fit(x_train.values, y_train.values, sample_weight=sample_weights)
+    
+    print(f"    - Ridge 最佳正则化系数 (Alpha): {model.alpha_:.4f}")
+    
+    # 包装为一个符合 Qlib model 接口的类
+    class RidgeWrapper:
+        def __init__(self, ridge_model, feature_cols, label_col):
+            self.model = ridge_model
+            self.feature_cols = feature_cols
+            self.label_col = label_col
+            
+        def predict(self, dataset, segment="test"):
+            test_frame = dataset.prepare(segment)
+            x_test = test_frame.drop(columns=[self.label_col], errors="ignore").fillna(0.0)
+            # 保证特征顺序一致
+            x_test = x_test.reindex(columns=self.feature_cols, fill_value=0.0)
+            preds = self.model.predict(x_test.values)
+            return pd.Series(preds, index=x_test.index, name="score")
+
+    return RidgeWrapper(model, x_train.columns.tolist(), label_col)
+
+
 def train_linear_baseline(train_frame: pd.DataFrame) -> Tuple[LinearRegression, pd.DataFrame, pd.Series]:
     """
     功能概述：

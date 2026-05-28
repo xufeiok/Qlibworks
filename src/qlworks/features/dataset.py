@@ -182,6 +182,7 @@ def create_custom_dataset(
     infer_processors: Optional[list] = None,
     learn_processors: Optional[list] = None,
     segments: Optional[Dict[str, tuple]] = None,
+    symmetric_orthogonalization: bool = False,
 ):
     """
     功能概述：
@@ -263,7 +264,7 @@ def create_custom_dataset(
             feat_neutralize = {
                 "class": "CSNeutralize",
                 "module_path": "qlworks.processors.neutralize",
-                "kwargs": {"fields_group": "feature"}
+                "kwargs": {"fields_group": "feature", "industry_field": "sw_l1"}
             }
             base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
             base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
@@ -273,6 +274,15 @@ def create_custom_dataset(
             # 3. 缺失值填充 (非中性化流派)
             base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
             base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
+            
+        if symmetric_orthogonalization and model_type != "tree":
+            feat_ortho = {
+                "class": "CSSymmetricOrthogonalize",
+                "module_path": "qlworks.processors.orthogonalize",
+                "kwargs": {"fields_group": "feature"}
+            }
+            base_infer.append(feat_ortho)
+            base_learn.append(feat_ortho)
         
         infer_processors = base_infer
         learn_processors = base_learn
@@ -353,3 +363,20 @@ def create_alpha360_dataset(
     )
     dataset = create_dataset_from_handler(handler, segments)
     return handler, dataset
+ 
+class DebuggablePipeline: 
+    def __init__(self, processors, name='pipeline'): 
+        self.processors = processors 
+        self.name = name 
+    def __call__(self, df): 
+        import sys 
+        for i, proc in enumerate(self.processors): 
+            before = df.shape 
+            try: 
+                df = proc(df) 
+            except Exception as e: 
+                raise RuntimeError(f'[{self.name}] step {i} failed: {e}') 
+            after = df.shape 
+            if before[1] != after[1]: 
+                print(f'[DBG] [{self.name}] step {i}: cols {before[1]} to ', file=sys.stderr) 
+        return df 

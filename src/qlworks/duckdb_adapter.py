@@ -77,42 +77,55 @@ def _table_columns(con: duckdb.DuckDBPyConnection, schema: str, table: str) -> L
     return [str(x) for x in df["name"].tolist()]
 
 
+_ch_client = None
+_duckdb_conn = None
+
+
+def _get_ch_client():
+    global _ch_client
+    if _ch_client is None:
+        import clickhouse_connect
+        from .config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
+        _ch_client = clickhouse_connect.get_client(
+            host=CH_HOST, port=CH_PORT, user=CH_USER, password=CH_PASSWORD, database=CH_DATABASE)
+    return _ch_client
+
+def _reset_ch_client():
+    global _ch_client
+    if _ch_client is not None:
+        try: _ch_client.close()
+        except: pass
+
+def _get_duckdb_conn():
+    global _duckdb_conn
+    if _duckdb_conn is None:
+        import duckdb; _duckdb_conn = duckdb.connect()
+    return _duckdb_conn
+
+def _close_connections():
+    global _ch_client, _duckdb_conn
+    if _ch_client: _ch_client.close(); _ch_client = None
+    if _duckdb_conn: _duckdb_conn.close(); _duckdb_conn = None
+
 @dataclass
 class DuckDBOHLCV:
-    # 飞牛OS ClickHouse 连接配置
-    ch_host: str = "192.168.10.102"
-    ch_port: int = 18123
-    ch_user: str = "xufei"
-    ch_password: str = "xf1987216"
-    ch_database: str = "quant_db"
-    
-    db_path: Path = DUCKDB_PATH  # 保留兼容性
+    db_path: Path = DUCKDB_PATH
     table: Optional[Tuple[str, str]] = None
     column_map: Optional[Dict[str, str]] = None
 
-    def _connect_clickhouse(self):
-        import clickhouse_connect
-        return clickhouse_connect.get_client(
-            host=self.ch_host,
-            port=self.ch_port,
-            user=self.ch_user,
-            password=self.ch_password,
-            database=self.ch_database
-        )
-
     def _auto_detect(self) -> Tuple[Tuple[str, str], Dict[str, str]]:
-        # 在 ClickHouse 中自动检测 OHLCV 表
-        ch_client = self._connect_clickhouse()
-        tables_res = ch_client.query("SHOW TABLES").result_rows
-        tables = [row[0] for row in tables_res]
-        
-        for tbl in tables:
-            cols_res = ch_client.query(f"DESCRIBE {tbl}").result_rows
-            cols = [row[0] for row in cols_res]
-            m = _detect_ohlcv_columns(cols)
-            if m:
-                return (self.ch_database, tbl), m
-        raise RuntimeError("No OHLCV-like table detected in ClickHouse")
+            # 在 ClickHouse 中自动检测 OHLCV 表
+            ch_client = self._connect_clickhouse()
+            tables_res = ch_client.query("SHOW TABLES").result_rows
+            tables = [row[0] for row in tables_res]
+            
+            for tbl in tables:
+                cols_res = ch_client.query(f"DESCRIBE {tbl}").result_rows
+                cols = [row[0] for row in cols_res]
+                m = _detect_ohlcv_columns(cols)
+                if m:
+                    return (CH_DATABASE, tbl), m
+            raise RuntimeError("No OHLCV-like table detected in ClickHouse")
 
     def load(self) -> pd.DataFrame:
         ch_client = self._connect_clickhouse()
@@ -132,13 +145,13 @@ class DuckDBOHLCV:
         arrow_table = ch_client.query_arrow(query)
         
         # 2. 直接注入 DuckDB（零拷贝、瞬间完成）
-        con = duckdb.connect()
+        con = _get_duckdb_conn()
         con.register("kline_data", arrow_table)
         
         # 3. 从 DuckDB 中查询并返回 DataFrame
         q = f"SELECT * FROM kline_data"
         df = con.execute(q).df()
-        con.close()
+        # con.close()  # connection managed by pool
 
         ren = {cmap[k]: k for k in cmap}
         df = df.rename(columns=ren)

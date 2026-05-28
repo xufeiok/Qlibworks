@@ -11,3 +11,25 @@ artifacts/
 
 catboost_info/
 mlruns/
+.env
+.fs_cache/
+_fs_cache/
+_opt.py
+_bootstrap.py
+_opt_run.py
+_gen_main.py
+_gen_changes.py
+_add_debug.py
+_test*.py
+_*.py
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# 大文件（可重新生成）
+scripts/model_training/score_*.csv
+drafts/bt_results_*/
+drafts/*.json
+bt_output/
+

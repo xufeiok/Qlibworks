@@ -32,10 +32,17 @@ CONFIG = {
         "method": "filter",   
         "algo": "f_regression", 
         "k": 50,               
-        "label_col": "LABEL0",  
         "remove_collinearity": True,   # 【关键修改】：对线性模型开启严格的共线性过滤
         "collinearity_threshold": 0.7 
-    }
+    },
+    
+    # --- 模型与标签配置 ---
+    "model_type": "linear", # 机器学习模型类型 (tree / linear 等)
+    "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
+    "label_names": ["LABEL_5D"], # 预测标签名称
+    "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"], # 待加载的因子文件
+    "neutralize_features": True, # 线性模型必须开启特征中性化
+    "neutralize_labels": True, # 线性模型必须同时中性化标签
 }
 
 def load_factor_metadata(factor_files):
@@ -67,13 +74,12 @@ def screen_factors_for_linear_model():
     accessor.ensure_init()
     
     print("\n[1] 数据拉取 (使用 Qlib 原生 DatasetH)...")
-    factor_files = ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"]
+    factor_files = CONFIG["factor_files"]
     bundle = build_factor_library_bundle(factor_files)
     
     # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，防范日内跳空带来的前视偏差错位
-    bundle.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
-    bundle.label_names = ["LABEL_5D"]
-    CONFIG["feature_selection"]["label_col"] = "LABEL_5D"
+    bundle.label_fields = CONFIG["label_fields"]
+    bundle.label_names = CONFIG["label_names"]
     
     print("\n[2] 构建 DatasetH (线性模型专属处理)...")
     # 【关键修改】：线性模型必须同时中性化特征和标签，否则市值会污染所有因子
@@ -88,16 +94,16 @@ def screen_factors_for_linear_model():
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
         segments=CONFIG["segments"],
-        model_type="linear",
-        neutralize_labels=True,     
-        neutralize_features=True    # <--- 【恢复】：遵循量化原则，线性模型必须开启特征中性化
+        model_type=CONFIG["model_type"],
+        neutralize_labels=CONFIG["neutralize_labels"],     
+        neutralize_features=CONFIG["neutralize_features"]    # <--- 【恢复】：遵循量化原则，线性模型必须开启特征中性化
     )
     
     print("\n[3] 线性相关性与共线性初步过滤...")
     fs_conf = CONFIG["feature_selection"]
     train_frame = dataset.prepare("train")
     
-    x_train, y_train, _ = prepare_feature_selection_data(train_frame, label_col=fs_conf["label_col"])
+    x_train, y_train, _ = prepare_feature_selection_data(train_frame, label_col=CONFIG["label_names"][0])
     
     # [AQR 级数据对齐]: 绝不能用 pd.concat().dropna() 暴力删除特征空值行！
     # 1. 标签 y 不能有 NaN (否则 sklearn 会报错)，必须剔除
@@ -130,7 +136,7 @@ def screen_factors_for_linear_model():
     print("\n[5] 深度量化评价 (计算 IC 与 ICIR)...")
     ic_dict, icir_dict = {}, {}
     for feature in selected_features:
-        daily_ic = train_frame.groupby('datetime').apply(lambda x: x[feature].corr(x[fs_conf["label_col"]], method='spearman')).dropna()
+        daily_ic = train_frame.groupby('datetime').apply(lambda x: x[feature].corr(x[CONFIG["label_names"][0]], method='spearman')).dropna()
         ic_mean = daily_ic.mean()
         ic_std = daily_ic.std()
         ic_dict[feature] = ic_mean

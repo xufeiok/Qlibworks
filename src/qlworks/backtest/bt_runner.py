@@ -69,7 +69,8 @@ def run_qlib_backtrader(
     cerebro.broker.setcash(initial_cash)
     
     # [Virtu 改进] 注入 A 股真实手续费模型（区分买卖、印花税）
-    comminfo = AShareCommission(stamp_duty=0.001, commission=0.0003)
+    # 将用户传入的 commission 参数传递给 AShareCommission
+    comminfo = AShareCommission(stamp_duty=0.001, commission=commission)
     cerebro.broker.addcommissioninfo(comminfo)
     
     if set_slippage_perc > 0:

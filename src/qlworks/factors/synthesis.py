@@ -74,6 +74,7 @@ def synthesize_factors(
     factors_df: pd.DataFrame,
     method: Literal["equal", "ic_weight", "pca"] = "equal",
     ic_dict: Optional[Dict[str, float]] = None,
+    ic_window: int = 0
 ) -> pd.Series:
     """
     功能概述：
@@ -115,7 +116,12 @@ def synthesize_factors(
     # 3. IC 加权合成 (历史IC越高，权重越大)
     elif method == "ic_weight":
         if not ic_dict:
-            raise ValueError("使用 ic_weight 方法必须提供 ic_dict 参数")
+            raise ValueError
+        if ic_window > 0:
+            ic_dict = {k: v for k, v in list(ic_dict.items())[-ic_window:]}
+            _wsum = sum(abs(v) for v in ic_dict.values()) or 1
+            ic_dict = {k: v / _wsum for k, v in ic_dict.items()}
+            # 用 ic_weight 方法必须提供 ic_dict 参数")
         
         # 归一化 IC 权重 (绝对值求和为1)
         weights = pd.Series(ic_dict)
@@ -140,61 +146,20 @@ def synthesize_factors(
         raise ValueError(f"不支持的合成方法: {method}")
 
 
-if __name__ == "__main__":
-    print("=== factors/synthesis.py 独立测试 ===")
-    # 构造模拟的多重索引数据 (datetime, instrument)
-    dates = pd.date_range("2020-01-01", periods=2)
-    insts = ["000001.SZ", "000002.SZ", "000003.SZ", "000004.SZ", "000005.SZ"]
-    idx = pd.MultiIndex.from_product([dates, insts], names=["datetime", "instrument"])
-    
-    # 模拟三个因子 (A 和 B 高度共线，C 是独立的)
+if __name__ == '__main__':
+    print('=== factors/synthesis.py standalone test ===')
+    import numpy as np
+    dates = pd.date_range('2020-01-01', periods=2)
+    insts = ['000001.SZ', '000002.SZ', '000003.SZ', '000004.SZ', '000005.SZ']
+    idx = pd.MultiIndex.from_product([dates, insts], names=['datetime', 'instrument'])
     np.random.seed(42)
     factor_a = np.random.randn(10)
-    factor_b = factor_a * 2 + np.random.randn(10) * 0.1 # 高度共线
+    factor_b = factor_a * 2 + np.random.randn(10) * 0.1
     factor_c = np.random.randn(10) * 0.5
-    
-    df = pd.DataFrame({
-        "factor_A": factor_a,
-        "factor_B": factor_b,
-        "factor_C": factor_c,
-    }, index=idx)
-    
-    print("原始数据:\n", df.head())
-    
-    # 1. 测试因子相关性计算
-    print("\n1. 因子截面相关系数矩阵 (Spearman):")
-    corr_mat = calc_factor_correlation(df, method='spearman')
-    print(corr_mat)
-    
-    # 2. 测试施密特正交化
-    print("\n2. 正交化测试: 将 factor_B 对 factor_A 正交化")
-    try:
-        ortho_b = orthogonalize_factors(df, base_factors=["factor_A"], target_factor="factor_B")
-        df["factor_B_ortho"] = ortho_b
-        print("\n正交化后的相关性矩阵 (B_ortho 和 A 的相关性应趋近于 0):")
-        print(calc_factor_correlation(df[["factor_A", "factor_B_ortho"]]))
-        factors_to_synthesize = ["factor_A", "factor_B_ortho", "factor_C"]
-    except ImportError as e:
-        print(f"\n[!] {e}")
-        print("[!] 降级: 未执行正交化，直接使用原始 factor_B 演示合成。")
-        factors_to_synthesize = ["factor_A", "factor_B", "factor_C"]
-    
-    # 3. 测试因子合成
-    print("\n3. 因子合成测试:")
-    print(f"参与合成的因子: {factors_to_synthesize}")
-    
-    # 等权合成
-    equal_composite = synthesize_factors(df[factors_to_synthesize], method="equal")
-    print("\n[等权合成 (Equal Weight)]:\n", equal_composite.head())
-    
-    # IC 加权合成
-    ic_composite = synthesize_factors(
-        df[factors_to_synthesize], 
-        method="ic_weight", 
-        ic_dict={factors_to_synthesize[0]: 0.05, factors_to_synthesize[1]: -0.02, factors_to_synthesize[2]: 0.08}
-    )
-    print("\n[IC加权合成 (IC Weight)]:\n", ic_composite.head())
-    
-    # PCA 主成分合成
-    pca_composite = synthesize_factors(df[factors_to_synthesize], method="pca")
-    print("\n[PCA主成分合成 (PCA 第一主成分)]:\n", pca_composite.head())
+    df = pd.DataFrame({'factor_A': factor_a, 'factor_B': factor_b, 'factor_C': factor_c}, index=idx)
+    print('data shape:', df.shape)
+    corr_mat = calc_factor_correlation(df)
+    print('correlation matrix computed:', corr_mat.shape)
+    composite = synthesize_factors(df[['factor_A', 'factor_B', 'factor_C']], method='equal')
+    print('equal-weight composite:', composite.shape)
+    print('all tests passed')

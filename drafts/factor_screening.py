@@ -38,12 +38,19 @@ CONFIG = {
         "method": "embedded",   # filter / wrapper / embedded
         "algo": "random_forest", # 换回更强的非线性随机森林过滤
         "threshold": 0.0001,    
-        "label_col": "LABEL_5D",  
         "k": 70,                # 强制最多保留 70 个因子
         "max_features": 70,
         "remove_collinearity": True,    # [AQR 改进] 是否在模型特征选择前进行共线性过滤
         "collinearity_threshold": 0.7   # 共线性相关系数阈值
-    }
+    },
+    
+    # --- 模型与标签配置 ---
+    "model_type": "tree", # 机器学习模型类型 (tree / linear 等)
+    "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
+    "label_names": ["LABEL_5D"], # 预测标签名称
+    "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"], # 待加载的因子文件
+    "neutralize_features": False, # 树模型不强制特征中性化
+    "neutralize_labels": True, # 树模型推荐开启标签中性化 (防范日内跳空带来的前视偏差错位)
 }
 # ==============================================================================
 
@@ -123,18 +130,12 @@ def screen_and_rank_factors():
     print("\n[1] 解析特征表达式与拉取原始数据...")
     
     # 1.1 我们想要测试的 5 个因子类文件
-    factor_files = [
-        "style_factors", 
-        "quality_factors", 
-        "price_volume_factors", 
-        "sentiment_factors", 
-        "risk_factors"
-    ]
+    factor_files = CONFIG["factor_files"]
     bundle = build_factor_library_bundle(factor_files)
     
     # [Citadel Alpha Lab 改进] 标签改为真实的T+1开盘到T+5收盘的收益率，防范日内跳空带来的前视偏差错位
-    bundle.label_fields = ["Ref($close, -5) / Ref($open, -1) - 1"]
-    bundle.label_names = ["LABEL_5D"]
+    bundle.label_fields = CONFIG["label_fields"]
+    bundle.label_names = CONFIG["label_names"]
     
     print(f">>> 成功从 5 个 YAML 文件中解析出 {len(bundle.fields)} 个有效因子的计算公式。")
     
@@ -220,7 +221,7 @@ def screen_and_rank_factors():
     
     # [Point72 改进] 流派一致性校验 (Paradigm Consistency)
     # 假设后续使用树模型进行因子打分，必须强制对齐预处理与特征选择逻辑
-    pipeline_model_type = "tree"
+    pipeline_model_type = CONFIG["model_type"]
     fs_conf = CONFIG["feature_selection"]
     
     if fs_conf["enable"]:
@@ -239,9 +240,9 @@ def screen_and_rank_factors():
         fit_start_time=CONFIG["segments"]["train"][0],
         fit_end_time=CONFIG["segments"]["train"][1],
         segments=CONFIG["segments"],
-        model_type=pipeline_model_type, # 假设后续使用树模型，自动采用截面分位数化
-        neutralize_labels=True,         # 树模型推荐开启标签中性化
-        neutralize_features=False       # 树模型不强制特征中性化
+        model_type=pipeline_model_type, 
+        neutralize_labels=CONFIG["neutralize_labels"],         
+        neutralize_features=CONFIG["neutralize_features"]       
     )
     print(">>> 数据已经被加工成了适合机器学习的形态 (已完成标签截面中性化)。")
     
@@ -258,7 +259,7 @@ def screen_and_rank_factors():
     x_train, y_train, _ = prepare_feature_selection_data(
         train_frame=train_frame,
         test_frame=test_frame,
-        label_col=fs_conf["label_col"]
+        label_col=CONFIG["label_names"][0]
     )
     
     fs_result = select_features(
@@ -298,7 +299,7 @@ def screen_and_rank_factors():
         # ---- 1. 计算 IC ----
         # 每天单独算一次该因子和第二天收益率的相关性
         daily_ic = train_frame.groupby('datetime').apply(
-            lambda x: x[feature].corr(x[fs_conf["label_col"]], method='spearman')
+            lambda x: x[feature].corr(x[CONFIG["label_names"][0]], method='spearman')
         )
         daily_ic = daily_ic.dropna() # 剔除由于某些天数据缺失导致的 NaN
         
@@ -331,7 +332,7 @@ def screen_and_rank_factors():
             try:
                 # 因子值可能存在大量重复值，使用 duplicates='drop'
                 q_labels = pd.qcut(df[feature], 5, labels=False, duplicates='drop')
-                res = df.groupby(q_labels)[fs_conf["label_col"]].mean()
+                res = df.groupby(q_labels)[CONFIG["label_names"][0]].mean()
                 # 如果分层不足2层（比如所有值都一样），直接返回None
                 if len(res) < 2:
                     return None

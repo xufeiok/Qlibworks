@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QlibWorks Quant Studio 设计文档</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;}
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#e6edf3;--text2:#8b949e;--text3:#6e7681;--accent:#58a6ff;--accent2:#3fb950;--accent3:#d29922;--red:#f85149;--purple:#bc8cff;--font:Inter,system-ui,sans-serif;--mono:JetBrains Mono,monospace;}
+html{scroll-behavior:smooth;}
+body{font-family:var(--font);background:var(--bg);color:var(--text);line-height:1.6;}
+.topnav{position:fixed;top:0;left:0;right:0;height:48px;background:rgba(13,17,23,.95);border-bottom:1px solid var(--border);display:flex;align-items:center;padding:0 20px;z-index:100;}
+.topnav .logo{font-weight:700;color:var(--accent);font-size:14px;}
+.topnav .links{display:flex;gap:4px;margin-left:24px;}
+.topnav .links a{color:var(--text2);text-decoration:none;font-size:12px;padding:4px 8px;border-radius:4px;}
+.topnav .links a:hover{color:var(--text);background:var(--bg3);}
+.topnav .badge{margin-left:auto;background:var(--accent2);color:#000;font-size:10px;padding:2px 8px;border-radius:999px;}
+.hero{padding:80px 20px 24px;max-width:960px;margin:0 auto;}
+.hero h1{font-size:30px;font-weight:800;}
+.hero h1 span{background:linear-gradient(135deg,var(--accent),var(--purple));-webkit-background-clip:text;-webkit-text-fill-color:transparent;}
+.hero p{color:var(--text2);font-size:14px;max-width:650px;margin:8px 0 16px;}
+.hero .tags{display:flex;gap:6px;flex-wrap:wrap;}
+.hero .tags span{background:var(--bg3);color:var(--text2);font-size:11px;padding:3px 10px;border-radius:999px;border:1px solid var(--border);}
+.s{max-width:960px;margin:0 auto;padding:24px 20px;}
+.st{font-size:20px;font-weight:700;margin-bottom:4px;}
+.sd{color:var(--text2);font-size:13px;margin-bottom:14px;}
+.dv{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);max-width:960px;margin:0 auto;}
+.arc{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:6px;margin:10px 0;}
+.ai{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;}
+.ai h3{font-size:12px;font-weight:600;}
+.ai p{font-size:10px;color:var(--text2);}
+.ai.f1{border-color:var(--accent);background:rgba(88,166,255,.08);}
+.ai.f2{border-color:#39d2c0;background:rgba(57,210,192,.06);}
+.ai.f3{border-color:var(--accent3);background:rgba(210,153,34,.06);}
+.ai.f4{border-color:var(--purple);background:rgba(188,140,255,.06);}
+.ai.f5{border-color:var(--red);background:rgba(248,81,73,.06);}
+.panel{display:grid;grid-template-columns:200px 1fr;gap:0;border:1px solid var(--border);border-radius:8px;overflow:hidden;margin:12px 0;}
+.side{background:var(--bg2);border-right:1px solid var(--border);padding:10px;}
+.main{background:var(--bg);padding:12px;}
+.wh{font-size:10px;color:var(--text3);text-transform:uppercase;margin-bottom:8px;font-weight:600;}
+.si{font-size:12px;padding:5px 8px;border-radius:4px;color:var(--text2);margin-bottom:2px;}
+.si.act{background:rgba(88,166,255,.12);color:var(--accent);font-weight:500;}
+.sdiv{height:1px;background:var(--border);margin:8px 0;}
+.mh{display:flex;justify-content:space-between;margin-bottom:8px;padding-bottom:6px;border-bottom:1px solid var(--border);}
+.mh h3{font-size:13px;font-weight:600;}
+.btn{font-size:10px;padding:3px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg2);color:var(--text2);display:inline-block;margin:1px;cursor:default;}
+.btn.p{background:var(--accent);color:#fff;border-color:var(--accent);}
+.gc{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;}
+.c{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;}
+.c .l{font-size:9px;color:var(--text3);}
+.c .v{font-size:15px;font-weight:600;}
+.c .v.gr{color:var(--accent2);}
+.c .v.re{color:var(--red);}
+.c .v.yl{color:var(--accent3);}
+.c .s{font-size:9px;color:var(--text2);}
+table{width:100%;border-collapse:collapse;font-size:11px;}
+th{text-align:left;padding:4px 6px;color:var(--text3);font-weight:500;border-bottom:1px solid var(--border);font-size:9px;text-transform:uppercase;}
+td{padding:4px 6px;border-bottom:1px solid rgba(48,54,61,.3);}
+tr:hover td{background:var(--bg3);}
+.tag{font-size:9px;padding:2px 5px;border-radius:3px;}
+.tag.g{background:rgba(63,185,80,.15);color:var(--accent2);}
+.tag.y{background:rgba(210,153,34,.12);color:var(--accent3);}
+.tag.r{background:rgba(248,81,73,.12);color:var(--red);}
+.fg{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:12px;}
+.fc{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;}
+.fc h4{font-size:12px;font-weight:600;margin-bottom:2px;}
+.fc p{font-size:11px;color:var(--text2);}
+.fc .sub{display:flex;flex-wrap:wrap;gap:3px;margin-top:6px;}
+.fc .sub span{font-size:9px;background:var(--bg3);padding:2px 6px;border-radius:3px;color:var(--text3);}
+.routes{display:grid;gap:3px;}
+.r{display:grid;grid-template-columns:150px 1fr 60px;gap:6px;background:var(--bg2);border:1px solid var(--border);border-radius:4px;padding:4px 8px;font-size:10px;}
+.r .p{font-family:var(--mono);color:var(--accent);}
+.r .d{color:var(--text2);}
+.r .m{color:var(--text3);text-align:center;}
+.st3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:10px 0;}
+.pl{background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:16px;}
+.pl h4{font-size:13px;font-weight:600;margin-bottom:4px;}
+.pl p{font-size:11px;color:var(--text2);}
+.tg{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:6px;}
+.t{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;}
+.t .n{font-weight:600;font-size:12px;}
+.t .ds{font-size:10px;color:var(--text2);}
+.t .tl{font-size:9px;color:var(--accent);font-weight:500;}
+.ft{text-align:center;color:var(--text3);font-size:11px;padding:20px;margin-top:24px;}
+.flow{display:flex;align-items:center;gap:6px;overflow-x:auto;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;}
+.fn{background:var(--bg3);border:1px solid var(--border);border-radius:5px;padding:6px 10px;font-size:10px;font-weight:500;white-space:nowrap;}
+.fa{color:var(--text3);}
+.df{display:flex;flex-direction:column;gap:4px;padding:12px;background:var(--bg2);border:1px solid var(--border);border-radius:8px;}
+.dr{display:flex;gap:6px;font-size:11px;}
+.dl{min-width:80px;font-weight:500;font-size:10px;color:var(--accent);}
+.ap{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:12px;}
+.ab{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;font-family:var(--mono);font-size:10px;line-height:1.6;}
+.wb{background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:10px;color:var(--text2);}
+.f2{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:16px;}
+@media(max-width:768px){.panel{grid-template-columns:1fr;}.st3{grid-template-columns:1fr;}}
+</style>
+</head>
+<body>
+<nav class="topnav">
+<div class="logo">QlibWorks</div>
+<div class="links">
+<a href="#arch">架构</a><a href="#data">数据</a><a href="#factor">因子</a>
+<a href="#strategy">策略</a><a href="#bt">回测</a><a href="#market">市场</a>
+<a href="#tech">技术栈</a><a href="#routes">路由</a>
+</div>
+<span class="badge">v0.1 Design</span>
+</nav>
+<div class="hero">
+<h1><span>QlibWorks Quant Studio</span></h1>
+<p>一站式量化研究前端系统，融合 SuperPlotView TradingView 风格可视化与 quantdinger 现代因子管理范式。覆盖数据、因子、策略、回测、市场五大管理域。</p>
+<div class="tags">
+<span>React + Vite + TypeScript</span>
+<span>lightweight-charts</span>
+<span>Shadcn/ui + Tailwind</span>
+<span>FastAPI + WebSocket</span>
+<span>DuckDB + ClickHouse</span>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="arch">
+<h2 class="st">01 系统架构总览</h2>
+<p class="sd">三层架构 + 五大模块。前端 React SPA 通过 REST + WebSocket 与 FastAPI 通信，Python 引擎层对接 Qlib ML Pipeline、DuckDB/ClickHouse 和 Backtrader。</p>
+<div class="arc">
+<div class="ai f1"><h3>Dashboard</h3><p>宏观市场看板</p></div>
+<div class="ai f1"><h3>K线/分时</h3><p>TradingView 图表</p></div>
+<div class="ai f1"><h3>因子浏览器</h3><p>YAML 因子库</p></div>
+<div class="ai f1"><h3>模型管理</h3><p>训练/评估/对比</p></div>
+<div class="ai f1"><h3>回测分析</h3><p>SuperPlot</p></div>
+</div>
+<p style="text-align:center;font-size:10px;color:var(--text3);padding:4px 0;">前端层 (React SPA) | API 层 (FastAPI + WS) | 引擎层 (Qlib/DuckDB/Backtrader)</p>
+<div class="arc">
+<div class="ai f2"><h3>数据层</h3><p>DuckDB/CH</p></div>
+<div class="ai f3"><h3>因子层</h3><p>YAML+Qlib Exp</p></div>
+<div class="ai f4"><h3>模型层</h3><p>LGBM/XGB/CatB</p></div>
+<div class="ai f5"><h3>回测层</h3><p>Backtrader</p></div>
+<div class="ai f2"><h3>市场接口</h3><p>Tushare</p></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="data">
+<h2 class="st">02 数据管理模块</h2>
+<p class="sd">统一管理 DuckDB、ClickHouse、CSV、Qlib bin。提供数据质量仪表盘。</p>
+<div class="panel">
+<div class="side">
+<div class="wh">数据导航</div>
+<div class="si act">数据总览</div><div class="si">数据源管理</div>
+<div class="si">数据导入</div><div class="si">数据清洗</div><div class="si">质量报告</div>
+<div class="sdiv"></div>
+<div style="font-size:10px;color:var(--text3);padding:4px 8px;">数据源状态</div>
+<div class="si" style="font-size:10px;">DuckDB <span style="float:right;color:var(--accent2);">在线</span></div>
+<div class="si" style="font-size:10px;">ClickHouse <span style="float:right;color:var(--accent2);">在线</span></div>
+</div>
+<div class="main">
+<div class="mh"><h3>数据总览</h3><div><span class="btn">导入</span><span class="btn p">刷新</span></div></div>
+<div class="gc">
+<div class="c"><div class="l">股票总数</div><div class="v">5,124</div><div class="s">全A+指数</div></div>
+<div class="c"><div class="l">日K线数</div><div class="v">48.2M</div><div class="s">1990~今</div></div>
+<div class="c"><div class="l">因子总数</div><div class="v yl">1,247</div><div class="s">YAML 因子库</div></div>
+<div class="c"><div class="l">数据质量</div><div class="v gr">97.3%</div><div class="s">今日</div></div>
+</div>
+<div class="wh" style="margin-top:10px;">最近数据更新</div>
+<table><tr><th>表</th><th>记录数</th><th>更新日</th><th>质量</th><th>操作</th></tr>
+<tr><td>daily_kline</td><td>24,168,432</td><td>2026-05-26</td><td><span class="tag g">健康</span></td><td style="color:var(--accent);">查看</td></tr>
+<tr><td>adj_factor</td><td>512,348</td><td>2026-05-25</td><td><span class="tag g">健康</span></td><td style="color:var(--accent);">查看</td></tr>
+<tr><td>financial_data</td><td>8,456,210</td><td>2026-05-24</td><td><span class="tag y">需检查</span></td><td style="color:var(--accent);">查看</td></tr>
+</table></div></div>
+<div class="fg">
+<div class="fc"><h4>多数据源统一</h4><p>DuckDB + ClickHouse + CSV + Qlib bin 统一管理</p><div class="sub"><span>DuckDB 适配器</span><span>CH 连接</span><span>CSV 导入</span></div></div>
+<div class="fc"><h4>数据质量监控</h4><p>缺失值/异常值/前视偏误检测，每日质量评分</p><div class="sub"><span>MAD 去极值</span><span>缺失值填充</span></div></div>
+<div class="fc"><h4>数据更新调度</h4><p>Cron 定时拉取、增量更新、版本管理</p><div class="sub"><span>Cron 调度</span><span>增量更新</span></div></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="factor">
+<h2 class="st">03 因子管理模块</h2>
+<p class="sd">YAML 因子库可视化：浏览、编辑、测试、IC 分析、正交化与合成。</p>
+<div class="panel">
+<div class="side">
+<div class="wh">因子导航</div>
+<div class="si act">因子库浏览</div><div class="si">因子编辑器</div>
+<div class="si">IC 分析</div><div class="si">因子合成</div>
+<div class="sdiv"></div>
+<div style="font-size:10px;color:var(--text3);padding:4px 8px;">策略因子集</div>
+<div class="si" style="font-size:10px;padding-left:12px;">alpha_momentum.yaml</div>
+<div class="si" style="font-size:10px;padding-left:12px;">alpha_value.yaml</div>
+</div>
+<div class="main">
+<div class="mh"><h3>因子浏览器 - alpha_momentum.yaml</h3><div><span class="btn p">保存</span></div></div>
+<table>
+<tr><th>因子名</th><th>表达式</th><th>IC(20d)</th><th>IR</th><th>分组收益</th><th>状态</th></tr>
+<tr><td style="font-weight:500;">MOM_20D</td><td style="font-family:var(--mono);font-size:9px;color:var(--accent);">Ref(close,-20)/close-1</td><td><span class="tag g">0.052</span></td><td>0.38</td><td>多头3.2%</td><td><span class="tag g">启用</span></td></tr>
+<tr><td style="font-weight:500;">RSI_14</td><td style="font-family:var(--mono);font-size:9px;color:var(--accent);">Rsi(close,14)</td><td><span class="tag g">0.041</span></td><td>0.29</td><td>多头2.1%</td><td><span class="tag g">启用</span></td></tr>
+<tr><td style="font-weight:500;">VOL_MA</td><td style="font-family:var(--mono);font-size:9px;color:var(--accent);">volume/Mean(volume,20)</td><td><span class="tag y">0.018</span></td><td>0.12</td><td>多头0.8%</td><td><span class="tag y">待评估</span></td></tr>
+</table></div></div>
+<div class="fg">
+<div class="fc"><h4>YAML 因子库</h4><p>可视化浏览策略配置，语法高亮，表达式验证</p></div>
+<div class="fc"><h4>IC 分析</h4><p>RankIC / ICIR / 分层回测 / 累计 IC 曲线</p></div>
+<div class="fc"><h4>因子合成</h4><p>等权/IC 加权/PCA/正交化，支持因子池管理</p></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="strategy">
+<h2 class="st">04 策略管理模块</h2>
+<p class="sd">ML 模型生命周期管理：特征工程、超参调优、训练、评估、版本管理。</p>
+<div class="panel">
+<div class="side">
+<div class="wh">策略导航</div>
+<div class="si act">模型训练</div><div class="si">超参调优</div>
+<div class="si">特征选择</div><div class="si">模型评估</div><div class="si">模型版本</div>
+</div>
+<div class="main">
+<div class="mh"><h3>模型训练工作台</h3><div><span class="btn">新建实验</span><span class="btn p">开始训练</span></div></div>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:11px;margin-bottom:8px;">
+<b>模型:</b> LightGBM <b>特征:</b> 86 <b>GPU:</b> <span style="color:var(--accent2);">已启用</span> <b>训练:</b> 2020-01~2024-12 <b>验证:</b> 2025-01~2025-06
+</div>
+<div style="background:#000;border:1px solid var(--border);border-radius:6px;padding:8px;font-family:var(--mono);font-size:9px;color:var(--accent2);">
+[14:32:18] Initializing LightGBM...<br>[14:32:20] Dataset: 2,456,810 x 86<br>[14:32:25] Iter 10/500 loss: 0.0241
+</div>
+<div style="margin-top:8px;display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+<div><div class="wh">实验对比</div>
+<table style="font-size:10px;"><tr><th>实验</th><th>IC</th><th>MSE</th></tr>
+<tr><td>lgb_v42 <span class="tag g">best</span></td><td>0.082</td><td>0.018</td></tr>
+<tr><td>xgb_v15</td><td>0.071</td><td>0.022</td></tr>
+<tr><td>cat_v08</td><td>0.068</td><td>0.024</td></tr>
+</table></div>
+<div><div class="wh">Optuna 调优</div>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:10px;font-size:10px;">
+Trials: 124/200<br>Best IC: <span style="color:var(--accent2);">0.089</span>
+</div></div></div></div></div>
+<div class="fg">
+<div class="fc"><h4>多模型支持</h4><p>LGBM / XGB / CatBoost / LSTM 一键切换</p></div>
+<div class="fc"><h4>Optuna 调优</h4><p>可视化调优，参数重要性，学习曲线</p></div>
+<div class="fc"><h4>特征选择</h4><p>过滤法/包装法/嵌入式，重要性排序</p></div>
+<div class="fc"><h4>模型版本</h4><p>MLflow 集成，训练历史对比回滚</p></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="bt">
+<h2 class="st">05 回测管理模块</h2>
+<p class="sd">Backtrader 回测 + SuperPlotView 仪表盘。多策略对比、参数扫描、Walk-Forward、组合优化。</p>
+<div class="panel">
+<div class="side">
+<div class="wh">回测导航</div>
+<div class="si act">运行回测</div><div class="si">回测结果</div>
+<div class="si">多策略对比</div><div class="si">参数扫描</div>
+<div class="si">Walk-Forward</div><div class="si">组合优化</div>
+</div>
+<div class="main">
+<div class="mh"><h3>回测结果 - 动量策略_v3</h3><div><span class="btn">导出</span><span class="btn p">重新运行</span></div></div>
+<div class="gc" style="grid-template-columns:repeat(6,1fr);">
+<div class="c"><div class="l">年化收益</div><div class="v gr">18.6%</div></div>
+<div class="c"><div class="l">夏普比</div><div class="v gr">1.42</div></div>
+<div class="c"><div class="l">最大回撤</div><div class="v re">-12.3%</div></div>
+<div class="c"><div class="l">胜率</div><div class="v">54.2%</div></div>
+<div class="c"><div class="l">交易次数</div><div class="v">847</div></div>
+<div class="c"><div class="l">Calmar</div><div class="v yl">1.51</div></div>
+</div></div></div>
+<div class="fg">
+<div class="fc"><h4>回测运行器</h4><p>策略参数/时间/佣金配置，实时进度推送</p></div>
+<div class="fc"><h4>SuperPlot 分析</h4><p>净值曲线/回撤分布/月度热力图/交易明细</p></div>
+<div class="fc"><h4>多策略对比</h4><p>并排对比净值/风险，一键报告生成</p></div>
+<div class="fc"><h4>Walk-Forward</h4><p>滚动训练验证，参数稳定性检测</p></div>
+<div class="fc"><h4>组合优化</h4><p>PyPortfolioOpt 均值方差/最大夏普</p></div>
+<div class="fc"><h4>报告导出</h4><p>HTML/PDF/JSON 多种格式</p></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="market">
+<h2 class="st">06 市场管理模块</h2>
+<p class="sd">行情看板、K线分析、板块资金流向、多维选股、市场情绪。集成 lightweight-charts。</p>
+<div class="panel">
+<div class="side">
+<div class="wh">市场导航</div>
+<div class="si act">行情看板</div><div class="si">个股分析</div>
+<div class="si">板块分析</div><div class="si">选股器</div>
+<div class="si">市场情绪</div><div class="si">AI 研报</div>
+</div>
+<div class="main">
+<div class="mh"><h3>行情看板</h3><div><span class="btn p">5日</span><span class="btn">1月</span><span class="btn">1年</span></div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-bottom:8px;">
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;">
+<div style="font-size:9px;color:var(--text3);">上证指数</div>
+<div style="font-size:16px;font-weight:700;">3286.42 <span style="font-size:11px;color:var(--accent2);">+0.86%</span></div></div>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;">
+<div style="font-size:9px;color:var(--text3);">沪深300</div>
+<div style="font-size:16px;font-weight:700;">3892.15 <span style="font-size:11px;color:var(--accent2);">+1.12%</span></div></div></div>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+<div><div class="wh">板块涨幅榜</div>
+<table style="font-size:10px;"><tr><th>板块</th><th>涨幅</th><th>资金</th></tr>
+<tr><td>AI 算力</td><td style="color:var(--accent2);">+4.2%</td><td style="color:var(--accent2);">+28.6亿</td></tr>
+<tr><td>新能源</td><td style="color:var(--accent2);">+2.8%</td><td style="color:var(--accent2);">+15.4亿</td></tr>
+</table></div>
+<div><div class="wh">AI 市场摘要</div>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:6px;padding:8px;font-size:10px;color:var(--text2);">
+今日 A 股三大指数收涨，成交 9846 亿。AI 概念股全线爆发，北向资金净买入 42.6 亿元。
+<div style="margin-top:2px;text-align:right;font-size:8px;color:var(--text3);">AI 分析 15:30</div>
+</div></div></div></div></div>
+<div class="fg">
+<div class="fc"><h4>TradingView K线</h4><p>lightweight-charts 专业 K线，多周期指标</p></div>
+<div class="fc"><h4>多维选股器</h4><p>因子打分+技术面+基本面+资金面</p></div>
+<div class="fc"><h4>板块轮动</h4><p>资金流向、涨幅排名、轮动周期检测</p></div>
+<div class="fc"><h4>市场情绪</h4><p>涨跌比、新高新低、VIX</p></div>
+<div class="fc"><h4>AI 研报</h4><p>集成 ai_quant_system 每日市场分析</p></div>
+<div class="fc"><h4>自选股</h4><p>多分组、实时提醒、条件触发</p></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="tech">
+<h2 class="st">07 推荐技术栈</h2>
+<p class="sd">基于 SuperPlotView 现有架构与最新前端工程化实践。</p>
+<div class="st3">
+<div class="pl"><h4>React 19 + Vite 6</h4><p>SPA 框架，Vite 极速 HMR，TypeScript strict</p></div>
+<div class="pl"><h4>Shadcn/ui + Tailwind</h4><p>沿用 SuperPlotView 深色主题，自定义 TradingView tokens</p></div>
+<div class="pl"><h4>Lightweight Charts</h4><p>与 SuperPlotView 一致的 TradingView 图表库</p></div>
+</div>
+<div class="st3">
+<div class="pl"><h4>FastAPI + WebSocket</h4><p>REST CRUD + WS 实时推送/训练/回测/行情</p></div>
+<div class="pl"><h4>TanStack Query + Zustand</h4><p>服务端状态 TQ，全局状态 Zustand</p></div>
+<div class="pl"><h4>Vitest + Playwright</h4><p>单元测试 + E2E 测试</p></div>
+</div>
+<div class="tg">
+<div class="t"><div class="n">React 19</div><div class="ds">UI 框架</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">Vite 6</div><div class="ds">构建工具</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">TypeScript</div><div class="ds">类型安全</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">Tailwind</div><div class="ds">样式</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">Shadcn/ui</div><div class="ds">组件库</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">lightweight-charts</div><div class="ds">K线图表</div><div class="tl">已选</div></div>
+<div class="t"><div class="n">Recharts</div><div class="ds">统计图表</div><div class="tl">推荐</div></div>
+<div class="t"><div class="n">TanStack Table</div><div class="ds">数据表格</div><div class="tl">推荐</div></div>
+<div class="t"><div class="n">TanStack Query</div><div class="ds">服务端状态</div><div class="tl">推荐</div></div>
+<div class="t"><div class="n">Zustand</div><div class="ds">客户端状态</div><div class="tl">推荐</div></div>
+<div class="t"><div class="n">React Router</div><div class="ds">路由</div><div class="tl">推荐</div></div>
+<div class="t"><div class="n">FastAPI</div><div class="ds">后端</div><div class="tl">推荐</div></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="routes">
+<h2 class="st">08 前端路由设计</h2>
+<p class="sd">React Router v7 扁平路由，按功能域分组，全部延迟加载。</p>
+<div class="routes">
+<div class="r"><span class="p">/</span><span class="d">Dashboard 宏观市场看板</span><span class="m">市场</span></div>
+<div class="r"><span class="p">/data</span><span class="d">数据管理总览</span><span class="m">数据</span></div>
+<div class="r"><span class="p">/data/sources</span><span class="d">数据源管理</span><span class="m">数据</span></div>
+<div class="r"><span class="p">/data/quality</span><span class="d">数据质量报告</span><span class="m">数据</span></div>
+<div class="r"><span class="p">/factors</span><span class="d">因子库总览</span><span class="m">因子</span></div>
+<div class="r"><span class="p">/factors/editor/:id</span><span class="d">YAML 因子编辑器</span><span class="m">因子</span></div>
+<div class="r"><span class="p">/factors/synthesis</span><span class="d">因子合成工作台</span><span class="m">因子</span></div>
+<div class="r"><span class="p">/factors/ic-analysis</span><span class="d">IC 分析面板</span><span class="m">因子</span></div>
+<div class="r"><span class="p">/strategies</span><span class="d">策略管理总览</span><span class="m">策略</span></div>
+<div class="r"><span class="p">/strategies/train</span><span class="d">模型训练工作台</span><span class="m">策略</span></div>
+<div class="r"><span class="p">/strategies/tune</span><span class="d">Optuna 调优</span><span class="m">策略</span></div>
+<div class="r"><span class="p">/strategies/evaluate</span><span class="d">模型评估对比</span><span class="m">策略</span></div>
+<div class="r"><span class="p">/backtest</span><span class="d">回测管理总览</span><span class="m">回测</span></div>
+<div class="r"><span class="p">/backtest/new</span><span class="d">新建回测配置</span><span class="m">回测</span></div>
+<div class="r"><span class="p">/backtest/:id</span><span class="d">回测结果 SuperPlot</span><span class="m">回测</span></div>
+<div class="r"><span class="p">/backtest/compare</span><span class="d">多策略对比</span><span class="m">回测</span></div>
+<div class="r"><span class="p">/backtest/portfolio</span><span class="d">组合优化</span><span class="m">回测</span></div>
+<div class="r"><span class="p">/market</span><span class="d">行情看板 K线</span><span class="m">市场</span></div>
+<div class="r"><span class="p">/market/stock/:code</span><span class="d">个股深度分析</span><span class="m">市场</span></div>
+<div class="r"><span class="p">/market/screener</span><span class="d">多因子选股器</span><span class="m">市场</span></div>
+<div class="r"><span class="p">/market/sentiment</span><span class="d">市场情绪仪表盘</span><span class="m">市场</span></div>
+<div class="r"><span class="p">/market/ai-report</span><span class="d">AI 日报系统</span><span class="m">市场</span></div>
+</div></div>
+<div class="dv"></div>
+<div class="s" id="flow">
+<h2 class="st">09 核心数据流与 API</h2>
+<p class="sd">从前端到后端的完整链路，以 ML 因子策略全流程为例。</p>
+<div class="flow">
+<span class="fn">前端操作</span><span class="fa"> &gt; </span>
+<span class="fn">FastAPI</span><span class="fa"> &gt; </span>
+<span class="fn">Celery</span><span class="fa"> &gt; </span>
+<span class="fn">Python引擎</span><span class="fa"> &gt; </span>
+<span class="fn">WebSocket</span><span class="fa"> &gt; </span>
+<span class="fn">前端渲染</span>
+</div>
+<div class="df" style="margin-top:8px;">
+<div class="dr"><span class="dl">因子流程</span><span>YAML编辑 &gt; 预览 &gt; 计算 &gt; IC分析 &gt; 合成 &gt; 入库</span></div>
+<div class="dr"><span class="dl">训练流程</span><span>数据加载 &gt; 特征 &gt; 切片 &gt; Optuna &gt; 训练 &gt; 评估 &gt; 注册</span></div>
+<div class="dr"><span class="dl">回测流程</span><span>策略配置 &gt; 数据准备 &gt; BT运行 &gt; 结果 &gt; SuperPlot渲染</span></div>
+<div class="dr"><span class="dl">行情流程</span><span>数据拉取 &gt; 缓存 &gt; K线 &gt; 指标 &gt; AI分析 &gt; 推送</span></div>
+</div>
+<div class="ap">
+<div><h3 style="font-size:13px;font-weight:600;margin-bottom:6px;">REST API 设计</h3>
+<div class="ab">
+GET /api/v1/data/overview<br>POST /api/v1/data/import<br>
+GET /api/v1/factors?strategy=momentum<br>POST /api/v1/factors/synthesize<br>
+GET /api/v1/factors/ic-analysis<br>POST /api/v1/strategies/train<br>
+POST /api/v1/strategies/tune<br>POST /api/v1/backtest/run<br>
+GET /api/v1/backtest/:id/result<br>GET /api/v1/market/kline?code=000001<br>
+WS /api/v1/ws/task/:id
+</div></div>
+<div><h3 style="font-size:13px;font-weight:600;margin-bottom:6px;">WebSocket 通道</h3>
+<div class="wb">
+<b>WS1:</b> 模型训练进度 loss/迭代<br>
+<b>WS2:</b> 回测状态 持仓/资金曲线<br>
+<b>WS3:</b> 实时行情 Tick/K线增量<br>
+<div style="margin-top:6px;padding:6px;background:rgba(88,166,255,.05);border-radius:4px;">SSE 自动降级方案</div>
+</div></div></div></div>
+<div class="dv"></div>
+<div class="s">
+<div class="f2">
+<div><h3 style="font-size:16px;margin-bottom:8px;">设计核心理念</h3>
+<div style="font-size:12px;color:var(--text2);line-height:1.7;">
+<p><b>融合 SuperPlotView 血统</b> - 沿用 TradingView 深色主题、lightweight-charts、SuperPlot 指标卡片</p>
+<p><b>借鉴 quantdinger 范式</b> - 因子即配置、策略即组合、回测即分析</p>
+<p><b>数据驱动决策</b> - 图表优先、表格补充、配置在侧</p>
+<p><b>实时协作感</b> - WebSocket 实时推送</p>
+</div></div>
+<div><h3 style="font-size:16px;margin-bottom:8px;">实施路线图</h3>
+<div style="background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:12px;font-size:11px;color:var(--text2);">
+<p><b style="color:var(--accent2);">Phase 1:</b> 脚手架+主题+路由+数据模块</p>
+<p><b style="color:var(--accent3);">Phase 2:</b> 因子浏览器+IC分析+因子合成</p>
+<p><b style="color:var(--red);">Phase 3:</b> 策略训练+Optuna+模型评估</p>
+<p><b style="color:var(--purple);">Phase 4:</b> 回测管理+SuperPlot+对比</p>
+<p><b style="color:var(--accent);">Phase 5:</b> 市场看板+K线+AI研报</p>
+</div></div></div></div>
+<div class="ft">
+QlibWorks Quant Studio v0.1 设计文档 | 基于 SuperPlotView + quantdinger | 2026-05-26
+</div>
+</body></html>

@@ -104,7 +104,7 @@ def fix_index_files(filename):
     with open(filepath, 'w') as f:
         f.writelines(new_records)
 
-for f in ['csi300.txt', 'csi500.txt', 'csi1000.txt', 'sse50.txt']:
+for f in ['csi300.txt', 'csi500.txt', 'csi1000.txt', 'csi2000.txt', 'sse50.txt']:
     fix_index_files(f)
 
 print("Done fixing all instruments files to reflect true dates and continuous index membership.")
