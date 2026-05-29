@@ -1,7 +1,22 @@
+"""
+[废弃] 此模块已被 src/qlworks/data/api.py 中的 QuantDataAPI 取代。
+
+请使用 QuantDataAPI 替代 QlibDataAccessor：
+    from qlworks.data.api import QuantDataAPI
+    with QuantDataAPI() as api:
+        df = api.get_daily_data(...)
+
+本模块保留仅用于向后兼容，新代码不应再引用。
+"""
 from __future__ import annotations
 
 import os
 import sys
+import warnings
+warnings.warn(
+    "qlworks.data.access 已废弃，请使用 qlworks.data.api.QuantDataAPI 替代",
+    DeprecationWarning, stacklevel=2
+)
 
 # 允许直接运行此文件测试时，能正确识别项目根目录下的 qlworks 包
 if __name__ == "__main__":

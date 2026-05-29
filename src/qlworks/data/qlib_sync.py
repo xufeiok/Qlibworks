@@ -171,41 +171,46 @@ class QlibSynchronizer:
         print(f"    共找到 {len(stocks)} 只主板股票")
         return stocks
     
-    def full_sync(self, start_date: str, end_date: str, instruments: Optional[List[str]] = None):
+    def full_sync(self, start_date: str, end_date: str, instruments: Optional[List[str]] = None,
+                  instruments_dict: Optional[Dict[str, str]] = None):
         """
         全量同步 Qlib 数据
-        
+
         Args:
-            start_date: 开始日期 YYYY-MM-DD
+            start_date: 开始日期 YYYY-MM-DD（当 instruments_dict 未提供时使用）
             end_date: 结束日期 YYYY-MM-DD
             instruments: 股票列表，None 表示全部主板股票
+            instruments_dict: 每只股票的自定义开始日期字典 {stock_code: start_date}，
+                             提供后覆盖统一的 start_date（按上市日期定制同步起点）
         """
         print("=" * 60)
         print(f"Qlib 全量同步：{start_date} - {end_date}")
+        if instruments_dict:
+            print(f"  使用按股票定制的开始日期 ({len(instruments_dict)} 只)")
         print("=" * 60)
-        
+
         self._ensure_dirs()
-        
+
         # 1. 获取股票列表
         print("\n[1] 获取股票列表...")
         if instruments is None:
             stocks = self._get_main_board_stocks()
         else:
             stocks = instruments
-        
+
         if not stocks:
             print("    未获取到股票列表，退出")
             return
-        
+
         # 2. 获取交易日历
         print("\n[2] 获取交易日历...")
         calendar_list, calendar_map = self._get_calendar_list()
         self._save_calendars(calendar_list)
-        
+
         # 3. 保存 instruments 文件
         print("\n[3] 生成 instruments 文件...")
         self._save_instruments(stocks)
-        
+
         # 4. 确保 features 目录为空
         print("\n[4] 准备 features 目录...")
         if self.features_dir.exists():
@@ -214,11 +219,11 @@ class QlibSynchronizer:
             except Exception as e:
                 print(f"    清理目录失败（可能已不存在）: {e}")
         self.features_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 5. 下载并保存数据
         print("\n[5] 下载并保存数据...")
-        self._sync_features(stocks, calendar_list, calendar_map, start_date, end_date)
-        
+        self._sync_features(stocks, calendar_list, calendar_map, start_date, end_date, instruments_dict=instruments_dict)
+
         print("\n" + "=" * 60)
         print("Qlib 全量同步完成！")
         print("=" * 60)
@@ -279,36 +284,41 @@ class QlibSynchronizer:
         calendar_map: Dict[str, int],
         start_date: str,
         end_date: str,
-        append: bool = False
+        append: bool = False,
+        instruments_dict: Optional[Dict[str, str]] = None
     ):
         """
         同步特征数据
-        
+
         Args:
             stocks: 股票列表
             calendar_list: 日历列表
             calendar_map: 日历映射
-            start_date: 开始日期
+            start_date: 开始日期（instruments_dict 未覆盖时的默认值）
             end_date: 结束日期
             append: 是否追加模式
+            instruments_dict: 每只股票的自定义开始日期 {stock_code: start_date}
         """
         success_count = 0
         failed_count = 0
-        
+
         for stock_code in tqdm(stocks, desc="同步股票数据"):
             try:
+                # [Bloomberg Eng] 按股票定制开始日期
+                stock_start = instruments_dict.get(stock_code, start_date) if instruments_dict else start_date
+
                 # 获取日线数据（前复权）
                 df = self.api.get_daily_data(
                     ts_codes=[stock_code],
-                    start_date=start_date,
+                    start_date=stock_start,
                     end_date=end_date,
                     adj=True
                 )
-                
+
                 if df.empty:
                     failed_count += 1
                     continue
-                
+
                 # 转换列名（兼容大小写）
                 df.columns = df.columns.str.lower()
                 df = df.rename(columns={
@@ -320,14 +330,14 @@ class QlibSynchronizer:
                     failed_count += 1
                     continue
                 df["date"] = pd.to_datetime(df["date"]).dt.strftime('%Y-%m-%d')
-                
+
                 # 获取财务数据（使用公告日期，向后填充避免未来数据泄露）
                 financial_fields = ['roe', 'roa', 'grossprofit_margin', 'netprofit_margin',
                                    'debt_to_assets', 'current_ratio', 'eps', 'ocfps',
                                    'netprofit_yoy', 'tr_yoy']
                 df_financial = self.api.get_financial_data(
                     ts_codes=[stock_code],
-                    start_date=start_date,
+                    start_date=stock_start,
                     end_date=end_date,
                     fields=financial_fields
                 )
@@ -339,7 +349,7 @@ class QlibSynchronizer:
                     df_financial = df_financial.sort_values('date').set_index('date')[financial_fields]
                     # 合并到主数据，使用向后填充
                     df = df.set_index('date')
-                    df = df.join(df_financial, how='left').fillna(method='ffill').reset_index()
+                    df = df.join(df_financial, how='left').ffill().reset_index()
                 else:
                     df = df.set_index('date').reset_index()
                 
