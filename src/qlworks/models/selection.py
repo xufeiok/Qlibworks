@@ -36,31 +36,7 @@ from __future__ import annotations
 import os
 import sys
 
- 
-import hashlib, json 
-def cached_select_features(x_train, y_train, method, use_cache=True, **kwargs): 
-    from qlworks.config import FS_CACHE_DIR 
-    try: 
-        import joblib 
-    except ImportError: 
-        use_cache = False 
-    if not use_cache: 
-        return select_features(x_train, y_train, method, **kwargs) 
-    xb = x_train.values.tobytes() 
-    fp = hashlib.md5(xb[:1000000]).hexdigest() 
-    yb = y_train.values.tobytes() 
-    fp += hashlib.md5(yb[:100000]).hexdigest() 
-    fp += str(x_train.shape) 
-    fp += hashlib.md5(json.dumps(sorted(kwargs.items())).encode()).hexdigest() 
-    key = hashlib.md5(fp.encode()).hexdigest()[:24] 
-    cp = FS_CACHE_DIR / f'fs_{method}_{key}.joblib' 
-    if cp.exists(): 
-        try: return joblib.load(str(cp)) 
-        except: pass 
-    result = select_features(x_train, y_train, method, **kwargs) 
-    try: joblib.dump(result, str(cp)) 
-    except: pass 
-    return result 
+
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
@@ -365,6 +341,37 @@ def select_features(
     if method == "embedded":
         return embedded_feature_selection(x_train, y_train, **kwargs)
     raise ValueError(f"不支持的特征选择类型: {method}")
+
+
+def cached_select_features(x_train, y_train, method, use_cache=True, **kwargs):
+    """带 Joblib 缓存的特征选择包装器（自动缓存结果，下次相同输入直接返回）"""
+    from qlworks.config import FS_CACHE_DIR
+    try:
+        import joblib
+    except ImportError:
+        use_cache = False
+    if not use_cache:
+        return select_features(x_train, y_train, method, **kwargs)
+    import hashlib, json
+    xb = x_train.values.tobytes()
+    fp = hashlib.md5(xb[:1000000]).hexdigest()
+    yb = y_train.values.tobytes()
+    fp += hashlib.md5(yb[:100000]).hexdigest()
+    fp += str(x_train.shape)
+    fp += hashlib.md5(json.dumps(sorted(kwargs.items())).encode()).hexdigest()
+    key = hashlib.md5(fp.encode()).hexdigest()[:24]
+    cp = FS_CACHE_DIR / f'fs_{method}_{key}.joblib'
+    if cp.exists():
+        try:
+            return joblib.load(str(cp))
+        except Exception:
+            pass
+    result = select_features(x_train, y_train, method, **kwargs)
+    try:
+        joblib.dump(result, str(cp))
+    except Exception:
+        pass
+    return result
 
 
 def apply_feature_selection(

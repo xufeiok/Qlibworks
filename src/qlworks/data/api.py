@@ -35,8 +35,11 @@ from qlworks.config import (
     FORCE_ADJUSTED_PRICES, FINANCIAL_USE_ANNOUNCEMENT_DATE, ADJUSTED_PRICE_TYPE
 )
 
-# Tushare Token（从环境变量获取）
-TUSHARE_TOKEN = os.environ.get('TUSHARE_TOKEN', '18dd374714956ab83ae5c2028613bee423ce620124e490bf0c35fed2')
+# Tushare Token（必须从环境变量获取，不可硬编码）
+TUSHARE_TOKEN = os.environ.get('TUSHARE_TOKEN')
+if not TUSHARE_TOKEN:
+    import warnings
+    warnings.warn("TUSHARE_TOKEN 未设置，Tushare 后备数据源不可用。请在 .env 文件中配置 TUSHARE_TOKEN")
 
 
 class QuantDataAPI:

@@ -28,7 +28,7 @@ def run_qlib_backtrader(
     pred_df: pd.DataFrame,
     price_df_dict: dict,
     benchmark_df: pd.DataFrame = None,
-    strategy_class=AShareStrategy,
+    strategy_class=EnhancedQlibStrategy,
     strategy_params=None,
     initial_cash=100000.0,
     commission=0.001,
@@ -250,7 +250,7 @@ def run_qlib_backtrader(
 
 def run_duckdb_backtrader(
     ts_codes: list,
-    duckdb_path: str = r'e:\Quant\Quant_Tushare\data\quant_data.duckdb',
+    duckdb_path: str = None,
     start_date: str = '2020-01-01',
     end_date: str = '2025-12-31',
     benchmark_code: str = '000300.SH',
@@ -269,7 +269,7 @@ def run_duckdb_backtrader(
     
     参数:
         ts_codes: 需要回测的股票代码列表，例如 ['000001.SZ', '600000.SH']
-        duckdb_path: DuckDB 数据库文件路径
+        duckdb_path: DuckDB 数据库文件路径（默认使用 config.py 中的 DUCKDB_PATH）
         start_date: 回测起始日期 'YYYY-MM-DD'
         end_date: 回测结束日期 'YYYY-MM-DD'
         benchmark_code: 基准标的代码（默认沪深300），用于 SuperPlot 对比展示

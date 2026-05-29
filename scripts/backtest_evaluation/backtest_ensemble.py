@@ -253,8 +253,12 @@ def run_model_comparison():
         if score_df is not None:
             all_instruments.update(score_df.index.get_level_values('instrument').unique().tolist())
     industry_map = load_industry_map(list(all_instruments), CONFIG["start_date"])
-    coverage = sum(1 for inst in industry_map) / len(all_instruments) * 100
-    print(f"    行业数据覆盖率: {len(industry_map)}/{len(all_instruments)} = {coverage:.1f}%")
+    if all_instruments:
+        coverage = sum(1 for inst in industry_map) / len(all_instruments) * 100
+        print(f"    行业数据覆盖率: {len(industry_map)}/{len(all_instruments)} = {coverage:.1f}%")
+    else:
+        coverage = 0
+        print("    行业数据覆盖率: 无可用股票数据")
 
     subsample_set = load_subsample_set()
 
