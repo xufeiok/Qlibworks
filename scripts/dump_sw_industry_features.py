@@ -1,15 +1,17 @@
-import os, json
+import os, json, sys
 import duckdb
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from tqdm import tqdm
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../src'))
+from qlworks.config import DUCKDB_PATH
 
 def dump_industry_features():
     qlib_dir = Path('e:/Quant/Qlibworks/qlib_data')
     features_dir = qlib_dir / 'features'
-    db_path = r'e:\Quant\Quant_Tushare\data\quant_data.duckdb'
+    db_path = str(DUCKDB_PATH)
 
     print("1. Loading calendar...")
     cal_file = qlib_dir / 'calendars' / 'day.txt'

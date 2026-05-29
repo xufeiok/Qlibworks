@@ -66,8 +66,8 @@ CH_DATABASE = os.environ.get('CH_DATABASE', 'quant_db')
 client = clickhouse_connect.get_client(
     host='10.100.0.205',
     port=18123,
-    user='xufei',
-    password='xxx'
+    user='reader',
+    password=''
 )
 df = client.query_df("SELECT * FROM daily_prices")
 ```

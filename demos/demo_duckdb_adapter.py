@@ -88,7 +88,7 @@ if __name__ == "__main__":
     # 运行回测
     cerebro, results = run_duckdb_backtrader(
         ts_codes=test_stocks,
-        duckdb_path=r'e:\Quant\Quant_Tushare\data\quant_data.duckdb',
+        duckdb_path=None,  # 使用 config.py 中的 DUCKDB_PATH
         start_date='2020-01-01',
         end_date='2023-12-31',
         benchmark_code='000300.SH',

@@ -17,12 +17,13 @@ def optimize_portfolio_scores(pred_df, top_k_total=10, max_per_industry=2):
     print("    正在从 ClickHouse 加载股票行业映射数据...")
     import clickhouse_connect
     try:
+        from qlworks.config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
         client = clickhouse_connect.get_client(
-            host="192.168.10.102",
-            port=18123,
-            user="xufei",
-            password="xf1987216",
-            database="quant_db"
+            host=CH_HOST,
+            port=CH_PORT,
+            user=CH_USER,
+            password=CH_PASSWORD,
+            database=CH_DATABASE
         )
         stock_info = client.query_df("SELECT ts_code, l1_name as industry FROM sw_industry_members")
     except Exception as e:

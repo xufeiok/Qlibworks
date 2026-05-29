@@ -22,7 +22,7 @@ try:
 except ImportError:
     SuperPlot = None
 
-from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy, AShareStrategy, AShareCommission
+from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy, AShareCommission
 
 def run_qlib_backtrader(
     pred_df: pd.DataFrame,
@@ -290,17 +290,21 @@ def run_duckdb_backtrader(
 
     print(f"正在连接 ClickHouse+DuckDB...")
     try:
+        from qlworks.config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, DUCKDB_PATH as CFG_DUCKDB_PATH
         import clickhouse_connect
         ch_client = clickhouse_connect.get_client(
-            host="192.168.10.102",
-            port=18123,
-            user="xufei",
-            password="xf1987216",
-            database="quant_db"
+            host=CH_HOST,
+            port=CH_PORT,
+            user=CH_USER,
+            password=CH_PASSWORD,
+            database=CH_DATABASE
         )
     except Exception as e:
         print(f"连接 ClickHouse 失败: {e}")
         return None, None
+
+    if duckdb_path is None:
+        duckdb_path = str(CFG_DUCKDB_PATH)
 
     def fetch_data(code):
         query = f"""
