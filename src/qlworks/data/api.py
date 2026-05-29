@@ -383,15 +383,16 @@ class QuantDataAPI:
         use_adj = FORCE_ADJUSTED_PRICES if adj is None else adj
 
         if use_adj:
+            adj_divisor = "COALESCE(NULLIF(latest.adj_factor, 0), 1)"
             sql = f"""
                 SELECT
                     p.ts_code AS ts_code, p.trade_date AS trade_date,
-                    p.open * a.adj_factor / latest.adj_factor AS open,
-                    p.high * a.adj_factor / latest.adj_factor AS high,
-                    p.low * a.adj_factor / latest.adj_factor AS low,
-                    p.close * a.adj_factor / latest.adj_factor AS close,
+                    p.open * COALESCE(a.adj_factor, 1) / {adj_divisor} AS open,
+                    p.high * COALESCE(a.adj_factor, 1) / {adj_divisor} AS high,
+                    p.low * COALESCE(a.adj_factor, 1) / {adj_divisor} AS low,
+                    p.close * COALESCE(a.adj_factor, 1) / {adj_divisor} AS close,
                     p.vol AS vol,
-                    p.close * a.adj_factor / latest.adj_factor * p.vol AS amount,
+                    p.close * COALESCE(a.adj_factor, 1) / {adj_divisor} * p.vol AS amount,
                     i.pe AS pe, i.pe_ttm AS pe_ttm, i.pb AS pb, i.ps AS ps, i.ps_ttm AS ps_ttm,
                     i.total_mv AS total_mv, i.circ_mv AS circ_mv, i.dv_ttm AS dv_ttm,
                     a.adj_factor AS adj_factor,

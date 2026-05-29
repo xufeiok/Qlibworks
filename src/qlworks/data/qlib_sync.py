@@ -121,14 +121,18 @@ class QlibSynchronizer:
         data = np.hstack([np.array([start_index], dtype='<i4'), values_array.astype('<f4')])
         data.tofile(str(filepath))
     
-    def _get_calendar_list(self) -> Tuple[List[str], Dict[str, int]]:
+    def _get_calendar_list(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[List[str], Dict[str, int]]:
         """
-        获取交易日历列表
-        
+        获取交易日历列表（过滤到指定日期范围）
+
+        Args:
+            start_date: 开始日期 YYYY-MM-DD（可选，不提供则取全部）
+            end_date: 结束日期 YYYY-MM-DD（可选，不提供则取全部）
+
         Returns:
             (calendar_list, calendar_map)
         """
-        cal_df = self.api.get_calendar()
+        cal_df = self.api.get_calendar(start_date=start_date, end_date=end_date)
         calendar_list = [str(d)[:10] for d in cal_df["trade_date"]]
         calendar_map = {d: i for i, d in enumerate(calendar_list)}
         return calendar_list, calendar_map
@@ -204,7 +208,7 @@ class QlibSynchronizer:
 
         # 2. 获取交易日历
         print("\n[2] 获取交易日历...")
-        calendar_list, calendar_map = self._get_calendar_list()
+        calendar_list, calendar_map = self._get_calendar_list(start_date=start_date, end_date=end_date)
         self._save_calendars(calendar_list)
 
         # 3. 保存 instruments 文件
@@ -301,6 +305,20 @@ class QlibSynchronizer:
         """
         success_count = 0
         failed_count = 0
+
+        # [Goldman Sachs 架构师] 强制从本地 day.txt 读取日历，确保 100% 对齐
+        local_cal_path = self.calendars_dir / "day.txt"
+        if local_cal_path.exists():
+            with open(local_cal_path, 'r') as f:
+                local_cal = [d.strip() for d in f.read().splitlines() if d.strip()]
+            if len(local_cal) != len(calendar_list):
+                print(f"  [INFO] calendar_map ({len(calendar_list)}) 与 day.txt ({len(local_cal)}) 不一致，" + 
+                      f"强制从 day.txt 重建日历映射")
+            else:
+                print(f"  [INFO] 使用 day.txt 日历映射: {len(local_cal)} 天")
+            # 始终从 day.txt 读取，确保与已写入的日历年完美对齐
+            calendar_list = local_cal
+            calendar_map = {d: i for i, d in enumerate(calendar_list)}
 
         for stock_code in tqdm(stocks, desc="同步股票数据"):
             try:
