@@ -31,3 +31,15 @@ CH_PASSWORD = os.environ.get('CH_PASSWORD', 'xf1987216')
 CH_DATABASE = os.environ.get('CH_DATABASE', 'quant_db')
 
 FS_CACHE_DIR = _resolve_path('FS_CACHE_DIR', '.fs_cache')
+
+# ==================== 数据规范配置 ====================
+FORCE_ADJUSTED_PRICES = os.environ.get('FORCE_ADJUSTED_PRICES', 'true').lower() == 'true'
+
+FINANCIAL_USE_ANNOUNCEMENT_DATE = os.environ.get('FINANCIAL_USE_ANNOUNCEMENT_DATE', 'true').lower() == 'true'
+
+FINANCIAL_DATE_COLUMNS = {
+    'ann_date': 'ann_date',
+    'end_date': 'end_date',
+}
+
+ADJUSTED_PRICE_TYPE = os.environ.get('ADJUSTED_PRICE_TYPE', 'qfq')
