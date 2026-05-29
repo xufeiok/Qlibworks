@@ -3,7 +3,7 @@ import sys, os
 import pandas as pd
 pd.options.mode.use_inf_as_na = True
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 from qlib.data import D
 from qlworks.features.builder import build_factor_library_bundle
 

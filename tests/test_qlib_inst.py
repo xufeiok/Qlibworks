@@ -1,6 +1,6 @@
 import qlib
 import sys, os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "src")))
 from qlib.data import D
 from qlworks.features.builder import build_factor_library_bundle
 

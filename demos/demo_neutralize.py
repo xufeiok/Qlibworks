@@ -7,7 +7,7 @@ import sys
 import os
 
 # 将 src 目录添加到 sys.path
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from qlworks.processors.neutralize import CSNeutralize
 from qlworks.factors.manager import FactorLibraryManager

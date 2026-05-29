@@ -5,7 +5,7 @@
 
 ## 数据来源
 - **脚本**: `e:\Quant\Qlibworks\scripts\build_qlib_from_duckdb.py`
-- **数据源**: ClickHouse (192.168.10.102:18123) - quant_db 数据库
+- **数据源**: ClickHouse (10.100.0.205:18123) - quant_db 数据库
 - **输出目录**: `e:\Quant\Qlibworks\qlib_data`
 
 ## 数据构建流程

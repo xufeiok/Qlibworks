@@ -8,7 +8,7 @@ import sys
 import os
 
 # 将 qlworks 源码目录加入环境变量，方便导入
-src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
+src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src')
 sys.path.insert(0, src_dir)
 
 from qlworks.factors import FactorLibraryManager
