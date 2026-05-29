@@ -1,4 +1,4 @@
-import { defineStore } from "pinia"
+﻿import { defineStore } from "pinia"
 import { ref, computed } from "vue"
 
 export type Frequency = "tick" | "transaction" | "minute" | "daily"
@@ -78,8 +78,8 @@ export const useDataStore = defineStore("data", () => {
   const chData = ref<Record<Frequency, CHTableStat[]>>({
     tick: [], transaction: [], minute: [],
     daily: [{
-      tableName: "daily_prices",
-      description: "A 股日线行情 · 源 tushare → DuckDB → ClickHouse（飞牛OS 10.100.0.205:18123/quant_db）",
+      tableName: "stock_daily",
+      description: "A 股日线行情 · 源 tushare → DuckDB → ClickHouse（飞牛OS 192.168.10.102:18123/quant_db）",
       indicators: [
         { name: "symbol", chineseName: "股票代码", startDate: "1990-12-19", endDate: "2026-04-30", totalCount: 19_200_000, missingCount: 0, completeness: 100.0 },
         { name: "date", chineseName: "交易日期", startDate: "1990-12-19", endDate: "2026-04-30", totalCount: 19_200_000, missingCount: 0, completeness: 100.0 },

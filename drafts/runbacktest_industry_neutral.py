@@ -5,7 +5,6 @@ import pandas as pd
 # 将项目根目录 src 文件夹加入 sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
-from qlworks.config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
 from qlworks.data import QlibDataAccessor
 from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
@@ -19,11 +18,11 @@ def optimize_portfolio_scores(pred_df, top_k_total=10, max_per_industry=2):
     import clickhouse_connect
     try:
         client = clickhouse_connect.get_client(
-            host=CH_HOST,
-            port=CH_PORT,
-            user=CH_USER,
-            password=CH_PASSWORD,
-            database=CH_DATABASE
+            host="192.168.10.102",
+            port=18123,
+            user="xufei",
+            password="xf1987216",
+            database="quant_db"
         )
         stock_info = client.query_df("SELECT ts_code, l1_name as industry FROM sw_industry_members")
     except Exception as e:

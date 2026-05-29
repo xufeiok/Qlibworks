@@ -9,24 +9,6 @@ qlib_data/
 artifacts/
 *.log
 
-# ==================== 数据文件（可重新生成）====================
-# DuckDB 缓存数据库
-data/cache/*.duckdb
-data/cache/*.duckdb.wal
-
-# Qlib 数据目录
-qlib_data/
-
-# 特征选择缓存
-.fs_cache/
-_fs_cache/
-
-# 大文件（可重新生成）
-scripts/model_training/score_*.csv
-drafts/bt_results_*/
-drafts/*.json
-bt_output/
-
 catboost_info/
 mlruns/
 .env

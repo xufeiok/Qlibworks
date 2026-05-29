@@ -6,8 +6,6 @@ import argparse
 import sys
 import duckdb
 
-from qlworks.config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
-
 # 为了让直接调用本文件或提前导入时不报错，如果 sys.path 还没有被修改，则在这里进行保底处理
 bt_superplot_dir = os.path.abspath(r"e:\Quant\backtrader_superplot\backtrader_superplot")
 custom_bt_dir = os.path.join(bt_superplot_dir, "backtrader-1.9.74.123", "backtrader-1.9.74.123")
@@ -294,11 +292,11 @@ def run_duckdb_backtrader(
     try:
         import clickhouse_connect
         ch_client = clickhouse_connect.get_client(
-            host=CH_HOST,
-            port=CH_PORT,
-            user=CH_USER,
-            password=CH_PASSWORD,
-            database=CH_DATABASE
+            host="192.168.10.102",
+            port=18123,
+            user="xufei",
+            password="xf1987216",
+            database="quant_db"
         )
     except Exception as e:
         print(f"连接 ClickHouse 失败: {e}")
