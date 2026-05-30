@@ -1,6 +1,5 @@
-from . import config, duckdb_adapter
+from . import config
 
 __all__ = [
     "config",
-    "duckdb_adapter",
 ]

@@ -12,6 +12,20 @@ from typing import List, Sequence
 from qlworks.factors.manager import FactorLibraryManager
 
 
+# 注册已知因子包（arcive + 活跃）
+KNOWN_FACTOR_PACKAGES = {
+    "alpha158": "alpha158_factor_dictionary",
+    "gtja191": "gtja191_factor_dictionary",
+    "master": "master_factor_dictionary",
+    "weekly_reversal": "weekly_reversal_v1",
+    "style": "style_factors",
+    "quality": "quality_factors",
+    "price_volume": "price_volume_factors",
+    "sentiment": "sentiment_factors",
+    "risk": "risk_factors",
+}
+
+
 @dataclass
 class FeatureBundle:
     """
@@ -82,8 +96,8 @@ def build_alpha_feature_bundle() -> FeatureBundle:
     return FeatureBundle(
         fields=fields,
         names=names,
-        label_fields=["Ref($close, -1) / $close - 1"],
-        label_names=["LABEL0"],
+        label_fields=["(Ref($close, -5) / Ref($open, -1) - 1)"],
+        label_names=["LABEL_5D"],
     )
 
 
@@ -103,12 +117,14 @@ def build_factor_library_bundle(strategy_names: str | list[str], repo_path: str 
     - 仅解析 YAML，不执行 SQL 或 Qlib 表达式，安全风险低。
     """
     manager = FactorLibraryManager(repo_path=repo_path)
-    fields, names = manager.get_qlib_expressions(strategy_names)
+    # 支持短名称映射（如 "alpha158" → "alpha158_factor_dictionary"）
+    resolved = [KNOWN_FACTOR_PACKAGES.get(n, n) for n in (strategy_names if isinstance(strategy_names, list) else [strategy_names])]
+    fields, names = manager.get_qlib_expressions(resolved)
     return FeatureBundle(
         fields=fields,
         names=names,
-        label_fields=["Ref($close, -1) / $close - 1"],
-        label_names=["LABEL0"],
+        label_fields=["(Ref($close, -5) / Ref($open, -1) - 1)"],
+        label_names=["LABEL_5D"],
     )
 
 if __name__ == "__main__":

@@ -74,7 +74,8 @@ def synthesize_factors(
     factors_df: pd.DataFrame,
     method: Literal["equal", "ic_weight", "pca"] = "equal",
     ic_dict: Optional[Dict[str, float]] = None,
-    ic_window: int = 0
+    ic_window: int = 0,
+    collinearity_warning: bool = True,
 ) -> pd.Series:
     """
     功能概述：
@@ -100,7 +101,23 @@ def synthesize_factors(
     if factors_df.empty:
         raise ValueError("输入的因子数据为空 DataFrame")
 
-    # 1. 确保在横截面上做 Z-Score 标准化，以防量纲不一致（如果上游已做，这里算双保险）
+    # 1. 可选共线性检查（等权合成时警告高相关因子）
+    if collinearity_warning and method == "equal" and factors_df.shape[1] >= 3:
+        corr = calc_factor_correlation(factors_df)
+        upper = corr.where(np.triu(np.ones(corr.shape, dtype=bool), k=1))
+        if upper is not None and not upper.empty:
+            high_pairs = []
+            for c in upper.columns:
+                for r in upper.index:
+                    val = upper.loc[r, c]
+                    if not pd.isna(val) and abs(val) > 0.8:
+                        high_pairs.append((r, c, val))
+            if high_pairs:
+                print(f"[AQR] 警告：发现 {len(high_pairs)} 对高度相关因子 (|r|>0.8)，等权合成可能重复计票")
+                for r, c, v in high_pairs[:5]:
+                    print(f"  {r} ~ {c}: {v:.2f}")
+
+    # 2. 确保在横截面上做 Z-Score 标准化，以防量纲不一致（如果上游已做，这里算双保险）
     # 使用快速向量化运算代替慢速 apply
     mean_series = factors_df.groupby(level='datetime').transform('mean')
     std_series = factors_df.groupby(level='datetime').transform('std')

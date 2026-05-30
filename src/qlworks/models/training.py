@@ -12,6 +12,38 @@ import pandas as pd
 from sklearn.linear_model import LinearRegression
 
 
+def _detect_gpu() -> bool:
+    """
+    检测当前环境是否有可用的 GPU。
+
+    Returns:
+        True 如果检测到 CUDA GPU，否则 False。
+    """
+    try:
+        import torch
+        return torch.cuda.is_available()
+    except ImportError:
+        pass
+    try:
+        import cupy
+        return True
+    except ImportError:
+        pass
+    # 尝试直接检查 nvidia-smi
+    try:
+        import subprocess
+        result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5)
+        return result.returncode == 0
+    except FileNotFoundError:
+        pass  # nvidia-smi not in PATH
+    except Exception:
+        pass
+    return False
+
+
+_USE_GPU = _detect_gpu()
+
+
 def prepare_split_frames(dataset) -> Dict[str, pd.DataFrame]:
     """
     功能概述：
@@ -38,6 +70,7 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
     """
     功能概述：
     - 使用 Qlib 的 `LGBModel` 训练多因子回归模型。
+    - GPU 自动检测：有 GPU 时使用 GPU 加速，否则静默回退 CPU。
     输入：
     - dataset: Qlib 数据集对象。
     - params: 可覆盖的 LightGBM 参数。
@@ -56,7 +89,7 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
         "num_leaves": 64,
         "min_child_samples": 20,
         "verbose": -1,
-        "device": "gpu", # 开启 GPU 加速
+        "device": "gpu" if _USE_GPU else "cpu",
     }
     if params:
         base_params.update(params)
@@ -69,6 +102,7 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
     """
     功能概述：
     - 使用 Qlib 的 `XGBModel` 训练。XGBoost 对噪声的容忍度较高，与 LGBM 是经典的集成搭档。
+    - GPU 自动检测：有 GPU 时使用 CUDA 加速，否则回退 CPU。
     """
     from qlib.contrib.model.xgboost import XGBModel
 
@@ -79,10 +113,10 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
         "subsample": 0.8,
         "colsample_bytree": 0.8,
         "n_estimators": 100,
-        "tree_method": "hist", # GPU 必需参数
-        "device": "cuda",      # 开启 GPU 加速
         "n_jobs": 4,
     }
+    if _USE_GPU:
+        base_params.update({"tree_method": "hist", "device": "cuda"})
     if params:
         base_params.update(params)
     model = XGBModel(**base_params)
@@ -94,6 +128,7 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
     """
     功能概述：
     - 使用 Qlib 的 `CatBoostModel` 训练。CatBoost 能更好地处理类别特征，且在金融数据上通常抗过拟合能力较强。
+    - GPU 自动检测：有 GPU 时使用 GPU 训练，否则回退 CPU。
     """
     from qlib.contrib.model.catboost_model import CatBoostModel
 
@@ -102,9 +137,10 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
         "learning_rate": 0.1,
         "iterations": 100,
         "depth": 6,
-        "task_type": "GPU", # 开启 GPU 加速
         "thread_count": 4,
     }
+    if _USE_GPU:
+        base_params["task_type"] = "GPU"
     if params:
         base_params.update(params)
     model = CatBoostModel(**base_params)
@@ -121,8 +157,16 @@ def train_lstm_model(dataset, params: Dict[str, object] = None):
     """
     from qlib.contrib.model.pytorch_lstm import LSTMModel
 
+    # 自动检测特征维度
+    try:
+        sample = dataset.prepare("train")
+        n_features = sample.shape[1] - 1  # 减去标签列
+    except Exception:
+        n_features = 6
+
     base_params = {
-        "d_feat": 6,          # 每个时间步的特征数 (对于 Alpha360，每天是 6 个基础量价指标)
+        "d_feat": n_features,     # 自动推断每个时间步的特征数
+        "hidden_size": 64,
         "hidden_size": 64,
         "num_layers": 2,
         "dropout": 0.1,
@@ -133,7 +177,7 @@ def train_lstm_model(dataset, params: Dict[str, object] = None):
         "metric": "loss",
         "loss": "mse",
         "n_jobs": -1,
-        "GPU": 0,             # 如果没有 GPU 会自动回退到 CPU
+        "GPU": 0 if _USE_GPU else -1,  # 自动检测 GPU
     }
     if params:
         base_params.update(params)

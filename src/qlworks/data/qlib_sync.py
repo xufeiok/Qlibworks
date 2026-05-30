@@ -135,6 +135,7 @@ class QlibSynchronizer:
         cal_df = self.api.get_calendar(start_date=start_date, end_date=end_date)
         calendar_list = [str(d)[:10] for d in cal_df["trade_date"]]
         calendar_map = {d: i for i, d in enumerate(calendar_list)}
+
         return calendar_list, calendar_map
     
     def _save_calendars(self, calendar_list: List[str]):
@@ -232,7 +233,7 @@ class QlibSynchronizer:
         print("Qlib 全量同步完成！")
         print("=" * 60)
     
-    def incremental_sync(self):
+    def incremental_sync(self, instruments_dict=None):
         """
         增量同步 Qlib 数据
         
@@ -271,7 +272,7 @@ class QlibSynchronizer:
             calendar_list, calendar_map = self._get_calendar_list()
             
             # 只同步新数据
-            self._sync_features(stocks, calendar_list, calendar_map, qlib_latest, ch_latest, append=True)
+            self._sync_features(stocks, calendar_list, calendar_map, qlib_latest, ch_latest, append=True, instruments_dict=instruments_dict)
             
             print("\n" + "=" * 60)
             print("Qlib 增量同步完成！")
@@ -320,6 +321,42 @@ class QlibSynchronizer:
             calendar_list = local_cal
             calendar_map = {d: i for i, d in enumerate(calendar_list)}
 
+
+        # [P1] 批量拉取所有股票的财务数据（避免逐股票 N 次数据库查询）
+        financial_fields = ['roe', 'roa', 'grossprofit_margin', 'netprofit_margin',
+                            'debt_to_assets', 'current_ratio', 'eps', 'ocfps',
+                            'netprofit_yoy', 'tr_yoy']
+        min_start = start_date
+        if instruments_dict:
+            valid_starts = [v for v in instruments_dict.values() if v]
+            if valid_starts:
+                min_start = min(valid_starts)
+        # 将 min_start 前移 90 天，确保最新财报数据有足够窗口可前向填充到同步起始日。
+        # 例如某公司年报在 2023-03-15 公告，同步起始日为 2023-04-01，
+        # 若只从 2023-04-01 拉财报，则遗漏了 2023-03-15 的年报，4月全部为 NaN。
+        # 提前 90 天可以覆盖这种"公告在同步起始日之前"的常见情况。
+        _buffer_start = (pd.to_datetime(min_start) - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
+        print(f'    批量拉取财务数据（{len(stocks)} 只股票，起始 {_buffer_start}）...')
+        df_all_financial = self.api.get_financial_data(
+            ts_codes=stocks,
+            start_date=_buffer_start,
+            end_date=end_date,
+            fields=financial_fields
+        )
+        # 按股票代码分组，提前处理成可合并格式
+        financial_by_stock: Dict[str, pd.DataFrame] = {}
+        if not df_all_financial.empty:
+            df_all_financial.columns = df_all_financial.columns.str.lower()
+            ts_col = 'ts_code' if 'ts_code' in df_all_financial.columns else 'symbol'
+            for code, grp in df_all_financial.groupby(ts_col):
+                code_up = str(code).upper()
+                grp = grp.copy()
+                grp['date'] = pd.to_datetime(grp['ann_date']).dt.strftime('%Y-%m-%d')
+                grp = grp.sort_values('end_date').groupby('date', group_keys=False).last().reset_index()
+                grp = grp.set_index('date')[financial_fields]
+                financial_by_stock[code_up] = grp
+        print(f'    财务数据预拉取完成：{len(financial_by_stock)} 只股票有数据')
+
         for stock_code in tqdm(stocks, desc="同步股票数据"):
             try:
                 # [Bloomberg Eng] 按股票定制开始日期
@@ -349,59 +386,62 @@ class QlibSynchronizer:
                     continue
                 df["date"] = pd.to_datetime(df["date"]).dt.strftime('%Y-%m-%d')
 
-                # 获取财务数据（使用公告日期，向后填充避免未来数据泄露）
-                financial_fields = ['roe', 'roa', 'grossprofit_margin', 'netprofit_margin',
-                                   'debt_to_assets', 'current_ratio', 'eps', 'ocfps',
-                                   'netprofit_yoy', 'tr_yoy']
-                df_financial = self.api.get_financial_data(
-                    ts_codes=[stock_code],
-                    start_date=stock_start,
-                    end_date=end_date,
-                    fields=financial_fields
-                )
-                
-                if not df_financial.empty:
-                    df_financial.columns = df_financial.columns.str.lower()
-                    df_financial['date'] = pd.to_datetime(df_financial['ann_date']).dt.strftime('%Y-%m-%d')
-                    # 按日期排序并向后填充
-                    df_financial = df_financial.sort_values('date').set_index('date')[financial_fields]
-                    # 合并到主数据，使用向后填充
+                # [Bloomberg Eng] 财报 Point-in-Time 前向填充
+                #
+                # 财报数据以 ann_date（公告日期）对齐，意味着从该日起数据才可用。
+                # join + ffill() 将最新可用的财报数据向前填充到下一个公告日：
+                #
+                # 示例（某公司）：
+                #   日期        | 动作        | roe
+                #   ───────────┼────────────┼─────
+                #   2023-10-27 | 三季报公告  | 8.5%
+                #   2023-10-28 | 无新公告    | 8.5% (ffill)
+                #   ...        | ...         | 8.5% (ffill)
+                #   2024-03-15 | 年报公告    | 7.2% (新数据覆盖)
+                #
+                # 注意事项：
+                # - 不设 limit 是正确的 PIT 行为。在真实交易中，没有新公告时
+                #   只能使用最新可得数据，没有任何交易员会"因为数据太旧就停止使用"。
+                # - 假如某公司三季报（10/31公告）和年报（次年4/30公告）之间
+                #   间隔约6个月（~120交易日），设 limit=20 会制造约100天的人为NaN空洞。
+                # - 财报数据确实会变"旧"，但"旧"不代表"不可用"。
+                #   模型可以通过特征工程（如财报距今天数）自行处理时效性问题。
+                code_up = stock_code.upper()
+                if code_up in financial_by_stock:
+                    df_financial = financial_by_stock[code_up]
                     df = df.set_index('date')
                     df = df.join(df_financial, how='left').ffill().reset_index()
                 else:
                     df = df.set_index('date').reset_index()
-                
+
+                # 去重
+                before_dedup = len(df)
+                df = df.drop_duplicates(subset=['symbol', 'date'], keep='last').reset_index(drop=True)
+                deduped = before_dedup - len(df)
+                if deduped > 0:
+                    tqdm.write(f"    {stock_code}: 去重 {deduped} 行")
                 # 保存数据
                 code_short = stock_code.lower()
                 stock_dir = self.features_dir / code_short
                 stock_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # 写入每个字段
                 for qlib_field, ch_field in self.field_mapping.items():
                     if ch_field not in df.columns:
                         continue
-                    
                     series = df.set_index("date")[ch_field]
-                    valid_pairs = []
-                    
-                    for date_str, value in series.items():
-                        if date_str in calendar_map and pd.notna(value):
-                            valid_pairs.append((calendar_map[date_str], self._to_float(value)))
-                    
-                    if valid_pairs:
-                        valid_pairs.sort(key=lambda x: x[0])
-                        start_index = valid_pairs[0][0]
-                        end_index = valid_pairs[-1][0]
-                        
-                        length = end_index - start_index + 1
-                        values_array = np.full(length, np.nan, dtype=np.float32)
-                        
-                        for idx, val in valid_pairs:
-                            values_array[idx - start_index] = val
-                        
-                        bin_path = stock_dir / f"{qlib_field}.day.bin"
-                        self._write_bin(bin_path, start_index, values_array)
-                
+                    _valid = [(calendar_map[d], self._to_float(v)) for d, v in series.items()
+                              if d in calendar_map and pd.notna(v)]
+                    if _valid:
+                        _valid.sort(key=lambda x: x[0])
+                        _arr = np.full(_valid[-1][0] - _valid[0][0] + 1, np.nan, dtype=np.float32)
+                        for idx, val in _valid:
+                            _arr[idx - _valid[0][0]] = val
+                        self._write_bin(stock_dir / f"{qlib_field}.day.bin", _valid[0][0], _arr)
+
+                # 同步后使缓存失效
+                # self.bin_writer.invalidate_cache(stock_code)
+
                 success_count += 1
                 
             except Exception as e:

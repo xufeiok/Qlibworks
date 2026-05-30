@@ -1,5 +1,8 @@
 import os
 import sys
+import json
+import hashlib
+from pathlib import Path
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -7,6 +10,7 @@ if __name__ == "__main__":
 from typing import Dict, Any, Optional
 import pandas as pd
 from qlib.contrib.model.gbdt import LGBModel
+from qlworks.config import FS_CACHE_DIR
 
 try:
     import optuna
@@ -143,6 +147,26 @@ def tune_lgbm_hyperparameters(
                 return 999999.0
             return np.mean(mse_scores)
 
+    # [Point72 改进] Optuna 调优结果缓存：相同数据集+参数组合不重复搜索
+    train_data = dataset.prepare("train")
+    n_dates = len(train_data.index.get_level_values('datetime').unique())
+    n_features = train_data.shape[1] - 1  # 减去标签列
+    n_samples = len(train_data)
+    cache_key_dict = {"n_trials": n_trials, "n_dates": n_dates, "n_features": n_features,
+                       "n_samples": n_samples, "n_splits": n_splits,
+                       "use_purged_cv": use_purged_cv, "embargo_days": embargo_days}
+    cache_key = hashlib.md5(json.dumps(cache_key_dict, sort_keys=True).encode()).hexdigest()[:16]
+    cache_path = Path(str(FS_CACHE_DIR)) / f"optuna_{cache_key}.json"
+
+    if cache_path.exists():
+        try:
+            with open(cache_path, "r") as f:
+                cached = json.load(f)
+            print(f"[Optuna] 命中缓存，最优参数从 {cache_path} 加载")
+            return cached
+        except Exception:
+            pass
+
     # 启动研究
     study = optuna.create_study(direction="minimize", study_name="qlib_lgbm_tuning")
     study.optimize(objective, n_trials=n_trials)
@@ -150,6 +174,14 @@ def tune_lgbm_hyperparameters(
     print("\n[+] 超参寻优完成！最优参数：")
     for key, value in study.best_params.items():
         print(f"    {key}: {value}")
+
+    # 缓存结果
+    try:
+        Path(str(FS_CACHE_DIR)).mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w") as f:
+            json.dump(study.best_params, f)
+    except Exception:
+        pass
 
     return study.best_params
 

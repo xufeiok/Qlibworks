@@ -1,7 +1,10 @@
 import pandas as pd
 import numpy as np
+import logging
 from qlib.data.dataset.processor import Processor
 from sklearn.linear_model import Ridge
+
+_logger = logging.getLogger(__name__)
 
 class CSNeutralize(Processor):
     """
@@ -22,7 +25,7 @@ class CSNeutralize(Processor):
         # 1. 提取要中性化的目标数据矩阵
         data = df[self.fields_group].copy()
         
-        print(f"[CSNeutralize] Fetching exposures (industry, market_cap) for robust Ridge neutralization...")
+        _logger.debug("Fetching exposures (industry, market_cap) for robust Ridge neutralization...")
         
         # 2. 从 Qlib 拉取行业和市值数据
         from qlib.data import D
@@ -51,12 +54,12 @@ class CSNeutralize(Processor):
                 exposures['market_cap'] = np.log(exposures['market_cap'])
                 
         except Exception as e:
-            print(f"[CSNeutralize] Warning: Failed to fetch exposure data ({e}). Falling back to mean-centering.")
+            _logger.warning("Failed to fetch exposure data (%s). Falling back to mean-centering.", e)
             neutralized_data = data.groupby(level="datetime").apply(lambda x: x - x.mean())
             df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
             return df
 
-        print(f"[CSNeutralize] Running Ridge cross-sectional neutralization for group: {self.fields_group}...")
+        _logger.debug("Running Ridge cross-sectional neutralization for group: %s...", self.fields_group)
 
         # 3. 按日期进行截面中性化
         def _robust_ridge_neutralize_slice(sub_df):
@@ -120,5 +123,5 @@ class CSNeutralize(Processor):
         neutralized_data = data.groupby(level='datetime', group_keys=False).apply(_robust_ridge_neutralize_slice)
         df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
         
-        print(f"[CSNeutralize] Ridge Neutralization completed.")
+        _logger.debug("Ridge Neutralization completed.")
         return df

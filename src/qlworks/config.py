@@ -43,3 +43,7 @@ FINANCIAL_DATE_COLUMNS = {
 }
 
 ADJUSTED_PRICE_TYPE = os.environ.get('ADJUSTED_PRICE_TYPE', 'qfq')
+
+# ==================== 交易费率配置 ====================
+STAMP_DUTY = float(os.environ.get('STAMP_DUTY', '0.0005'))  # 印花税（卖出单向），当前A股万分之五
+COMMISSION = float(os.environ.get('COMMISSION', '0.0003'))  # 券商佣金（双向），默认万分之三

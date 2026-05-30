@@ -11,6 +11,7 @@ from .selection import (
 from .training import prepare_split_frames, train_lgb_model, train_linear_baseline
 from .tuning import tune_lgbm_hyperparameters
 from .portfolio import optimize_portfolio
+from .attribution import factor_attribution
 
 __all__ = [
     "evaluate_prediction_frame",
@@ -28,4 +29,5 @@ __all__ = [
     "train_linear_baseline",
     "tune_lgbm_hyperparameters",
     "optimize_portfolio",
+    "factor_attribution",
 ]

@@ -27,6 +27,9 @@ _*.py
 frontend/node_modules/
 frontend/dist/
 
+# Claude 工具链（可重新安装）
+node_modules/
+
 # 大文件（可重新生成）
 scripts/model_training/score_*.csv
 drafts/bt_results_*/

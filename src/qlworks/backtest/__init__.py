@@ -10,12 +10,11 @@ if custom_bt_dir not in sys.path:
 if bt_superplot_dir not in sys.path:
     sys.path.insert(0, bt_superplot_dir)
 
-from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy
+from .bt_strategy import QlibPandasData, EnhancedQlibStrategy
 from .bt_runner import run_qlib_backtrader, run_duckdb_backtrader
 
 __all__ = [
     'QlibPandasData',
-    'BaseQlibStrategy',
     'EnhancedQlibStrategy',
     'run_qlib_backtrader',
     'run_duckdb_backtrader'

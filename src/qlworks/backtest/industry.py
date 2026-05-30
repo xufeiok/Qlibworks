@@ -42,7 +42,6 @@ def apply_industry_constraint(pred_df, industry_map, top_k=20, max_per_industry=
         records.extend(selected)
 
     constrained = pd.DataFrame(records)
-    constrained.set_index(['datetime', 'instrument'], inplace=True)
-    constrained.drop(columns=['industry'], inplace=True)
+    constrained = pd.DataFrame(records).set_index(['datetime', 'instrument']).drop(columns=['industry'])
     print(f"    - 约束前 {len(df)} 条 → 约束后 {len(constrained)} 条")
     return constrained[['score']]

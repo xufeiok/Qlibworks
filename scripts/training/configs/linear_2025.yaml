@@ -1,0 +1,77 @@
+# =====================================================================
+# 量化策略配置文件
+# =====================================================================
+# 通用配置
+instruments: csi500
+start_time: "2020-01-01"
+end_time: "2025-12-31"
+model_type: linear  # 可选: tree, linear, nn
+
+# 标签: T+1开盘买入, T+5收盘卖出
+label_fields: ["Ref($close, -5) / Ref($open, -1) - 1"]
+label_names: ["LABEL_5D"]
+
+# 因子库
+factor_files:
+  - style_factors
+  - quality_factors
+  - price_volume_factors
+  - sentiment_factors
+  - risk_factors
+
+# 预处理
+neutralize_features: true
+neutralize_labels: true
+symmetric_orthogonalization: true
+
+# 滚动窗口 (Walk-Forward)
+rolling_windows:
+  - name: Test_2023
+    train: ["2020-01-01", "2021-12-20"]
+    valid: ["2022-01-01", "2022-12-20"]
+    test:  ["2023-01-01", "2023-12-31"]
+  - name: Test_2024
+    train: ["2021-01-01", "2022-12-20"]
+    valid: ["2023-01-01", "2023-12-20"]
+    test:  ["2024-01-01", "2024-12-31"]
+
+# 特征选择
+feature_selection:
+  method: filter
+  algo: f_regression
+  label_col: LABEL_5D
+  remove_collinearity: false
+
+top_k_factors: 50
+
+# ICIR 稳定性校验
+icir_stability_check:
+  enabled: true
+  rolling_window: 60
+  keep_ratio: 0.9
+
+# 模型调优
+model_tuning:
+  use_optuna: false
+  n_trials: 5
+
+# 组合优化
+portfolio:
+  enable: true
+  target_volatility: 0.30
+  max_weight: 0.10
+
+# 回测
+backtest:
+  enable: true
+  top_k: 20
+  rebalance_days: 5
+  initial_cash: 1000000.0
+  commission: 0.0005
+  slippage: 0.001
+  use_risk_control: true
+  stop_type: ATR
+  atr_multiplier: 2.0
+  trailing_stop: true
+  trailing_start_pct: 0.10
+  trailing_callback_pct: 0.02

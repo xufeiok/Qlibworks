@@ -6,8 +6,13 @@ import argparse
 import sys
 import duckdb
 
-# 为了让直接调用本文件或提前导入时不报错，如果 sys.path 还没有被修改，则在这里进行保底处理
-bt_superplot_dir = os.path.abspath(r"e:\Quant\backtrader_superplot\backtrader_superplot")
+# ========== Backtrader SuperPlot 路径配置 ==========
+# 优先从环境变量 BT_SUPERPLOT_DIR 读取，后兼容旧硬编码路径
+_bt_sp_env = os.environ.get('BT_SUPERPLOT_DIR')
+if _bt_sp_env:
+    bt_superplot_dir = os.path.abspath(_bt_sp_env)
+else:
+    bt_superplot_dir = os.path.abspath(r"e:\Quant\backtrader_superplot\backtrader_superplot")
 custom_bt_dir = os.path.join(bt_superplot_dir, "backtrader-1.9.74.123", "backtrader-1.9.74.123")
 
 if custom_bt_dir not in sys.path:
@@ -17,12 +22,68 @@ if bt_superplot_dir not in sys.path:
 
 import backtrader as bt
 
+from qlworks.config import STAMP_DUTY, COMMISSION as CFG_COMMISSION
+
 try:
     from backtrader.analyzers import SuperPlot
 except ImportError:
     SuperPlot = None
 
-from .bt_strategy import QlibPandasData, BaseQlibStrategy, EnhancedQlibStrategy, AShareCommission
+from .bt_strategy import QlibPandasData, EnhancedQlibStrategy, AShareCommission
+
+
+def _print_backtest_report(strat, initial_cash: float, final_value: float) -> None:
+    """
+    打印回测核心绩效报告。
+
+    从策略的 analyzers 中提取关键指标，安全处理缺失/异常数据。
+
+    Args:
+        strat: 运行完成的 bt.Strategy 实例
+        initial_cash: 初始资金
+        final_value: 期末资金
+    """
+    try:
+        trade_analyzer = strat.analyzers.tradeanalyzer.get_analysis()
+        dd = strat.analyzers.drawdown.get_analysis()
+        sharpe_analysis = strat.analyzers.sharpe.get_analysis()
+        returns_analysis = strat.analyzers.returns.get_analysis()
+        sqn_analysis = strat.analyzers.sqn.get_analysis()
+
+        # 总收益率
+        total_ret = 0.0
+        if 'pnl' in trade_analyzer and 'net' in trade_analyzer['pnl'] and 'total' in trade_analyzer['pnl']:
+            total_pnl = trade_analyzer['pnl']['net']['total']
+            total_ret = (total_pnl / initial_cash) * 100
+        else:
+            total_ret = ((final_value - initial_cash) / initial_cash) * 100
+
+        max_dd = dd.get('max', {}).get('drawdown', 0)
+        sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0) or 0.0
+        sqn = sqn_analysis.get('sqn', 0.0)
+
+        total_trades = trade_analyzer.get('total', {}).get('closed', 0)
+        won_trades = trade_analyzer.get('won', {}).get('total', 0)
+        win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0.0
+
+        days = len(returns_analysis)
+        annual_ret = ((1 + total_ret / 100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
+
+        print("\n" + "=" * 40)
+        print("【量化回测核心绩效报告 (Institutional Metrics)】")
+        print("=" * 40)
+        print(f"期末资金:   {final_value:.2f}")
+        print(f"总收益率:   {total_ret:.2f}%")
+        print(f"年化收益率: {annual_ret:.2f}%")
+        print(f"最大回撤:   {max_dd:.2f}%")
+        print(f"夏普比率:   {sharpe_ratio:.3f} (Sharpe Ratio)")
+        print(f"系统质量:   {sqn:.3f} (SQN)")
+        print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
+        calmar = annual_ret / max_dd if max_dd > 0 else float('inf')
+        print(f"收益回撤比: {calmar:.2f} (Calmar Ratio Proxy)")
+        print("=" * 40 + "\n")
+    except Exception as e:
+        print(f"解析基础分析器结果时出错: {e}")
 
 def run_qlib_backtrader(
     pred_df: pd.DataFrame,
@@ -31,7 +92,7 @@ def run_qlib_backtrader(
     strategy_class=EnhancedQlibStrategy,
     strategy_params=None,
     initial_cash=100000.0,
-    commission=0.001,
+    commission=CFG_COMMISSION,
     set_slippage_perc=0.0,
     server_url='http://localhost:5888/api/backtest/upload',
     timeframe_label='1d',
@@ -69,8 +130,7 @@ def run_qlib_backtrader(
     cerebro.broker.setcash(initial_cash)
     
     # [Virtu 改进] 注入 A 股真实手续费模型（区分买卖、印花税）
-    # 将用户传入的 commission 参数传递给 AShareCommission
-    comminfo = AShareCommission(stamp_duty=0.001, commission=commission)
+    comminfo = AShareCommission(stamp_duty=STAMP_DUTY, commission=commission)
     cerebro.broker.addcommissioninfo(comminfo)
     
     if set_slippage_perc > 0:
@@ -129,17 +189,12 @@ def run_qlib_backtrader(
         # 对齐到统一日期范围，避免新股上市日期偏斜整个回测起点
         df = df.reindex(full_calendar)
 
-        # 对未上市前的日期，用首日价格回填 OHLC，成交量设为 0
-        valid_mask = df['close'].notna()
-        if valid_mask.any():
-            first_valid_idx = valid_mask.idxmax()
-            df.loc[:first_valid_idx, ['open', 'high', 'low', 'close']] = \
-                df.loc[first_valid_idx, ['open', 'high', 'low', 'close']].values
-            df['volume'] = df['volume'].fillna(0)
-        else:
-            df['volume'] = df['volume'].fillna(0)
+        # [Bloomberg Eng] 不对未上市日期做假数据回填，保留 NaN。
+        # 这样 strategy 中 score 为 NaN 的股票不会被选中，杜绝 IPO 前向偏差。
+        # 下游 dropna(subset=['close']) 会自然过滤掉未上市前的行。
+        df['volume'] = df['volume'].fillna(0)
 
-        # 丢弃没有价格数据的行（防御性检查，理论上已被 reindex 覆盖）
+        # 丢弃没有价格数据的行（防御性检查，自动过滤未上市日期）
         df = df.dropna(subset=['close'])
         
         if len(df) > 0:
@@ -177,65 +232,18 @@ def run_qlib_backtrader(
     print(f"期末资金: {final_value:.2f}")
     
     if results:
-        strat = results[0]
-        
-        try:
-            dd = strat.analyzers.drawdown.get_analysis()
-            trade_analyzer = strat.analyzers.tradeanalyzer.get_analysis()
-            sharpe_analysis = strat.analyzers.sharpe.get_analysis()
-            sqn_analysis = strat.analyzers.sqn.get_analysis()
-            returns_analysis = strat.analyzers.returns.get_analysis()
-            
-            # 安全地获取总收益率
-            total_ret = 0.0
-            if 'pnl' in trade_analyzer and 'net' in trade_analyzer['pnl'] and 'total' in trade_analyzer['pnl']:
-                total_pnl = trade_analyzer['pnl']['net']['total']
-                total_ret = (total_pnl / initial_cash) * 100
-            else:
-                total_ret = ((final_value - initial_cash) / initial_cash) * 100
-                
-            # [Renaissance Backtest Engine] 提取一流量化机构关注的核心绩效指标
-            max_dd = dd.get('max', {}).get('drawdown', 0)
-            sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
-            if sharpe_ratio is None: sharpe_ratio = 0.0
-            
-            sqn = sqn_analysis.get('sqn', 0.0)
-            
-            # 计算胜率 (Win Rate)
-            total_trades = trade_analyzer.get('total', {}).get('closed', 0)
-            won_trades = trade_analyzer.get('won', {}).get('total', 0)
-            win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0.0
-            
-            # 计算年化收益率 (Annualized Return)
-            days = len(returns_analysis)
-            annual_ret = ((1 + total_ret/100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
-            
-            print("\n" + "="*40)
-            print("【量化回测核心绩效报告 (Institutional Metrics)】")
-            print("="*40)
-            print(f"期末资金:   {final_value:.2f}")
-            print(f"总收益率:   {total_ret:.2f}%")
-            print(f"年化收益率: {annual_ret:.2f}%")
-            print(f"最大回撤:   {max_dd:.2f}%")
-            print(f"夏普比率:   {sharpe_ratio:.3f} (Sharpe Ratio)")
-            print(f"系统质量:   {sqn:.3f} (SQN)")
-            print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
-            print(f"收益回撤比: {annual_ret/max_dd if max_dd > 0 else float('inf'):.2f} (Calmar Ratio Proxy)")
-            print("="*40 + "\n")
-            
-        except Exception as e:
-            print(f"解析基础分析器结果时出错: {e}")
-        
+        _print_backtest_report(results[0], initial_cash, final_value)
+
         # 保存 SuperPlot 结果
         if has_superplot:
             try:
-                sp_data = strat.analyzers.superplot.get_analysis()
-                
+                sp_data = results[0].analyzers.superplot.get_analysis()
+
                 # 用我们自定义的带 stock_code 的订单列表覆盖原来的 orders_data
-                if hasattr(strat, 'all_orders') and len(strat.all_orders) > 0:
+                if hasattr(results[0], 'all_orders') and len(results[0].all_orders) > 0:
                     if 'orders_data' not in sp_data:
                         sp_data['orders_data'] = {}
-                    sp_data['orders_data']['orders'] = strat.all_orders
+                    sp_data['orders_data']['orders'] = results[0].all_orders
 
                 os.makedirs(output_dir, exist_ok=True)
                 out_path = os.path.join(output_dir, f'qlib_bt_superplot.json')
@@ -257,7 +265,7 @@ def run_duckdb_backtrader(
     strategy_class=bt.Strategy, 
     strategy_params=None,
     initial_cash=100000.0,
-    commission=0.001,
+    commission=CFG_COMMISSION,
     set_slippage_perc=0.0,
     server_url='http://localhost:5888/api/backtest/upload',
     timeframe_label='1d',
@@ -322,7 +330,7 @@ def run_duckdb_backtrader(
             conn.close()
             if not df.empty:
                 df['datetime'] = pd.to_datetime(df['datetime'])
-                df.set_index('datetime', inplace=True)
+                df = df.set_index('datetime')
                 for col in ['open', 'high', 'low', 'close', 'volume']:
                     df[col] = pd.to_numeric(df[col], errors='coerce')
                 df['openinterest'] = 0
@@ -336,8 +344,7 @@ def run_duckdb_backtrader(
         print(f"拉取基准数据: {benchmark_code}")
         df_bench = fetch_data(benchmark_code)
         if not df_bench.empty:
-            # 使用标准的 PandasData
-            data_bench = bt.feeds.PandasData(dataname=df_bench, name='benchmark', timeframe=bt.TimeFrame.Days)
+            data_bench = QlibPandasData(dataname=df_bench, name='benchmark', timeframe=bt.TimeFrame.Days)
             cerebro.adddata(data_bench)
             print(f"已加载基准数据 ({benchmark_code})")
         else:
@@ -389,64 +396,18 @@ def run_duckdb_backtrader(
     print(f"期末资金: {final_value:.2f}")
     
     if results:
-        strat = results[0]
-        
-        try:
-            dd = strat.analyzers.drawdown.get_analysis()
-            trade_analyzer = strat.analyzers.tradeanalyzer.get_analysis()
-            sharpe_analysis = strat.analyzers.sharpe.get_analysis()
-            sqn_analysis = strat.analyzers.sqn.get_analysis()
-            returns_analysis = strat.analyzers.returns.get_analysis()
-            
-            total_ret = 0.0
-            if 'pnl' in trade_analyzer and 'net' in trade_analyzer['pnl'] and 'total' in trade_analyzer['pnl']:
-                total_pnl = trade_analyzer['pnl']['net']['total']
-                total_ret = (total_pnl / initial_cash) * 100
-            else:
-                total_ret = ((final_value - initial_cash) / initial_cash) * 100
-                
-            # [Renaissance Backtest Engine] 提取一流量化机构关注的核心绩效指标
-            max_dd = dd.get('max', {}).get('drawdown', 0)
-            sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0)
-            if sharpe_ratio is None: sharpe_ratio = 0.0
-            
-            sqn = sqn_analysis.get('sqn', 0.0)
-            
-            # 计算胜率 (Win Rate)
-            total_trades = trade_analyzer.get('total', {}).get('closed', 0)
-            won_trades = trade_analyzer.get('won', {}).get('total', 0)
-            win_rate = (won_trades / total_trades * 100) if total_trades > 0 else 0.0
-            
-            # 计算年化收益率 (Annualized Return)
-            days = len(returns_analysis)
-            annual_ret = ((1 + total_ret/100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
-            
-            print("\n" + "="*40)
-            print("【量化回测核心绩效报告 (Institutional Metrics)】")
-            print("="*40)
-            print(f"期末资金:   {final_value:.2f}")
-            print(f"总收益率:   {total_ret:.2f}%")
-            print(f"年化收益率: {annual_ret:.2f}%")
-            print(f"最大回撤:   {max_dd:.2f}%")
-            print(f"夏普比率:   {sharpe_ratio:.3f} (Sharpe Ratio)")
-            print(f"系统质量:   {sqn:.3f} (SQN)")
-            print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
-            print(f"收益回撤比: {annual_ret/max_dd if max_dd > 0 else float('inf'):.2f} (Calmar Ratio Proxy)")
-            print("="*40 + "\n")
-            
-        except Exception as e:
-            print(f"解析基础分析器结果时出错: {e}")
-        
+        _print_backtest_report(results[0], initial_cash, final_value)
+
         # 保存 SuperPlot 结果
         if has_superplot:
             try:
-                sp_data = strat.analyzers.superplot.get_analysis()
-                
+                sp_data = results[0].analyzers.superplot.get_analysis()
+
                 # 用自定义带 stock_code 的订单列表覆盖 (如果有)
-                if hasattr(strat, 'all_orders') and len(strat.all_orders) > 0:
+                if hasattr(results[0], 'all_orders') and len(results[0].all_orders) > 0:
                     if 'orders_data' not in sp_data:
                         sp_data['orders_data'] = {}
-                    sp_data['orders_data']['orders'] = strat.all_orders
+                    sp_data['orders_data']['orders'] = results[0].all_orders
 
                 os.makedirs(output_dir, exist_ok=True)
                 out_path = os.path.join(output_dir, f'duckdb_bt_superplot.json')
@@ -455,5 +416,5 @@ def run_duckdb_backtrader(
                 print(f"SuperPlot 渲染数据已本地保存至: {out_path}")
             except Exception as e:
                 print(f"保存 SuperPlot 数据失败: {e}")
-            
+
     return cerebro, results

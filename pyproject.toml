@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "qlibworks"
 version = "0.1.0"
 description = "Qlib research workspace wired to DuckDB data source"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 dependencies = [
   "pandas>=1.5",
   "numpy>=1.23",
