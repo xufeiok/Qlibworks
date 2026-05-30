@@ -11,11 +11,13 @@
 from __future__ import annotations
 
 import os
-import io
+import time
 import hashlib
-from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections import deque
+import threading
 
 import pandas as pd
 import numpy as np
@@ -42,86 +44,263 @@ if not TUSHARE_TOKEN:
     warnings.warn("TUSHARE_TOKEN 未设置，Tushare 后备数据源不可用。请在 .env 文件中配置 TUSHARE_TOKEN")
 
 
+# ==================== Qlib 兼容层（原 access.py） ====================
+
+InstrumentInput = str | Sequence[str]
+
+
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True)
+class DataFetchSpec:
+    """
+    [废弃] 请直接用 qlib.data.D.features() 替代。
+    本类保留仅用于向后兼容，将在未来版本中移除。
+    """
+
+    instruments: InstrumentInput
+    fields: Sequence[str]
+    start_time: str
+    end_time: str
+    freq: str = "day"
+
+
+class QlibDataAccessor:
+    """
+    [废弃] 请使用 qlib.data.D 直接访问 Qlib 数据。
+
+    替代方案：
+        import qlib; qlib.init(provider_uri=..., region='cn')
+        from qlib.data import D
+        cal = D.calendar(...)
+        df = D.features(...)
+
+    本类保留仅用于向后兼容，将在未来版本中移除。
+    """
+
+    def __init__(self, provider_uri: Optional[str] = None, region: str = "cn"):
+        import warnings
+        warnings.warn(
+            "QlibDataAccessor 已废弃，请直接使用 qlib.data.D。",
+            DeprecationWarning, stacklevel=2
+        )
+        self.provider_uri = str(provider_uri or QLIB_DATA_DIR)
+        self.region = region
+        self._initialized = False
+
+    def ensure_init(self) -> None:
+        """按需初始化 Qlib。"""
+        if self._initialized:
+            return
+        try:
+            import qlib
+        except ImportError as exc:
+            raise ImportError("未安装 pyqlib，无法使用 Qlib 数据访问能力。") from exc
+
+        qlib.init(provider_uri=self.provider_uri, region=self.region)
+        self._initialized = True
+
+    def calendar(self, start_time: str, end_time: str, freq: str = "day"):
+        """获取交易日历。"""
+        self.ensure_init()
+        from qlib.data import D
+
+        return D.calendar(start_time=start_time, end_time=end_time, freq=freq)
+
+    def list_instruments(
+        self,
+        instruments: InstrumentInput,
+        start_time: str,
+        end_time: str,
+        freq: str = "day",
+        as_list: bool = True,
+    ) -> List[str]:
+        """将股票池配置展开为具体股票列表。"""
+        self.ensure_init()
+        if isinstance(instruments, (list, tuple)):
+            return [str(x) for x in instruments]
+
+        from qlib.data import D
+
+        conf = D.instruments(instruments)
+        if as_list:
+            return D.list_instruments(
+                conf,
+                start_time=start_time,
+                end_time=end_time,
+                freq=freq,
+                as_list=True,
+            )
+        return conf
+
+    def fetch_features(self, spec: DataFetchSpec) -> pd.DataFrame:
+        """提取 Qlib 特征/因子数据。"""
+        self.ensure_init()
+        from qlib.data import D
+
+        return D.features(
+            instruments=spec.instruments,
+            fields=list(spec.fields),
+            start_time=spec.start_time,
+            end_time=spec.end_time,
+            freq=spec.freq,
+        )
+
+    def fetch_labels(
+        self,
+        instruments: InstrumentInput,
+        label_fields: Sequence[str],
+        start_time: str,
+        end_time: str,
+        freq: str = "day",
+    ) -> pd.DataFrame:
+        """提取监督学习标签。"""
+        spec = DataFetchSpec(
+            instruments=instruments,
+            fields=label_fields,
+            start_time=start_time,
+            end_time=end_time,
+            freq=freq,
+        )
+        return self.fetch_features(spec)
+
+    def fetch_feature_label_frame(
+        self,
+        feature_spec: DataFetchSpec,
+        label_fields: Sequence[str],
+        label_names: Optional[Sequence[str]] = None,
+    ) -> pd.DataFrame:
+        """一次性提取特征与标签并按索引对齐，形成统一研究底表。"""
+        feature_df = self.fetch_features(feature_spec)
+        label_df = self.fetch_labels(
+            instruments=feature_spec.instruments,
+            label_fields=label_fields,
+            start_time=feature_spec.start_time,
+            end_time=feature_spec.end_time,
+            freq=feature_spec.freq,
+        )
+        if label_names is None:
+            label_names = [f"LABEL{i}" for i in range(len(label_df.columns))]
+        label_df = label_df.copy()
+        label_df.columns = list(label_names)
+        return feature_df.join(label_df, how="left")
+
+
+# ==================== 现代统一数据 API ====================
+
 class QuantDataAPI:
     """
     统一数据访问接口 - 整个项目的数据核心枢纽
-    
+
     架构原则：
     1. ClickHouse 是唯一真实数据源 (SSOT)
-    2. DuckDB 作为智能缓存层
-    3. Qlib/Parquet 作为专用格式导出
-    4. 自动化缓存管理和一致性检查
+    2. DuckDB 作为查询缓存层（针对不变历史数据，避免重复查询 ClickHouse）
+    3. Tushare 作为后备数据源
     """
-    
-    def __init__(self, cache_ttl: int = 86400):
+
+    def __init__(self):
         """
         初始化 QuantDataAPI
-        
-        Args:
-            cache_ttl: 缓存过期时间（秒），默认 24 小时
         """
-        self.cache_ttl = cache_ttl
         self._ch_client = None
         self._duckdb_conn = None
         self._tushare_pro = None  # Tushare Pro 客户端
+        # Tushare 限速器（实例级别，避免每次调用 get_daily_data 重建）
+        self._ts_rate_limit_sem = threading.Semaphore(4)  # 最多 4 个并发
+        self._ts_last_requests: deque = deque(maxlen=80)
+        self._ts_executor = ThreadPoolExecutor(max_workers=4)
         self._init_duckdb()
-    
+
     def _init_duckdb(self):
-        """初始化 DuckDB 连接和系统表"""
+        """初始化 DuckDB 连接和查询缓存表"""
+        DUCKDB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._duckdb_conn = duckdb.connect(str(DUCKDB_PATH))
-        
-        # 创建查询缓存表
         self._duckdb_conn.execute("""
             CREATE TABLE IF NOT EXISTS query_cache (
                 query_hash VARCHAR PRIMARY KEY,
-                data BLOB,
-                created_at TIMESTAMP,
-                sql_text VARCHAR
-            )
-        """)
-        
-        # 创建特征元数据表
-        self._duckdb_conn.execute("""
-            CREATE TABLE IF NOT EXISTS feature_metadata (
-                feature_name VARCHAR,
-                version VARCHAR,
-                description VARCHAR,
-                created_at TIMESTAMP,
-                start_date DATE,
-                end_date DATE,
-                num_stocks INTEGER,
-                columns VARCHAR,
-                file_path VARCHAR,
-                PRIMARY KEY (feature_name, version)
-            )
-        """)
-        
-        # 创建数据同步日志表
-        self._duckdb_conn.execute("""
-            CREATE TABLE IF NOT EXISTS sync_log (
-                sync_id INTEGER PRIMARY KEY,
-                sync_type VARCHAR,
-                target_table VARCHAR,
-                start_time TIMESTAMP,
-                end_time TIMESTAMP,
-                rows_synced INTEGER,
-                status VARCHAR,
-                error_message VARCHAR
+                cached_at TIMESTAMP DEFAULT NOW(),
+                row_count INTEGER,
+                result BLOB
             )
         """)
     
     def _get_ch_client(self):
-        """获取 ClickHouse 客户端（单例模式）"""
-        if self._ch_client is None:
-            self._ch_client = clickhouse_connect.get_client(
-                host=CH_HOST,
-                port=CH_PORT,
-                user=CH_USER,
-                password=CH_PASSWORD,
-                database=CH_DATABASE
-            )
-        return self._ch_client
-    
+        """获取 ClickHouse 客户端（单例模式，带指数退避重试）"""
+        if self._ch_client is not None:
+            return self._ch_client
+
+        last_exc = None
+        for attempt in range(3):
+            try:
+                self._ch_client = clickhouse_connect.get_client(
+                    host=CH_HOST,
+                    port=CH_PORT,
+                    user=CH_USER,
+                    password=CH_PASSWORD,
+                    database=CH_DATABASE,
+                    connect_timeout=15,
+                )
+                return self._ch_client
+            except Exception as e:
+                last_exc = e
+                if attempt < 2:
+                    wait = 2 ** attempt
+                    print(f"[重试] ClickHouse 连接失败 (第{attempt+1}次)，{wait}s 后重试: {e}")
+                    time.sleep(wait)
+        raise ConnectionError(f"ClickHouse 连接失败，已重试 3 次: {last_exc}")
+
+    # ==================== DuckDB 查询缓存 ====================
+
+    def _cache_hash(self, sql: str) -> str:
+        return hashlib.md5(sql.encode()).hexdigest()[:24]
+
+    def _cache_get(self, sql: str) -> Optional[pd.DataFrame]:
+        h = self._cache_hash(sql)
+        row = self._duckdb_conn.execute(
+            "SELECT result FROM query_cache WHERE query_hash = ?", [h]
+        ).fetchone()
+        if row is None:
+            return None
+        import pickle
+        return pickle.loads(row[0])
+
+    def _cache_set(self, sql: str, df: pd.DataFrame):
+        h = self._cache_hash(sql)
+        import pickle
+        self._duckdb_conn.execute(
+            "INSERT OR REPLACE INTO query_cache (query_hash, cached_at, row_count, result) VALUES (?, NOW(), ?, ?)",
+            [h, len(df), pickle.dumps(df)]
+        )
+
+    def query_cached(self, sql: str) -> pd.DataFrame:
+        """带 DuckDB 缓存的查询：先查缓存，未命中则查 ClickHouse 后缓存。"""
+        cached = self._cache_get(sql)
+        if cached is not None:
+            return cached
+        df = self.query(sql)
+        if not df.empty:
+            self._cache_set(sql, df)
+        return df
+
+    def _rate_limited_tushare_fetch(self, ts_code: str, start_dt: str, end_dt: str) -> pd.DataFrame:
+        """
+        带限速的 Tushare 单股数据获取（供 ThreadPoolExecutor 调用）。
+
+        滑动窗口算法：保证最近 60 秒内不超过 40 次请求（免费版限额）。
+        """
+        with self._ts_rate_limit_sem:
+            now = time.time()
+            window_start = now - 60
+            while self._ts_last_requests and self._ts_last_requests[0] < window_start:
+                self._ts_last_requests.popleft()
+            if len(self._ts_last_requests) >= 40:
+                sleep_time = self._ts_last_requests[0] + 60 - now
+                if sleep_time > 0:
+                    time.sleep(sleep_time)
+            self._ts_last_requests.append(time.time())
+        return self._fetch_from_tushare(ts_code, start_dt, end_dt)
+
     def _close_connections(self):
         """关闭所有连接"""
         if self._ch_client:
@@ -130,6 +309,7 @@ class QuantDataAPI:
         if self._duckdb_conn:
             self._duckdb_conn.close()
             self._duckdb_conn = None
+        self._ts_executor.shutdown(wait=False)  # wait=False 安全：Python 进程退出时会自行清理残留线程
     
     # ==================== Tushare 后备数据源 ====================
     
@@ -293,32 +473,19 @@ class QuantDataAPI:
     
     # ==================== ClickHouse 查询与缓存 ====================
     
-    def query(self, sql: str, use_cache: bool = True, params: Optional[List] = None) -> pd.DataFrame:
+    def query(self, sql: str, params: Optional[List] = None) -> pd.DataFrame:
         """
-        执行 SQL 查询，自动使用 DuckDB 缓存
-        
+        执行 SQL 查询（直连 ClickHouse）。
+
         Args:
             sql: SQL 查询语句
-            use_cache: 是否使用缓存
             params: SQL 参数列表
-            
+
         Returns:
             查询结果的 DataFrame
         """
-        # 转换占位符格式
         sql, params = self._convert_placeholders(sql, params)
-
-        if not use_cache:
-            return self._get_ch_client().query_df(sql, params)
-
-        # 生成查询哈希
-        query_str = sql + str(params) if params else sql
-        query_hash = hashlib.md5(query_str.encode()).hexdigest()
-
-        # 从 ClickHouse 查询（暂时禁用缓存，避免 DuckDB 二进制数据存储问题）
-        df = self._get_ch_client().query_df(sql, params)
-
-        return df
+        return self._get_ch_client().query_df(sql, params)
 
     def _convert_placeholders(self, sql: str, params: list) -> tuple:
         """将 ? 占位符转换为 ClickHouse 的 $n 格式"""
@@ -334,19 +501,6 @@ class QuantDataAPI:
                 result.append(char)
         new_sql = ''.join(result)
         return new_sql, params
-    
-    def clear_cache(self, ttl: Optional[int] = None):
-        """
-        清理过期缓存
-
-        Args:
-            ttl: 自定义 TTL，不传则使用默认值
-        """
-        ttl = ttl or self.cache_ttl
-        result = self._duckdb_conn.execute(f"""
-            DELETE FROM query_cache WHERE created_at < NOW() - INTERVAL '{ttl}' SECOND
-        """)
-        print(f"清理了 {result.rowcount} 条缓存记录")
     
     # ==================== 基础数据查询 ====================
     
@@ -429,24 +583,27 @@ class QuantDataAPI:
 
         sql += " ORDER BY p.ts_code, p.trade_date"
         
-        # 1. 首先从 ClickHouse 查询
-        df_ch = self.query(sql, params=[], use_cache=False)
+        # 1. 首先从 ClickHouse 查询（DuckDB 缓存）
+        df_ch = self.query_cached(sql)
         
-        # 2. 如果 ClickHouse 数据为空，尝试从 Tushare 获取
+        # 2. 如果 ClickHouse 数据为空，尝试从 Tushare 获取（带限速并发）
         if df_ch.empty and _TUSHARE_AVAILABLE and ts_codes:
             print(f"⚠️ ClickHouse 数据为空，尝试从 Tushare 获取前复权数据...")
-            
+
             # 标准化日期格式
             start_dt = start_date if start_date else '2000-01-01'
             end_dt = end_date if end_date else datetime.now().strftime('%Y-%m-%d')
-            
-            # 从 Tushare 获取每只股票的数据
+
             tushare_dfs = []
-            for ts_code in ts_codes:
-                df_tu = self._fetch_from_tushare(ts_code, start_dt, end_dt)
-                if not df_tu.empty:
-                    tushare_dfs.append(df_tu)
-            
+            fut_map = {self._ts_executor.submit(self._rate_limited_tushare_fetch, c, start_dt, end_dt): c for c in ts_codes}
+            for fut in as_completed(fut_map):
+                    try:
+                        df_tu = fut.result()
+                        if not df_tu.empty:
+                            tushare_dfs.append(df_tu)
+                    except Exception as e:
+                        print(f"⚠️ Tushare 并发获取失败 ({fut_map[fut]}): {e}")
+
             if tushare_dfs:
                 df_ch = pd.concat(tushare_dfs, ignore_index=True)
                 
@@ -569,203 +726,15 @@ class QuantDataAPI:
             sql += f" AND {date_col} <= '{end_date}'"
 
         sql += " ORDER BY ts_code, ann_date" if use_ann else " ORDER BY ts_code, end_date"
-        df = self.query(sql, params=[])
+        df = self.query_cached(sql)
         
         if use_ann and 'end_date' in df.columns and 'ann_date' in df.columns:
             df = df.drop(columns=['end_date'])
         
         return df
-    
-    # ==================== Qlib 数据同步 ====================
-    
-    def sync_qlib_full(self, start_date: str, end_date: str, instruments: Optional[List[str]] = None):
-        """
-        全量同步 Qlib 数据
-        
-        Args:
-            start_date: 开始日期
-            end_date: 结束日期
-            instruments: 股票列表，None 表示全部主板股票
-        """
-        from qlworks.data.qlib_sync import QlibSynchronizer
-        
-        syncer = QlibSynchronizer(self)
-        syncer.full_sync(start_date, end_date, instruments)
-    
-    def sync_qlib_incremental(self):
-        """增量同步 Qlib 数据"""
-        from qlworks.data.qlib_sync import QlibSynchronizer
-        
-        syncer = QlibSynchronizer(self)
-        syncer.incremental_sync()
-    
-    # ==================== Parquet 特征管理 ====================
-    
-    def save_feature(
-        self,
-        df: pd.DataFrame,
-        name: str,
-        version: str,
-        description: str = "",
-        category: str = "experimental",
-        date_column: str = "trade_date"
-    ) -> Path:
-        """
-        保存特征数据，自动记录元数据
-        
-        Args:
-            df: 特征数据 DataFrame
-            name: 特征名称
-            version: 版本号
-            description: 描述
-            category: 分类 (fundamental/technical/alternative/experimental)
-            date_column: 日期列名，默认 trade_date，财务数据应传 ann_date
-            
-        Returns:
-            保存的文件路径
-        """
-        feature_dir = QLIB_DATA_DIR / "features" / category
-        feature_dir.mkdir(parents=True, exist_ok=True)
-        
-        file_name = f"{name}_v{version}.parquet"
-        file_path = feature_dir / file_name
-        
-        # 保存数据
-        df.to_parquet(file_path, index=False)
-        
-        # 确定日期列（兼容不同数据格式）
-        date_col = date_column if date_column in df.columns else None
-        if date_col is None:
-            for col in ['ann_date', 'trade_date', 'date']:
-                if col in df.columns:
-                    date_col = col
-                    break
-        
-        # 保存元数据
-        self._duckdb_conn.execute("""
-            INSERT OR REPLACE INTO feature_metadata
-            (feature_name, version, description, created_at, start_date, end_date, num_stocks, columns, file_path)
-            VALUES (?, ?, ?, NOW(), ?, ?, ?, ?, ?)
-        """, [
-            name, version, description,
-            df[date_col].min() if date_col and date_col in df.columns else None,
-            df[date_col].max() if date_col and date_col in df.columns else None,
-            df["ts_code"].nunique() if "ts_code" in df.columns else 0,
-            ",".join(df.columns),
-            str(file_path)
-        ])
-        
-        return file_path
-    
-    def load_feature(self, name: str, version: Optional[str] = None) -> pd.DataFrame:
-        """
-        加载特征数据，自动获取最新版本
-        
-        Args:
-            name: 特征名称
-            version: 版本号，None 表示最新版本
-            
-        Returns:
-            特征数据 DataFrame
-        """
-        if version is None:
-            version_result = self._duckdb_conn.execute("""
-                SELECT version FROM feature_metadata 
-                WHERE feature_name = ? ORDER BY created_at DESC LIMIT 1
-            """, [name]).fetchone()
-            if not version_result:
-                raise FileNotFoundError(f"未找到特征：{name}")
-            version = version_result[0]
-        
-        file_path_result = self._duckdb_conn.execute("""
-            SELECT file_path FROM feature_metadata 
-            WHERE feature_name = ? AND version = ?
-        """, [name, version]).fetchone()
-        
-        if not file_path_result:
-            raise FileNotFoundError(f"未找到特征：{name} v{version}")
-        
-        return pd.read_parquet(file_path_result[0])
-    
-    def list_features(self, category: Optional[str] = None) -> pd.DataFrame:
-        """
-        列出所有特征
-        
-        Args:
-            category: 分类过滤
-            
-        Returns:
-            特征元数据 DataFrame
-        """
-        if category:
-            return self._duckdb_conn.execute("""
-                SELECT * FROM feature_metadata 
-                WHERE file_path LIKE ?
-                ORDER BY feature_name, created_at DESC
-            """, [f"%/{category}/%"]).df()
-        return self._duckdb_conn.execute("SELECT * FROM feature_metadata ORDER BY feature_name, created_at DESC").df()
-    
-    # ==================== 数据一致性检查 ====================
-    
-    def check_consistency(self) -> Dict[str, bool]:
-        """
-        检查数据一致性
-        
-        Returns:
-            一致性检查结果字典
-        """
-        results = {}
-        
-        # 检查 Qlib 与 ClickHouse 一致性
-        try:
-            qlib_init = False
-            try:
-                import qlib
-                qlib.init(provider_uri=str(QLIB_DATA_DIR))
-                qlib_init = True
-            except:
-                pass
-            
-            if qlib_init:
-                from qlib.data import D
-                qlib_latest = D.calendar()[-1]
-                ch_latest = self.query("SELECT MAX(trade_date) FROM daily_prices").iloc[0, 0]
-                
-                if qlib_latest != ch_latest:
-                    results["qlib_sync"] = False
-                    print(f"⚠️ Qlib 数据不一致：Qlib 最新{qlib_latest}，ClickHouse 最新{ch_latest}")
-                else:
-                    results["qlib_sync"] = True
-                    print("✅ Qlib 数据一致")
-            else:
-                results["qlib_sync"] = None
-                print("⚠️ Qlib 未初始化，跳过检查")
-        except Exception as e:
-            results["qlib_sync"] = False
-            print(f"⚠️ Qlib 一致性检查失败：{e}")
-        
-        # 检查特征文件完整性
-        missing_result = self._duckdb_conn.execute("""
-            SELECT file_path FROM feature_metadata 
-            WHERE file_path IS NOT NULL
-        """).df()
-        
-        missing_files = []
-        for _, row in missing_result.iterrows():
-            if not Path(row["file_path"]).exists():
-                missing_files.append(row["file_path"])
-        
-        if missing_files:
-            results["feature_files"] = False
-            print(f"⚠️ 缺失特征文件：{missing_files}")
-        else:
-            results["feature_files"] = True
-            print("✅ 特征文件完整")
-        
-        return results
-    
+
     def __enter__(self):
         return self
-    
+
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._close_connections()
