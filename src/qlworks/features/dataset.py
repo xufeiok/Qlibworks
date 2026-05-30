@@ -11,6 +11,87 @@ from typing import Dict, Optional, Type
 
 from qlworks.features.builder import FeatureBundle
 
+
+def _build_processors(
+    model_type: str = "tree",
+    neutralize_features: bool = False,
+    neutralize_labels: bool = False,
+    symmetric_orthogonalization: bool = False,
+) -> tuple[list, list]:
+    """
+    工厂函数：根据模型流派和中性化需求构建 Processor 流水线。
+
+    统一了 create_alpha158_dataset 和 create_custom_dataset 中重复的 Processor 装配逻辑。
+
+    Args:
+        model_type: 模型类型 ("tree" / "linear" / "nn")
+        neutralize_features: 是否对特征进行截面中性化
+        neutralize_labels: 是否对标签进行截面分位数化
+        symmetric_orthogonalization: 是否开启对称正交化（仅 linear/nn）
+
+    Returns:
+        (infer_processors, learn_processors) 二元组
+    """
+    base_infer: list = []
+    base_learn: list = [{"class": "DropnaLabel"}]
+
+    # 1. 标签处理：转换为横截面分位数
+    if neutralize_labels:
+        label_rank = {
+            "class": "CSQuantileNorm",
+            "module_path": "qlworks.processors.quantile_norm",
+            "kwargs": {"fields_group": "label"},
+        }
+        base_learn.append(label_rank)
+
+    # 2. 特征标准化
+    if model_type == "tree":
+        norm_cfg = {
+            "class": "CSQuantileNorm",
+            "module_path": "qlworks.processors.quantile_norm",
+            "kwargs": {"fields_group": "feature"},
+        }
+        base_infer.append(norm_cfg)
+        base_learn.append(norm_cfg)
+    else:
+        norm_cfg = {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}}
+        base_infer.append(norm_cfg)
+        base_learn.append(norm_cfg)
+
+    # 3. 特征中性化（线性模型推荐开启，树模型不推荐）
+    if neutralize_features:
+        feat_neutralize = {
+            "class": "CSNeutralize",
+            "module_path": "qlworks.processors.neutralize",
+            "kwargs": {"fields_group": "feature"},
+        }
+        # 线性模型：先 Fillna 再中性化，避免 NaN 导致 OLS 崩溃
+        base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
+        base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
+        base_infer.append(feat_neutralize)
+        base_learn.append(feat_neutralize)
+    else:
+        # 非中性化流派：先 Fillna 收尾
+        fill_value = 0.5 if model_type == "tree" else None
+        fill_kwargs = {"fields_group": "feature"}
+        if fill_value is not None:
+            fill_kwargs["fill_value"] = fill_value
+        base_infer.append({"class": "Fillna", "kwargs": fill_kwargs})
+        base_learn.append({"class": "Fillna", "kwargs": fill_kwargs})
+
+    # 4. 对称正交化（仅 linear/nn，消除共线性）
+    if symmetric_orthogonalization and model_type != "tree":
+        feat_ortho = {
+            "class": "CSSymmetricOrthogonalize",
+            "module_path": "qlworks.processors.orthogonalize",
+            "kwargs": {"fields_group": "feature"},
+        }
+        base_infer.append(feat_ortho)
+        base_learn.append(feat_ortho)
+
+    return base_infer, base_learn
+
+
 def create_dataset_from_handler(handler, segments: Dict[str, tuple]):
     """
     功能概述：
@@ -60,65 +141,16 @@ def create_alpha158_dataset(
     """
     from qlib.contrib.data.handler import Alpha158
 
-    # [Point72 ML 研究员提示] 
+    # [Point72 ML 研究员提示]
     # 对于 XGBoost/LightGBM 等基于树的模型，截面 Z-Score 会破坏时间序列上的绝对动量信息（单调性）。
     # 推荐将 `RobustZScoreNorm` 替换为 `CSQuantileNorm` (截面分位数化)，或在树模型中直接传入原始值。
     # 仅当使用 Ridge/Lasso 线性模型或 神经网络 时，才需要保留 Z-Score 标准化。
     if infer_processors is None and learn_processors is None:
-        base_infer = []
-        base_learn = [{"class": "DropnaLabel"}]
-
-        # 1. 标签(Label)处理：转换为横截面分位数 (CSRank)
-        if neutralize_labels:
-            label_rank = {
-                "class": "CSQuantileNorm",
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "label"}
-            }
-            # Infer 阶段不需要用到 Label，所以只加到 learn_processors
-            base_learn.append(label_rank)
-
-        # 2. 特征标准化与特征中性化
-        if model_type == "tree":
-            # 树模型使用分位数标准化保留截面排名特征，避免极值影响
-            # 【修复】Qlib 原生不支持 CSQuantileNorm，需指明 module_path 调用自定义实现
-            base_infer.append({
-                "class": "CSQuantileNorm", 
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "feature"}
-            })
-            base_learn.append({
-                "class": "CSQuantileNorm", 
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "feature"}
-            })
-        else:
-            # 线性模型/神经网络保留 Z-Score
-            base_infer.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
-            base_learn.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
-            
-        # 是否对特征进行线性中性化（树模型会破坏非线性，通常线性模型开启）
-        if neutralize_features:
-            feat_neutralize = {
-                "class": "CSNeutralize",
-                "module_path": "qlworks.processors.neutralize",
-                "kwargs": {"fields_group": "feature"}
-            }
-            base_infer.append(feat_neutralize)
-            base_learn.append(feat_neutralize)
-
-        # 3. 缺失值填充（必须在最后）
-        if model_type == "tree":
-            # 经过分位数化后，特征在 [0, 1] 之间。默认填 0 会变成最差排名产生偏误，所以中性填充 0.5
-            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0.5}})
-            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0.5}})
-        else:
-            # Z-Score 标准化后，均值为 0，所以填充 0 是中性的
-            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
-            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
-        
-        infer_processors = base_infer
-        learn_processors = base_learn
+        infer_processors, learn_processors = _build_processors(
+            model_type=model_type,
+            neutralize_features=neutralize_features,
+            neutralize_labels=neutralize_labels,
+        )
     segments = segments or {
         "train": (fit_start_time, fit_end_time),
         "valid": ("2020-07-01", "2020-09-30"),
@@ -136,34 +168,6 @@ def create_alpha158_dataset(
     )
     dataset = create_dataset_from_handler(handler, segments)
     return handler, dataset
-
-
-if __name__ == "__main__":
-    print("=== features/dataset.py 独立调用示例 ===")
-    
-    # 演示: 尝试快速生成 Alpha158 数据集
-    # 注意: 这一步需要本地 Qlib 已经初始化，否则会报错。我们这里仅作代码结构演示。
-    try:
-        import qlib
-        from qlworks.config import QLIB_DATA_DIR
-        qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn")
-        
-        print("\n[1] 开始构建 Alpha158 数据集 (Handler + DatasetH)...")
-        handler, dataset = create_alpha158_dataset(
-            instruments=["600000.SH"], # 取少量数据测试
-            start_time="2020-01-02",
-            end_time="2020-01-31",
-            fit_start_time="2020-01-02",
-            fit_end_time="2020-01-15"
-        )
-        
-        print("\n[2] 数据集构建成功！")
-        print("提取训练集 (Train Frame) 的前两行：")
-        df_train = dataset.prepare("train")
-        print(df_train.head(2))
-        
-    except Exception as e:
-        print(f"\n[!] 演示跳过: {e} (需确保 pyqlib 安装且有本地数据)")
 
 
 def create_custom_dataset(
@@ -228,64 +232,12 @@ def create_custom_dataset(
     }
 
     if infer_processors is None and learn_processors is None:
-        base_infer = []
-        base_learn = [{"class": "DropnaLabel"}]
-
-        # 1. 标签(Label)处理：转换为横截面分位数 (CSRank)
-        if neutralize_labels:
-            # [Citadel Alpha Lab 改进] 将标签转换为截面百分位排名，剥离大盘涨跌的 Beta 影响
-            label_rank = {
-                "class": "CSQuantileNorm",
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "label"}
-            }
-            base_learn.append(label_rank)
-
-        # 2. 特征标准化与特征中性化
-        if model_type == "tree":
-            base_infer.append({
-                "class": "CSQuantileNorm", 
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "feature"}
-            })
-            base_learn.append({
-                "class": "CSQuantileNorm", 
-                "module_path": "qlworks.processors.quantile_norm",
-                "kwargs": {"fields_group": "feature"}
-            })
-        else:
-            base_infer.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
-            base_learn.append({"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}})
-            
-        if neutralize_features:
-            # 【重要修复】：在线性模型流派中，如果先做中性化再 Fillna，
-            # 会因为某些因子带有大量 NaN 导致 OLS 回归矩阵计算完全崩溃，最终把所有特征都变成 NaN！
-            # 正确的做法是：必须先用 0 (截面均值) 填充缺失值，然后再进行行业和市值中性化
-            feat_neutralize = {
-                "class": "CSNeutralize",
-                "module_path": "qlworks.processors.neutralize",
-                "kwargs": {"fields_group": "feature", "industry_field": "sw_l1"}
-            }
-            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
-            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}})
-            base_infer.append(feat_neutralize)
-            base_learn.append(feat_neutralize)
-        else:
-            # 3. 缺失值填充 (非中性化流派)
-            base_infer.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
-            base_learn.append({"class": "Fillna", "kwargs": {"fields_group": "feature"}})
-            
-        if symmetric_orthogonalization and model_type != "tree":
-            feat_ortho = {
-                "class": "CSSymmetricOrthogonalize",
-                "module_path": "qlworks.processors.orthogonalize",
-                "kwargs": {"fields_group": "feature"}
-            }
-            base_infer.append(feat_ortho)
-            base_learn.append(feat_ortho)
-        
-        infer_processors = base_infer
-        learn_processors = base_learn
+        infer_processors, learn_processors = _build_processors(
+            model_type=model_type,
+            neutralize_features=neutralize_features,
+            neutralize_labels=neutralize_labels,
+            symmetric_orthogonalization=symmetric_orthogonalization,
+        )
     
     segments = segments or {
         "train": (fit_start_time, fit_end_time),
@@ -380,3 +332,29 @@ class DebuggablePipeline:
             if before[1] != after[1]: 
                 print(f'[DBG] [{self.name}] step {i}: cols {before[1]} to ', file=sys.stderr) 
         return df 
+
+
+if __name__ == "__main__":
+    print("=== features/dataset.py 独立调用示例 ===")
+
+    try:
+        import qlib
+        from qlworks.config import QLIB_DATA_DIR
+        qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn")
+
+        print("\n[1] 开始构建 Alpha158 数据集 (Handler + DatasetH)...")
+        handler, dataset = create_alpha158_dataset(
+            instruments=["600000.SH"],
+            start_time="2020-01-02",
+            end_time="2020-01-31",
+            fit_start_time="2020-01-02",
+            fit_end_time="2020-01-15"
+        )
+
+        print("\n[2] 数据集构建成功！")
+        print("提取训练集 (Train Frame) 的前两行：")
+        df_train = dataset.prepare("train")
+        print(df_train.head(2))
+
+    except Exception as e:
+        print(f"\n[!] 演示跳过: {e} (需确保 pyqlib 安装且有本地数据)")
