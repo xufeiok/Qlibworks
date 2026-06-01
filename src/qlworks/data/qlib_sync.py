@@ -12,6 +12,7 @@ import os
 import shutil
 import struct
 import math
+import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
@@ -90,6 +91,9 @@ class QlibSynchronizer:
             "netprofit_yoy": "netprofit_yoy",
             "tr_yoy": "tr_yoy",
         }
+
+        # 行业代码名称→数值ID映射（用于 Qlib $sw_l1/$sw_l2/$sw_l3 特性）
+        self._industry_id_map: Dict[str, Dict[str, int]] = {}
     
     def _print_data_specs(self):
         """打印数据规范信息"""
@@ -103,6 +107,60 @@ class QlibSynchronizer:
         """确保目录存在"""
         for d in [self.features_dir, self.instruments_dir, self.calendars_dir]:
             d.mkdir(parents=True, exist_ok=True)
+
+    def _build_industry_mapping(self):
+        """
+        从 ClickHouse sw_industry_members 表构建申万行业映射并保存为 JSON。
+
+        映射格式：（与 Qlib $sw_l1/$sw_l2/$sw_l3 兼容）
+        {
+            "l1": {"行业名称": 数值ID, ...},  # 一级行业（31个）
+            "l2": {"行业名称": 数值ID, ...},  # 二级行业（100+）
+            "l3": {"行业名称": 数值ID, ...},  # 三级行业（300+）
+        }
+        """
+        try:
+            df = self.api.query("""
+                SELECT DISTINCT l1_code, l1_name, l2_code, l2_name, l3_code, l3_name
+                FROM sw_industry_members
+            """)
+            if df.empty:
+                print("    [WARN] 未获取到行业数据，跳过行业映射")
+                return
+
+            mapping = {"l1": {}, "l2": {}, "l3": {}}
+            # 按一/二/三级行业名称分配唯一数值ID（按名称排序，保证稳定性）
+            for level, name_col, code_col in [
+                ("l1", "l1_name", "l1_code"),
+                ("l2", "l2_name", "l2_code"),
+                ("l3", "l3_name", "l3_code"),
+            ]:
+                unique_names = sorted(df[name_col].dropna().unique())
+                # 排除空字符串
+                unique_names = [n for n in unique_names if str(n).strip()]
+                mapping[level] = {n: i + 1 for i, n in enumerate(unique_names)}
+
+            # 保存到 qlib_data 目录
+            out_path = self.qlib_dir / "sw_industry_mapping.json"
+            with open(out_path, 'w', encoding='utf-8') as f:
+                json.dump(mapping, f, ensure_ascii=False, indent=2)
+            print(f"    申万行业映射已保存: {out_path}")
+            for level in ["l1", "l2", "l3"]:
+                print(f"      {level}: {len(mapping[level])} 个行业")
+
+            self._industry_id_map = mapping
+
+        except Exception as e:
+            print(f"    [WARN] 构建行业映射失败: {e}")
+            # 如果已存在映射文件，尝试加载
+            existing = self.qlib_dir / "sw_industry_mapping.json"
+            if existing.exists():
+                try:
+                    with open(existing, 'r', encoding='utf-8') as f:
+                        self._industry_id_map = json.load(f)
+                    print(f"    使用已有的行业映射文件: {existing}")
+                except Exception:
+                    pass
     
     def _to_float(self, v):
         """统一转 float，兼容 None/Decimal"""
@@ -115,11 +173,14 @@ class QlibSynchronizer:
     def _write_bin(self, filepath: Path, start_index: int, values_array: np.ndarray):
         """
         写 Qlib .bin 文件
-        
+
         Qlib 规范：第一个元素为 start_index (int32), 后续为 float32 数据
+        注意：使用字节拼接而非 np.hstack，避免 int32+float32 被 numpy 升级为 float64
         """
-        data = np.hstack([np.array([start_index], dtype='<i4'), values_array.astype('<f4')])
-        data.tofile(str(filepath))
+        header = np.array([start_index], dtype='<i4').tobytes()
+        data = values_array.astype('<f4').tobytes()
+        with open(str(filepath), 'wb') as f:
+            f.write(header + data)
     
     def _get_calendar_list(self, start_date: Optional[str] = None, end_date: Optional[str] = None) -> Tuple[List[str], Dict[str, int]]:
         """
@@ -196,6 +257,10 @@ class QlibSynchronizer:
 
         self._ensure_dirs()
 
+        # 0. 构建并保存申万行业映射
+        print("\n[0] 构建申万行业映射...")
+        self._build_industry_mapping()
+
         # 1. 获取股票列表
         print("\n[1] 获取股票列表...")
         if instruments is None:
@@ -228,6 +293,10 @@ class QlibSynchronizer:
         # 5. 下载并保存数据
         print("\n[5] 下载并保存数据...")
         self._sync_features(stocks, calendar_list, calendar_map, start_date, end_date, instruments_dict=instruments_dict)
+
+        # 6. 补充申万行业数据（独立方法，避免与主同步的日历逻辑冲突）
+        print("\n[6] 补充申万行业数据...")
+        self.sync_industry(stocks=stocks, verify=True)
 
         print("\n" + "=" * 60)
         print("Qlib 全量同步完成！")
@@ -352,7 +421,9 @@ class QlibSynchronizer:
                 code_up = str(code).upper()
                 grp = grp.copy()
                 grp['date'] = pd.to_datetime(grp['ann_date']).dt.strftime('%Y-%m-%d')
-                grp = grp.sort_values('end_date').groupby('date', group_keys=False).last().reset_index()
+                # end_date 在公告日期模式下可能被上游丢弃，用 ann_date 排序
+                sort_col = 'end_date' if 'end_date' in grp.columns else 'ann_date'
+                grp = grp.sort_values(sort_col).groupby('date', group_keys=False).last().reset_index()
                 grp = grp.set_index('date')[financial_fields]
                 financial_by_stock[code_up] = grp
         print(f'    财务数据预拉取完成：{len(financial_by_stock)} 只股票有数据')
@@ -420,6 +491,7 @@ class QlibSynchronizer:
                 deduped = before_dedup - len(df)
                 if deduped > 0:
                     tqdm.write(f"    {stock_code}: 去重 {deduped} 行")
+
                 # 保存数据
                 code_short = stock_code.lower()
                 stock_dir = self.features_dir / code_short
@@ -449,3 +521,174 @@ class QlibSynchronizer:
                 failed_count += 1
         
         print(f"\n    成功：{success_count} 只 | 失败：{failed_count} 只")
+
+    def sync_fields(
+        self,
+        field_spec: dict,
+        stocks: Optional[List[str]] = None,
+        verify: bool = True,
+    ):
+        """
+        通用字段同步方法：将指定指标数据下载到 Qlib features 目录。
+
+        支持 data_type="time_series"（时间序列型）和 data_type="time_range"（时间区间型）。
+
+        Args:
+            field_spec: 字段规格字典
+            stocks: 股票列表，None 表示全部
+            verify: 是否抽样验证
+        """
+        label = field_spec.get("label", "未知字段")
+        bin_pattern = field_spec.get("bin_pattern", "*.day.bin")
+        bins = field_spec["bins"]
+        data_type = field_spec["data_type"]
+        value_cols = field_spec["value_cols"]
+        parse_val = field_spec.get("parse_value", lambda v: float(v) if v is not None else float("nan"))
+        verify_col = field_spec.get("verify_col", bins[0])
+        verify_min = field_spec.get("verify_min", None)
+        n_bins = len(bins)
+
+        print("=" * 60)
+        print(f"同步字段: {label}")
+        print("=" * 60)
+
+        # 1. 清理旧文件
+        existing = 0; deleted = 0
+        for d in self.features_dir.iterdir():
+            if not d.is_dir(): continue
+            old = list(d.glob(bin_pattern))
+            if old:
+                existing += 1
+                for b in old: b.unlink(); deleted += 1
+        print(f"  清理: {existing} 只股票, {deleted} 个文件")
+
+        # 2. 股票列表
+        if stocks is None:
+            stocks = sorted([d.name for d in self.features_dir.iterdir() if d.is_dir()])
+        print(f"  股票: {len(stocks)} 只")
+
+        # 3. 日历
+        with open(self.calendars_dir / "day.txt") as f:
+            cal_list = [l.strip() for l in f if l.strip()]
+        print(f"  日历: {cal_list[0]} ~ {cal_list[-1]} ({len(cal_list)} 天)")
+
+        # 4. 查询
+        print(f"  查询 ClickHouse...")
+        try:
+            df_all = self.api.query(field_spec["query"])
+        except Exception as e:
+            print(f"  [ERR] 查询失败: {e}"); return
+        if df_all.empty:
+            print(f"  [ERR] 空结果"); return
+        print(f"  记录: {len(df_all)} 条")
+
+        # 5. 按股票分组写入
+        code_col = field_spec.get("code_col", "ts_code")
+        grouped = df_all.groupby(code_col)
+        success = 0; has_data = 0
+
+        for stock in tqdm(stocks, desc=f"写入{label}"):
+            try:
+                code_up = stock.upper()
+                if code_up not in grouped.groups: continue
+                has_data += 1
+                sub = grouped.get_group(code_up)
+
+                if data_type == "time_series":
+                    date_col = field_spec["date_col"]
+                    sub = sub.copy()
+                    sub["_dt"] = pd.to_datetime(sub[date_col]).dt.strftime("%Y-%m-%d")
+                    val_map = {}
+                    for _, row in sub.iterrows():
+                        d = row["_dt"]
+                        if d not in val_map: val_map[d] = {}
+                        for bn in bins:
+                            raw = row.get(value_cols[bn])
+                            if raw is not None and pd.notna(raw):
+                                val_map[d][bn] = parse_val(raw)
+                    arrs = {bn: np.full(len(cal_list), float("nan"), dtype=np.float32) for bn in bins}
+                    for i, cal_d in enumerate(cal_list):
+                        if cal_d in val_map:
+                            for bn in bins:
+                                v = val_map[cal_d].get(bn)
+                                if v is not None and not (isinstance(v, float) and np.isnan(v)):
+                                    arrs[bn][i] = v
+
+                elif data_type == "time_range":
+                    in_col = field_spec["in_date_col"]
+                    out_col = field_spec["out_date_col"]
+                    arrs = {bn: np.full(len(cal_list), float("nan"), dtype=np.float32) for bn in bins}
+                    for _, row in sub.iterrows():
+                        in_d = str(row[in_col])[:10] if pd.notna(row.get(in_col)) else "1970-01-01"
+                        out_d = str(row[out_col])[:10] if pd.notna(row.get(out_col)) else "2100-12-31"
+                        if out_d == "1970-01-01": out_d = "2100-12-31"
+                        try: si = next(i for i, d in enumerate(cal_list) if d >= in_d)
+                        except StopIteration: si = 0
+                        try: ei = next(i for i, d in enumerate(cal_list) if d > out_d)
+                        except StopIteration: ei = len(cal_list)
+                        for bn in bins:
+                            raw = row.get(value_cols[bn])
+                            if raw is not None and pd.notna(raw):
+                                v = parse_val(raw)
+                                if not (isinstance(v, float) and np.isnan(v)):
+                                    arrs[bn][si:ei] = v
+                else:
+                    print(f"  [ERR] 不支持类型: {data_type}"); return
+
+                sd = self.features_dir / stock.lower()
+                sd.mkdir(parents=True, exist_ok=True)
+                for bn in bins: self._write_bin(sd / f"{bn}.day.bin", 0, arrs[bn])
+                success += 1
+            except Exception as e:
+                tqdm.write(f"  [WARN] {stock}: {e}")
+
+        print(f"写入: {success} / {len(stocks)} 只")
+
+        # 6. 验证
+        if verify and success > 0:
+            print(f"  验证 (min(100, {success}) 只)...")
+            ok = bad = 0
+            vs = [s.lower() for s in stocks[:100] if s.upper() in grouped.groups]
+            for cl in vs:
+                fp = self.features_dir / cl / f"{verify_col}.day.bin"
+                if not fp.exists(): continue
+                try:
+                    data = np.fromfile(fp, dtype=np.float32)[1:]
+                    valid = data[~np.isnan(data)]
+                    if len(valid) == 0: bad += 1; continue
+                    if verify_min is None or valid.min() >= verify_min: ok += 1
+                    else: bad += 1; tqdm.write(f"    [WARN] {cl}: 异常 {valid[:5]}")
+                except: bad += 1
+            print(f"  {ok} 正确" + (f" [WARN] {bad} 异常" if bad else ""))
+
+        # 7. 完整性
+        pref = bins[0][:3]
+        complete = sum(1 for s in [x.lower() for x in stocks if x.upper() in grouped.groups]
+                       if len(list((self.features_dir / s).glob(f"{pref}*.day.bin"))) == n_bins)
+        print(f"  完整: {complete}/{has_data} 只")
+        print(f"{'=' * 60}")
+
+        print(f"  {label} 同步完成")
+        print(f"  {'=' * 60}")
+
+    def sync_industry(self, stocks: Optional[List[str]] = None, verify: bool = True):
+        """申万行业数据独立同步。使用 sync_fields 实现。"""
+        self.sync_fields(
+            field_spec={
+                "label": "申万行业",
+                "bin_pattern": "sw_l*.day.bin",
+                "bins": ["sw_l1", "sw_l2", "sw_l3"],
+                "data_type": "time_range",
+                "query": "SELECT ts_code, l1_code, l2_code, l3_code, in_date, out_date FROM sw_industry_members",
+                "code_col": "ts_code",
+                "in_date_col": "in_date",
+                "out_date_col": "out_date",
+                "value_cols": {"sw_l1": "l1_code", "sw_l2": "l2_code", "sw_l3": "l3_code"},
+                "parse_value": lambda v: float(str(v).split(".")[0]) if "." in str(v) else float(v),
+                "verify_col": "sw_l1",
+                "verify_min": 100,
+            },
+            stocks=stocks,
+            verify=verify,
+        )
+

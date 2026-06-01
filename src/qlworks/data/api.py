@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import time
 import hashlib
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Union
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -33,7 +34,7 @@ except ImportError:
 
 from qlworks.config import (
     CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE,
-    DUCKDB_PATH, QLIB_DATA_DIR,
+    DUCKDB_PATH, QLIB_DATA_DIR, FS_CACHE_DIR,
     FORCE_ADJUSTED_PRICES, FINANCIAL_USE_ANNOUNCEMENT_DATE, ADJUSTED_PRICE_TYPE
 )
 
@@ -66,20 +67,18 @@ class QuantDataAPI:
         self._ts_rate_limit_sem = threading.Semaphore(4)  # 最多 4 个并发
         self._ts_last_requests: deque = deque(maxlen=80)
         self._ts_executor = ThreadPoolExecutor(max_workers=4)
+        # Parquet 查询缓存目录
+        self._query_cache_dir = Path(str(FS_CACHE_DIR)) / "query_cache"
+        self._query_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.clear_query_cache(max_age_sec=604800)
         self._init_duckdb()
 
     def _init_duckdb(self):
-        """初始化 DuckDB 连接和查询缓存表"""
+        """初始化 DuckDB 连接"""
         DUCKDB_PATH.parent.mkdir(parents=True, exist_ok=True)
         self._duckdb_conn = duckdb.connect(str(DUCKDB_PATH))
-        self._duckdb_conn.execute("""
-            CREATE TABLE IF NOT EXISTS query_cache (
-                query_hash VARCHAR PRIMARY KEY,
-                cached_at TIMESTAMP DEFAULT NOW(),
-                row_count INTEGER,
-                result BLOB
-            )
-        """)
+        # 注意：查询缓存已改用 Parquet 文件存储（query_cached 方法），
+        # DuckDB 保留用于后续元数据管理功能。
     
     def _get_ch_client(self):
         """获取 ClickHouse 客户端（单例模式，带指数退避重试）"""
@@ -106,67 +105,6 @@ class QuantDataAPI:
                     time.sleep(wait)
         raise ConnectionError(f"ClickHouse 连接失败，已重试 3 次: {last_exc}")
 
-    # ==================== DuckDB 查询缓存 ====================
-
-    def _cache_hash(self, sql: str) -> str:
-        return hashlib.md5(sql.encode()).hexdigest()[:24]
-
-    def _cache_get(self, sql: str) -> Optional[pd.DataFrame]:
-        h = self._cache_hash(sql)
-        row = self._duckdb_conn.execute(
-            "SELECT result FROM query_cache WHERE query_hash = ?", [h]
-        ).fetchone()
-        if row is None:
-            return None
-        import pickle
-        return pickle.loads(row[0])
-
-    def _cache_set(self, sql: str, df: pd.DataFrame):
-        h = self._cache_hash(sql)
-        import pickle
-        self._duckdb_conn.execute(
-            "INSERT OR REPLACE INTO query_cache (query_hash, cached_at, row_count, result) VALUES (?, NOW(), ?, ?)",
-            [h, len(df), pickle.dumps(df)]
-        )
-
-    def query_cached(self, sql: str) -> pd.DataFrame:
-        """带 DuckDB 缓存的查询：先查缓存，未命中则查 ClickHouse 后缓存。"""
-        cached = self._cache_get(sql)
-        if cached is not None:
-            return cached
-        df = self.query(sql)
-        if not df.empty:
-            self._cache_set(sql, df)
-        return df
-
-    def _rate_limited_tushare_fetch(self, ts_code: str, start_dt: str, end_dt: str) -> pd.DataFrame:
-        """
-        带限速的 Tushare 单股数据获取（供 ThreadPoolExecutor 调用）。
-
-        滑动窗口算法：保证最近 60 秒内不超过 40 次请求（免费版限额）。
-        """
-        with self._ts_rate_limit_sem:
-            now = time.time()
-            window_start = now - 60
-            while self._ts_last_requests and self._ts_last_requests[0] < window_start:
-                self._ts_last_requests.popleft()
-            if len(self._ts_last_requests) >= 40:
-                sleep_time = self._ts_last_requests[0] + 60 - now
-                if sleep_time > 0:
-                    time.sleep(sleep_time)
-            self._ts_last_requests.append(time.time())
-        return self._fetch_from_tushare(ts_code, start_dt, end_dt)
-
-    def _close_connections(self):
-        """关闭所有连接"""
-        if self._ch_client:
-            self._ch_client.close()
-            self._ch_client = None
-        if self._duckdb_conn:
-            self._duckdb_conn.close()
-            self._duckdb_conn = None
-        self._ts_executor.shutdown(wait=False)  # wait=False 安全：Python 进程退出时会自行清理残留线程
-    
     # ==================== Tushare 后备数据源 ====================
     
     def _get_tushare_pro(self):
@@ -328,7 +266,60 @@ class QuantDataAPI:
             return pd.DataFrame()
     
     # ==================== ClickHouse 查询与缓存 ====================
-    
+
+    # ── Parquet 文件缓存（替代旧的 DuckDB BLOB 缓存） ──
+    # 历史数据天然不可变（只读账号），缓存永不过期。
+    # 文件存储在 .fs_cache/query_cache/{hash}.parquet，zstd 压缩。
+    # 每次初始化自动清理超过 7 天的缓存文件。
+
+    @staticmethod
+    def _query_cache_key(sql: str, params: Optional[list] = None) -> str:
+        raw = sql + (str(params) if params else '')
+        return hashlib.md5(raw.encode()).hexdigest()[:24]
+
+    def _query_cache_get(self, key: str, max_age_sec: int = 86400):
+        cache_file = self._query_cache_dir / f"{key}.parquet"
+        if not cache_file.exists():
+            return None
+        age = time.time() - cache_file.stat().st_mtime
+        if age > max_age_sec:
+            cache_file.unlink(missing_ok=True)
+            return None
+        return pd.read_parquet(cache_file)
+
+    def _query_cache_set(self, key: str, df: pd.DataFrame) -> None:
+        cache_file = self._query_cache_dir / f"{key}.parquet"
+        df.to_parquet(cache_file, index=False, compression='zstd')
+
+    def query_cached(self, sql: str, ttl: int = 86400) -> pd.DataFrame:
+        """
+        带 Parquet 缓存的查询：先查缓存，命中直接返回；未命中查 ClickHouse 后缓存。
+        """
+        key = self._query_cache_key(sql)
+        cached = self._query_cache_get(key, max_age_sec=ttl)
+        if cached is not None:
+            return cached
+        df = self.query(sql)
+        if not df.empty:
+            self._query_cache_set(key, df)
+        return df
+
+    def clear_query_cache(self, max_age_sec: Optional[int] = None) -> int:
+        """清理查询缓存。max_age_sec=None 全部删除，否则删除超过指定秒数的文件。"""
+        if not self._query_cache_dir.exists():
+            return 0
+        removed = 0
+        now = time.time()
+        for f in self._query_cache_dir.iterdir():
+            if not f.name.endswith('.parquet'):
+                continue
+            if max_age_sec is None or (now - f.stat().st_mtime) > max_age_sec:
+                f.unlink(missing_ok=True)
+                removed += 1
+        if removed:
+            print(f"[缓存] 清理 {removed} 个过期查询缓存文件")
+        return removed
+
     def query(self, sql: str, params: Optional[List] = None) -> pd.DataFrame:
         """
         执行 SQL 查询（直连 ClickHouse）。
@@ -594,3 +585,13 @@ class QuantDataAPI:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self._close_connections()
+
+    def _close_connections(self):
+        """关闭所有连接"""
+        if self._ch_client:
+            self._ch_client.close()
+            self._ch_client = None
+        if self._duckdb_conn:
+            self._duckdb_conn.close()
+            self._duckdb_conn = None
+        self._ts_executor.shutdown(wait=False)

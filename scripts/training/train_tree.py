@@ -1,19 +1,22 @@
 import os
 import sys
+import warnings
+
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="pandas")
+warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
+
+import gc
 import pandas as pd
 import numpy as np
-import yaml
-import gc # [Bloomberg Eng] 添加 gc 模块进行内存回收
 
 # 将项目根目录 src 文件夹加入 sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
 from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
 from qlworks.features.dataset import create_custom_dataset
 from qlworks.models.training import train_lgb_model, train_xgb_model, train_catboost_model, predict_ensemble_models
-from qlworks.models import prepare_feature_selection_data, select_features
+from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
-import qlib
 import qlib
 
 # ==============================================================================
@@ -110,30 +113,33 @@ def run_ml_pipeline():
         
         # 3.1 为该窗口构建包含【全量因子】的 DatasetH，用于挑选因子
         print(f"\n[3.1 - {window_name}] 构建全量因子的 DatasetH (用于特征筛选)...")
-        # [Point72 改进] 仅提取当前 Window 所需时间段，避免每次循环计算全量(2020-2025)数据的巨大算力浪费
+        # [性能优化] 特征筛选只需要训练集数据，将时间范围限制在训练期内，避免计算全量数据
+        # 原始代码使用 segments["test"][1] 作为 end_time，导致计算 4 年的 237 个因子
+        # 改成 segments["train"][1] 后数据量减少 50-75%，大幅加速
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_all,
             start_time=segments["train"][0],
-            end_time=segments["test"][1],
+            end_time=segments["train"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
-            segments=segments,
+            segments={"train": segments["train"]},
             model_type=CONFIG["model_type"],
-            neutralize_features=CONFIG["neutralize_features"], # 若出现严重截面偏移，可设为 True
+            neutralize_features=CONFIG["neutralize_features"],
             neutralize_labels=CONFIG["neutralize_labels"]
         )
         
         # 3.2 在训练集上进行因子筛选
         print(f"\n[3.2 - {window_name}] 在当前训练集上执行动态因子筛选 (选取前 {CONFIG['top_k_factors']} 个)...")
         train_frame_full = dataset_full.prepare("train")
+        print(f"    >>> 训练集数据: {train_frame_full.shape[0]} 行 × {train_frame_full.shape[1]} 列 (仅训练期)")
         x_train, y_train, _ = prepare_feature_selection_data(train_frame_full, label_col=fs_conf["label_col"])
         
         valid_idx = y_train.dropna().index
         x_train = x_train.loc[valid_idx]
         y_train = y_train.loc[valid_idx]
         
-        fs_result = select_features(
+        fs_result = cached_select_features(
             x_train, y_train, 
             method=fs_conf["method"], 
             algo=fs_conf["algo"], 
@@ -146,40 +152,42 @@ def run_ml_pipeline():
         print(f">>> {window_name} 动态因子筛选完成！本期入选的因子为:")
         print(f"    {selected_factor_names}")
 
-        # [AQR 改进] 因子冗余检测：剔除高相关性因子对中的低频稳定度较低者
+        # [AQR 改进] 因子冗余检测：用 IC（与标签的相关性）取代自相关性来决定保留哪个因子
         if CONFIG["factor_redundancy_check"]["enabled"] and len(selected_factor_names) > 10:
-            print(f"\n[3.2b - {window_name}] 执行因子冗余检测...")
+            print(f"\n[3.2b - {window_name}] 执行因子冗余检测 (阈值={CONFIG['factor_redundancy_check']['correlation_threshold']})...")
             corr_thresh = CONFIG["factor_redundancy_check"]["correlation_threshold"]
             feat_in_data = [c for c in selected_factor_names if c in train_frame_full.columns]
 
             if len(feat_in_data) > 5:
                 feat_data = train_frame_full[feat_in_data]
-                corr_mat = feat_data.groupby(level='datetime').apply(
-                    lambda df: df.corr(method='spearman')
-                ).groupby(level=1).mean()
+                # 极速版：用 pooled corr (不在意时间截面分组) 替代昂贵的 groupby.corr
+                corr_mat = feat_data.corr(method='spearman').abs()
 
                 redundant_pairs = []
                 for i in range(len(corr_mat.columns)):
                     for j in range(i + 1, len(corr_mat.columns)):
                         c1, c2 = corr_mat.columns[i], corr_mat.columns[j]
-                        if abs(corr_mat.iloc[i, j]) > corr_thresh:
-                            redundant_pairs.append((c1, c2, abs(corr_mat.iloc[i, j])))
+                        if corr_mat.iloc[i, j] > corr_thresh:
+                            redundant_pairs.append((c1, c2, corr_mat.iloc[i, j]))
 
                 if redundant_pairs:
+                    # 预计算每个因子与标签的 IC（信息系数），按日求均值
+                    y_aligned = y_train.reindex(feat_data.index)
+                    ic_map = {}
+                    for col in feat_data.columns:
+                        ic_series = feat_data[col].groupby(level='datetime').apply(
+                            lambda s: s.corr(y_aligned.loc[s.index]) if len(s.dropna()) > 10 else 0
+                        )
+                        ic_map[col] = ic_series.mean()
+
                     to_drop = set()
                     for c1, c2, corr_val in redundant_pairs:
                         if c1 in to_drop or c2 in to_drop:
                             continue
-                        ac1 = feat_data[c1].groupby(level='datetime').apply(
-                            lambda s: s.autocorr(lag=1) if len(s.dropna()) > 5 else 0
-                        ).mean()
-                        ac2 = feat_data[c2].groupby(level='datetime').apply(
-                            lambda s: s.autocorr(lag=1) if len(s.dropna()) > 5 else 0
-                        ).mean()
-                        drop_f = c2 if ac2 < ac1 else c1
+                        drop_f = c2 if abs(ic_map[c2]) < abs(ic_map[c1]) else c1
                         keep_f = c1 if drop_f == c2 else c2
                         to_drop.add(drop_f)
-                        print(f"    冗余对: {c1}(自相关{ac1:.3f}) vs {c2}(自相关{ac2:.3f}) → 保留 {keep_f}，剔除 {drop_f}")
+                        print(f"    冗余对: {c1}(IC={ic_map.get(c1,np.nan):.4f}) vs {c2}(IC={ic_map.get(c2,np.nan):.4f}) → 保留 {keep_f}，剔除 {drop_f}")
 
                     selected_factor_names = [f for f in selected_factor_names if f not in to_drop]
                     print(f"    冗余检测完成: 剔除 {len(to_drop)} 个冗余因子，保留 {len(selected_factor_names)} 个")

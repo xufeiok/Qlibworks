@@ -50,6 +50,16 @@ from sklearn.feature_selection import RFE, SelectKBest, f_regression, mutual_inf
 from sklearn.linear_model import Lasso, LinearRegression
 
 
+# GPU 可用性检测（与 training.py 共享同一检测逻辑）
+_GPU_AVAILABLE = False
+try:
+    import subprocess
+    result = subprocess.run(["nvidia-smi"], capture_output=True, text=True, timeout=5)
+    _GPU_AVAILABLE = result.returncode == 0
+except Exception:
+    pass
+
+
 @dataclass
 class FeatureSelectionResult:
     """
@@ -252,12 +262,16 @@ def embedded_feature_selection(
         model = RandomForestRegressor(**kwargs)
     elif algo == "xgboost":
         from xgboost import XGBRegressor
-        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "tree_method": "hist", "device": "cuda", "n_jobs": 4}
+        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "n_jobs": 4}
+        if _GPU_AVAILABLE:
+            kwargs.update({"tree_method": "hist", "device": "cuda"})
         kwargs.update(model_kwargs)
         model = XGBRegressor(**kwargs)
     elif algo == "lightgbm":
         from lightgbm import LGBMRegressor
-        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "device": "gpu", "n_jobs": 4, "importance_type": "gain"}
+        kwargs = {"n_estimators": 100, "learning_rate": 0.1, "max_depth": 6, "n_jobs": 4, "importance_type": "gain"}
+        if _GPU_AVAILABLE:
+            kwargs["device"] = "gpu"
         kwargs.update(model_kwargs)
         model = LGBMRegressor(**kwargs)
     else:

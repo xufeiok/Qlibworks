@@ -16,8 +16,6 @@ from qlworks.factors.manager import FactorLibraryManager
 KNOWN_FACTOR_PACKAGES = {
     "alpha158": "alpha158_factor_dictionary",
     "gtja191": "gtja191_factor_dictionary",
-    "master": "master_factor_dictionary",
-    "weekly_reversal": "weekly_reversal_v1",
     "style": "style_factors",
     "quality": "quality_factors",
     "price_volume": "price_volume_factors",

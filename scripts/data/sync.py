@@ -172,6 +172,7 @@ def main():
     subparsers.add_parser("incremental", help="增量同步（每日更新最新数据）")
     subparsers.add_parser("auto", help="智能同步（自动检测模式 + 按上市日期定制，推荐首次使用）")
     subparsers.add_parser("financial", help="同步财务数据")
+    subparsers.add_parser("industry", help="同步申万行业数据（sw_l1/sw_l2/sw_l3，独立下载，先清后写+验证）")
 
     args = parser.parse_args()
 
@@ -183,8 +184,20 @@ def main():
         sync_auto()
     elif args.command == "financial":
         sync_financial()
+    elif args.command == "industry":
+        sync_industry()
     else:
         parser.print_help()
+
+
+def sync_industry():
+    """独立同步申万行业数据（检测→清旧→下载→写入→验证）"""
+    print("=" * 60)
+    print("独立模式：申万行业数据同步")
+    print("=" * 60)
+    with QuantDataAPI() as api:
+        syncer = QlibSynchronizer(api)
+        syncer.sync_industry(verify=True)
 
 
 if __name__ == "__main__":
