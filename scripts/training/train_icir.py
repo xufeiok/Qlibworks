@@ -24,6 +24,7 @@ CONFIG = {
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], 
     "label_names": ["LABEL_5D"], 
     "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"],
+    "factor_cache_names": ["ret_1d", "ma_5", "price_position_20"], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
     
     # [Citadel Alpha Lab 改进] 传统 ICIR 基准不需要对特征进行严苛的中性化和正交化
     # 它反映的是因子原始的预测能力组合。只对特征进行去极值标准化即可。
@@ -90,6 +91,7 @@ def run_icir_baseline_pipeline():
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_all,
+            factor_cache_names=CONFIG["factor_cache_names"],
             start_time=segments["train"][0],
             end_time=segments["test"][1],
             fit_start_time=segments["train"][0],

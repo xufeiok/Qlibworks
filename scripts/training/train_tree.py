@@ -34,6 +34,7 @@ CONFIG = {
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"], # 预测标签名称
     "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"], # 待加载的因子文件
+    "factor_cache_names": ["ret_1d", "ma_5", "price_position_20"], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
     "neutralize_features": False, # 是否对特征进行横截面中性化
     "neutralize_labels": True, # 是否对标签进行横截面中性化 (防范日内跳空带来的前视偏差错位)
     
@@ -119,6 +120,7 @@ def run_ml_pipeline():
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_all,
+            factor_cache_names=CONFIG["factor_cache_names"],
             start_time=segments["train"][0],
             end_time=segments["train"][1],
             fit_start_time=segments["train"][0],
@@ -219,6 +221,7 @@ def run_ml_pipeline():
         _, dataset_sub = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_sub,
+            factor_cache_names=CONFIG["factor_cache_names"],
             start_time=segments["train"][0],
             end_time=segments["test"][1],
             fit_start_time=segments["train"][0],

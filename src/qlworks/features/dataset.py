@@ -6,10 +6,19 @@ import sys
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
-from typing import Dict, Optional, Type
+from typing import Dict, List, Optional, Type
 
 
 from qlworks.features.builder import FeatureBundle
+
+
+# DuckDB + Parquet 预计算因子到 Qlib 表达式的映射
+# 训练时直接用 Qlib 引擎从 .bin 数据求值，无需从 Parquet 加载
+FACTOR_CACHE_EXPRESSIONS = {
+    "ret_1d": "$close / Ref($close, 1) - 1",
+    "ma_5": "Mean($close, 5)",
+    "price_position_20": "($close - Min($close, 20)) / (Max($close, 20) - Min($close, 20))",
+}
 
 
 def _build_processors(
@@ -175,6 +184,7 @@ def create_custom_dataset(
     feature_bundle: Optional[FeatureBundle] = None,
     custom_features: Optional[Dict[str, str]] = None,
     custom_labels: Optional[Dict[str, str]] = None,
+    factor_cache_names: Optional[List[str]] = None,
     start_time: str = "2020-01-01",
     end_time: str = "2020-12-31",
     fit_start_time: str = "2020-01-01",
@@ -218,6 +228,17 @@ def create_custom_dataset(
         label_names = list(custom_labels.keys())
     else:
         raise ValueError("必须提供 feature_bundle，或者同时提供 custom_features 和 custom_labels。")
+
+    # 注入 DuckDB + Parquet 预计算因子的 Qlib 表达式
+    # 训练时 Qlib 直接从 .bin 文件求值，和 Parquet 结果一致
+    if factor_cache_names:
+        for name in factor_cache_names:
+            expr = FACTOR_CACHE_EXPRESSIONS.get(name)
+            if expr is None:
+                raise ValueError(f"未知因子 `{name}`，可用: {list(FACTOR_CACHE_EXPRESSIONS.keys())}")
+            feature_exprs.append(expr)
+            feature_names.append(name)
+            print(f"    [因子注入] {name}: {expr}")
 
     # Qlib 要求的特征与标签配置格式
     data_loader_config = {

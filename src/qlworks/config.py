@@ -19,7 +19,7 @@ def _resolve_path(env_key, default_val):
     p_def = Path(default_val)
     return p_def if p_def.is_absolute() else (PROJECT_ROOT / p_def).resolve()
 
-DUCKDB_PATH = _resolve_path('DUCKDB_PATH', './data/cache/quant_cache.duckdb')
+DUCKDB_PATH = _resolve_path('DUCKDB_PATH', './.fs_cache/quant_cache.duckdb')
 DATA_DIR = PROJECT_ROOT / 'data'
 CSV_DIR = DATA_DIR / 'csv'
 QLIB_DATA_DIR = _resolve_path('QLIB_DATA_DIR', 'qlib_data')
@@ -31,6 +31,7 @@ CH_PASSWORD = os.environ.get('CH_PASSWORD', '')
 CH_DATABASE = os.environ.get('CH_DATABASE', 'quant_db')
 
 FS_CACHE_DIR = _resolve_path('FS_CACHE_DIR', '.fs_cache')
+FACTOR_CACHE_DIR = FS_CACHE_DIR / 'factors'
 
 # ==================== 数据规范配置 ====================
 FORCE_ADJUSTED_PRICES = os.environ.get('FORCE_ADJUSTED_PRICES', 'true').lower() == 'true'

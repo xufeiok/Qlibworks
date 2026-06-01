@@ -1,106 +1,73 @@
 """
 Qlib 数据同步模块
 
-功能概述：
-- 从 ClickHouse 同步数据到 Qlib 格式
-- 支持全量同步和增量同步
-- 自动生成 Qlib 所需的 calendars、instruments、features 文件
+核心公开方法（共 3 个，职责分明）：
+  1. full_sync()         — 全量首次下载：写入 OHLCV + 市值 + 申万行业到 Qlib bin 格式
+  2. incremental_sync()  — 增量更新已有 Qlib 数据的最新交易日
+  3. sync_fields()       — 通用方法：指定 SQL 查询下载到 Qlib bin 格式
+
+其他指标（财务/估值/动量/自定义因子）已迁移为 DuckDB + Parquet 预计算，
+参见 qlworks.features.factor_cache.FactorCache。
 """
 from __future__ import annotations
 
 import os
 import shutil
-import struct
 import math
 import json
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-from collections import defaultdict
 from datetime import datetime
 
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
 
-from qlworks.config import QLIB_DATA_DIR, FORCE_ADJUSTED_PRICES, FINANCIAL_USE_ANNOUNCEMENT_DATE
-import warnings as _warnings
+from qlworks.config import QLIB_DATA_DIR, FORCE_ADJUSTED_PRICES
 
 
 class QlibSynchronizer:
     """
     Qlib 数据同步器
-    
-    将 ClickHouse 中的数据同步为 Qlib 格式：
-    - calendars/day.txt: 交易日历
-    - instruments/all.txt: 股票池
-    - features/<stock>/<field>.day.bin: 特征数据
+
+    写入到 Qlib bin 格式的内核字段（仅 8 个）：
+      - OHCLV: open, high, low, close, volume, amount
+      - 市值:  total_mv, circ_mv
+      - 行业:  sw_l1, sw_l2, sw_l3（通过 sync_industry）
+
+    其余因子全部通过 FactorCache（DuckDB + Parquet）预计算。
     """
-    
+
     def __init__(self, api):
-        """
-        初始化同步器
-        
-        Args:
-            api: QuantDataAPI 实例
-        """
         self.api = api
         self.qlib_dir = Path(QLIB_DATA_DIR)
         self.features_dir = self.qlib_dir / "features"
         self.instruments_dir = self.qlib_dir / "instruments"
         self.calendars_dir = self.qlib_dir / "calendars"
-        
+
         self._print_data_specs()
-        
-        # Qlib 字段映射 (ClickHouse 字段 -> Qlib 字段)
-        # ClickHouse 表结构：
-        #   daily_prices: ts_code, trade_date, open, high, low, close, vol, amount
-        #   daily_indicators: ts_code, trade_date, pe, pe_ttm, pb, ps, ps_ttm, total_mv, circ_mv, dv_ttm
-        #   daily_adj_factors: ts_code, trade_date, adj_factor
-        #   financial_indicators: ts_code, ann_date, end_date, roe, roa, grossprofit_margin, etc.
-        #
-        # 注意：api.py 的 get_daily_data 方法已在 SQL 层面计算前复权价格
-        # 当 FORCE_ADJUSTED_PRICES=True 时，返回的 open/high/low/close 已经是前复权价格
+
+        # Qlib 内核字段映射 —— 只写 OHLCV + 市值
+        # get_daily_data(adj=True) 已 JOIN daily_indicators 表，
+        # 因此 total_mv / circ_mv 天然在返回结果中。
         self.field_mapping = {
-            # 基础行情（从 get_daily_data 获取，已处理前复权）
             "open": "open",
             "high": "high",
             "low": "low",
             "close": "close",
             "volume": "vol",
             "amount": "amount",
-            # 市值指标（从 daily_indicators 表）
             "total_mv": "total_mv",
             "circ_mv": "circ_mv",
-            # 估值（从 daily_indicators 表）
-            "pe": "pe",
-            "pe_ttm": "pe_ttm",
-            "pb": "pb",
-            "ps": "ps",
-            "ps_ttm": "ps_ttm",
-            # 动量
-            "dv_ttm": "dv_ttm",
-            # 财务（从 financial_indicators 表，使用 ann_date）
-            "roe": "roe",
-            "roa": "roa",
-            "grossprofit_margin": "grossprofit_margin",
-            "netprofit_margin": "netprofit_margin",
-            "debt_to_assets": "debt_to_assets",
-            "current_ratio": "current_ratio",
-            "eps": "eps",
-            "ocfps": "ocfps",
-            "netprofit_yoy": "netprofit_yoy",
-            "tr_yoy": "tr_yoy",
         }
 
         # 行业代码名称→数值ID映射（用于 Qlib $sw_l1/$sw_l2/$sw_l3 特性）
         self._industry_id_map: Dict[str, Dict[str, int]] = {}
     
     def _print_data_specs(self):
-        """打印数据规范信息"""
         print("\n" + "=" * 60)
         print("数据规范配置：")
         print(f"  - 价格复权类型：{'前复权 (qfq)' if FORCE_ADJUSTED_PRICES else '不复权'}")
-        print(f"  - 财报日期类型：{'公告日期 (ann_date)' if FINANCIAL_USE_ANNOUNCEMENT_DATE else '期末日期 (end_date)'}")
         print("=" * 60)
     
     def _ensure_dirs(self):
@@ -391,49 +358,10 @@ class QlibSynchronizer:
             calendar_map = {d: i for i, d in enumerate(calendar_list)}
 
 
-        # [P1] 批量拉取所有股票的财务数据（避免逐股票 N 次数据库查询）
-        financial_fields = ['roe', 'roa', 'grossprofit_margin', 'netprofit_margin',
-                            'debt_to_assets', 'current_ratio', 'eps', 'ocfps',
-                            'netprofit_yoy', 'tr_yoy']
-        min_start = start_date
-        if instruments_dict:
-            valid_starts = [v for v in instruments_dict.values() if v]
-            if valid_starts:
-                min_start = min(valid_starts)
-        # 将 min_start 前移 90 天，确保最新财报数据有足够窗口可前向填充到同步起始日。
-        # 例如某公司年报在 2023-03-15 公告，同步起始日为 2023-04-01，
-        # 若只从 2023-04-01 拉财报，则遗漏了 2023-03-15 的年报，4月全部为 NaN。
-        # 提前 90 天可以覆盖这种"公告在同步起始日之前"的常见情况。
-        _buffer_start = (pd.to_datetime(min_start) - pd.Timedelta(days=90)).strftime('%Y-%m-%d')
-        print(f'    批量拉取财务数据（{len(stocks)} 只股票，起始 {_buffer_start}）...')
-        df_all_financial = self.api.get_financial_data(
-            ts_codes=stocks,
-            start_date=_buffer_start,
-            end_date=end_date,
-            fields=financial_fields
-        )
-        # 按股票代码分组，提前处理成可合并格式
-        financial_by_stock: Dict[str, pd.DataFrame] = {}
-        if not df_all_financial.empty:
-            df_all_financial.columns = df_all_financial.columns.str.lower()
-            ts_col = 'ts_code' if 'ts_code' in df_all_financial.columns else 'symbol'
-            for code, grp in df_all_financial.groupby(ts_col):
-                code_up = str(code).upper()
-                grp = grp.copy()
-                grp['date'] = pd.to_datetime(grp['ann_date']).dt.strftime('%Y-%m-%d')
-                # end_date 在公告日期模式下可能被上游丢弃，用 ann_date 排序
-                sort_col = 'end_date' if 'end_date' in grp.columns else 'ann_date'
-                grp = grp.sort_values(sort_col).groupby('date', group_keys=False).last().reset_index()
-                grp = grp.set_index('date')[financial_fields]
-                financial_by_stock[code_up] = grp
-        print(f'    财务数据预拉取完成：{len(financial_by_stock)} 只股票有数据')
-
         for stock_code in tqdm(stocks, desc="同步股票数据"):
             try:
-                # [Bloomberg Eng] 按股票定制开始日期
                 stock_start = instruments_dict.get(stock_code, start_date) if instruments_dict else start_date
 
-                # 获取日线数据（前复权）
                 df = self.api.get_daily_data(
                     ts_codes=[stock_code],
                     start_date=stock_start,
@@ -445,7 +373,6 @@ class QlibSynchronizer:
                     failed_count += 1
                     continue
 
-                # 转换列名（兼容大小写）
                 df.columns = df.columns.str.lower()
                 df = df.rename(columns={
                     "ts_code": "symbol",
@@ -456,34 +383,6 @@ class QlibSynchronizer:
                     failed_count += 1
                     continue
                 df["date"] = pd.to_datetime(df["date"]).dt.strftime('%Y-%m-%d')
-
-                # [Bloomberg Eng] 财报 Point-in-Time 前向填充
-                #
-                # 财报数据以 ann_date（公告日期）对齐，意味着从该日起数据才可用。
-                # join + ffill() 将最新可用的财报数据向前填充到下一个公告日：
-                #
-                # 示例（某公司）：
-                #   日期        | 动作        | roe
-                #   ───────────┼────────────┼─────
-                #   2023-10-27 | 三季报公告  | 8.5%
-                #   2023-10-28 | 无新公告    | 8.5% (ffill)
-                #   ...        | ...         | 8.5% (ffill)
-                #   2024-03-15 | 年报公告    | 7.2% (新数据覆盖)
-                #
-                # 注意事项：
-                # - 不设 limit 是正确的 PIT 行为。在真实交易中，没有新公告时
-                #   只能使用最新可得数据，没有任何交易员会"因为数据太旧就停止使用"。
-                # - 假如某公司三季报（10/31公告）和年报（次年4/30公告）之间
-                #   间隔约6个月（~120交易日），设 limit=20 会制造约100天的人为NaN空洞。
-                # - 财报数据确实会变"旧"，但"旧"不代表"不可用"。
-                #   模型可以通过特征工程（如财报距今天数）自行处理时效性问题。
-                code_up = stock_code.upper()
-                if code_up in financial_by_stock:
-                    df_financial = financial_by_stock[code_up]
-                    df = df.set_index('date')
-                    df = df.join(df_financial, how='left').ffill().reset_index()
-                else:
-                    df = df.set_index('date').reset_index()
 
                 # 去重
                 before_dedup = len(df)

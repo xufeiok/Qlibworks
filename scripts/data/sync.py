@@ -1,24 +1,26 @@
 """
-数据同步脚本 - 从 ClickHouse 同步数据到本地
+数据同步脚本 - 从 ClickHouse 同步 Qlib 内核数据到本地
 
-功能：
-- 全量同步：首次初始化 Qlib 数据（含去重验证）
-- 增量同步：每日更新最新数据（智能检测 + 空缺补填 + 财务数据 + 去重验证）
-- 财务数据同步：同步财务指标
-- 智能同步：自动检测模式 + 按上市日期定制同步起点（一键推荐）
+同步到 Qlib bin 格式的字段（仅 8 个）：
+  - OHLCV: open, high, low, close, volume, amount
+  - 市值:  total_mv, circ_mv
+  - 行业:  sw_l1, sw_l2, sw_l3
+
+其他因子（财务/估值/动量/自定义）已迁移为 DuckDB + Parquet 预计算，
+参见 qlworks.features.factor_cache.FactorCache。
 
 用法：
-    # 全量同步（所有股票统一起始日期）
+    # 全量同步（首次初始化）
     python -m scripts.data.sync full --start_date 2010-01-01 --end_date 2025-12-31
 
-    # 增量同步
+    # 增量同步（每日更新最新数据）
     python -m scripts.data.sync incremental
 
     # 智能同步（自动检测全量/增量 + 按上市日期定制，推荐首次使用）
     python -m scripts.data.sync auto
 
-    # 同步财务数据
-    python -m scripts.data.sync financial
+    # 独立同步申万行业
+    python -m scripts.data.sync industry
 """
 import sys
 import argparse
@@ -131,36 +133,6 @@ def sync_auto():
     print("=" * 60)
 
 
-def sync_financial(start_date: str = None, end_date: str = None):
-    """
-    同步财务数据
-
-    重要：财报数据使用公告日期（ann_date），而非期末日期（end_date）
-    """
-    print("=" * 60)
-    print("开始同步财务数据")
-    print("=" * 60)
-    print("数据规范：强制使用公告日期（ann_date），不使用期末日期（end_date）")
-
-    with QuantDataAPI() as api:
-        df = api.get_financial_data(start_date=start_date, end_date=end_date)
-
-        print(f"获取到 {len(df)} 条财务数据")
-        print(f"日期范围：{df['ann_date'].min()} 至 {df['ann_date'].max()}")
-        print(f"股票数量：{df['ts_code'].nunique()} 只")
-
-        api.save_feature(
-            df=df,
-            name="financial_indicators",
-            version="1.0",
-            description="财务指标数据（使用公告日期 ann_date）",
-            category="fundamental",
-            date_column="ann_date",
-        )
-
-        print("财务数据同步完成")
-
-
 def main():
     parser = argparse.ArgumentParser(description="数据同步脚本")
     subparsers = parser.add_subparsers(dest="command", help="同步类型")
@@ -171,7 +143,6 @@ def main():
 
     subparsers.add_parser("incremental", help="增量同步（每日更新最新数据）")
     subparsers.add_parser("auto", help="智能同步（自动检测模式 + 按上市日期定制，推荐首次使用）")
-    subparsers.add_parser("financial", help="同步财务数据")
     subparsers.add_parser("industry", help="同步申万行业数据（sw_l1/sw_l2/sw_l3，独立下载，先清后写+验证）")
 
     args = parser.parse_args()
@@ -182,8 +153,6 @@ def main():
         sync_incremental()
     elif args.command == "auto":
         sync_auto()
-    elif args.command == "financial":
-        sync_financial()
     elif args.command == "industry":
         sync_industry()
     else:
