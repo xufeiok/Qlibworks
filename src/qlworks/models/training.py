@@ -23,7 +23,7 @@ def _detect_gpu() -> bool:
         import torch
         if torch.cuda.is_available():
             return True
-    except ImportError:
+    except (ImportError, OSError):
         pass
     try:
         import cupy
@@ -85,7 +85,8 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
         "colsample_bytree": 0.8,
         "learning_rate": 0.1,
         "subsample": 0.8,
-        "n_estimators": 100,
+        "n_estimators": 1000,
+        "early_stopping_rounds": 30,
         "max_depth": 6,
         "num_leaves": 64,
         "min_child_samples": 20,
@@ -113,7 +114,8 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
         "max_depth": 6,
         "subsample": 0.8,
         "colsample_bytree": 0.8,
-        "n_estimators": 100,
+        "n_estimators": 1000,
+        "early_stopping_rounds": 30,
         "n_jobs": 4,
     }
     if _USE_GPU:
@@ -136,7 +138,8 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
     base_params = {
         "loss_function": "RMSE",
         "learning_rate": 0.1,
-        "iterations": 100,
+        "iterations": 1000,
+        "early_stopping_rounds": 30,
         "depth": 6,
         "thread_count": 4,
     }

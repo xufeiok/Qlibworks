@@ -367,12 +367,20 @@ def cached_select_features(x_train, y_train, method, use_cache=True, **kwargs):
     if not use_cache:
         return select_features(x_train, y_train, method, **kwargs)
     import hashlib, json
+    from pathlib import Path
+    from qlworks.config import QLIB_DATA_DIR
     xb = x_train.values.tobytes()
     fp = hashlib.md5(xb[:1000000]).hexdigest()
     yb = y_train.values.tobytes()
     fp += hashlib.md5(yb[:100000]).hexdigest()
     fp += str(x_train.shape)
     fp += hashlib.md5(json.dumps(sorted(kwargs.items())).encode()).hexdigest()
+    qlib_data = Path(str(QLIB_DATA_DIR))
+    if qlib_data.exists():
+        bin_files = list(qlib_data.rglob("*.day.bin"))
+        if bin_files:
+            latest_mtime = max(p.stat().st_mtime for p in bin_files)
+            fp += str(latest_mtime)
     key = hashlib.md5(fp.encode()).hexdigest()[:24]
     cp = FS_CACHE_DIR / f'fs_{method}_{key}.joblib'
     if cp.exists():

@@ -1,5 +1,13 @@
 import os
 import sys
+
+# Conda site-packages 优先，Roaming 放后面（解决 Roaming 路径污染）
+sp = list(sys.path)
+conda_sp = [p for p in sp if 'Anaconda' in p and 'site-packages' in p]
+roaming_sp = [p for p in sp if 'Roaming' in p]
+other_sp = [p for p in sp if p not in conda_sp and p not in roaming_sp]
+sys.path = conda_sp + other_sp + roaming_sp
+
 import pandas as pd
 import numpy as np
 import gc

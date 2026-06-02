@@ -106,9 +106,33 @@ class FactorCache:
             df = df[df.index.get_level_values("datetime") <= end_date]
         return df
 
+    @staticmethod
+    def _build_adj_close_sql(start_date: str, end_date: str, stock_filter: str = "") -> str:
+        """
+        构建前复权收盘价查询 SQL。
+
+        前复权公式: adj_close = close * adj_factor / latest_adj_factor
+        使用 ClickHouse 的 argMax 窗口函数高效获取每只股票最新复权因子。
+        """
+        return f"""
+            SELECT p.ts_code AS ts_code, p.trade_date AS trade_date,
+                   toFloat64(p.close * a.adj_factor / latest.adj_factor) AS close
+            FROM daily_prices p
+            JOIN daily_adj_factors a ON p.ts_code = a.ts_code AND p.trade_date = a.trade_date
+            JOIN (
+                SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor
+                FROM daily_adj_factors
+                GROUP BY ts_code
+            ) latest ON p.ts_code = latest.ts_code
+            WHERE p.trade_date >= '{start_date}' AND p.trade_date <= '{end_date}'
+            {stock_filter}
+            ORDER BY p.ts_code, p.trade_date
+        """
+
     def compute_factor(self, name: str, start_date: str = "2010-01-01",
                        end_date: Optional[str] = None,
-                       overwrite: bool = False) -> pd.DataFrame:
+                       overwrite: bool = False,
+                       stocks: Optional[List[str]] = None) -> pd.DataFrame:
         """
         从 ClickHouse 拉取原始数据 → DuckDB 计算 → 缓存为 Parquet。
 
@@ -117,6 +141,7 @@ class FactorCache:
             start_date: 开始日期 YYYY-MM-DD
             end_date: 结束日期，None 表示最新
             overwrite: 是否覆盖已有缓存
+            stocks: 股票代码列表，None 表示全部
         """
         if name not in SEED_FACTORS:
             raise ValueError(f"未知因子: {name!r}，可用: {list(SEED_FACTORS.keys())}")
@@ -127,21 +152,21 @@ class FactorCache:
             return self.load_factor(name)
 
         spec = SEED_FACTORS[name]
-        src = ", ".join(spec["source_fields"])
 
         if end_date is None:
-            end_df = self.api.query("SELECT MAX(trade_date) AS d FROM daily_prices_adj")
+            end_df = self.api.query("SELECT MAX(trade_date) AS d FROM daily_prices")
             end_date = str(end_df["d"].iloc[0])[:10]
 
-        print(f"\n  [计算] {spec['name']}: {spec['description']}")
+        label = f"{spec['name']}"
+        print(f"\n  [计算] {label}: {spec['description']}")
         print(f"    拉取数据 {start_date} ~ {end_date} ...")
 
-        raw = self.api.query(f"""
-            SELECT {src}
-            FROM daily_prices_adj
-            WHERE trade_date >= '{start_date}' AND trade_date <= '{end_date}'
-            ORDER BY ts_code, trade_date
-        """)
+        stock_filter = ""
+        if stocks:
+            codes = ", ".join(f"'{c}'" for c in stocks)
+            stock_filter = f" AND p.ts_code IN ({codes})"
+
+        raw = self.api.query(self._build_adj_close_sql(start_date, end_date, stock_filter))
 
         if raw.empty:
             raise RuntimeError(f"ClickHouse 返回空数据: {start_date} ~ {end_date}")
@@ -171,6 +196,41 @@ class FactorCache:
         print(f"    已缓存: {path} ({len(result)} 行)")
 
         return result
+
+    def extend_factor(self, name: str, start_date: Optional[str] = None,
+                      end_date: Optional[str] = None,
+                      stocks: Optional[List[str]] = None) -> pd.DataFrame:
+        """
+        增量扩展因子：补算新股票或新日期范围，与已有缓存合并去重。
+
+        Args:
+            name: 因子名
+            start_date: 开始日期，None 表示从已有缓存最新日期+1天
+            end_date: 结束日期，None 表示最新
+            stocks: 要追加的股票列表，None 时仅补充新日期
+
+        Returns:
+            合并后的完整因子 DataFrame
+        """
+        path = self.cache_dir / f"{name}.parquet"
+        existing = pd.read_parquet(path) if path.exists() else pd.DataFrame()
+
+        new = self.compute_factor(name, start_date=start_date or "2005-01-01",
+                                  end_date=end_date, overwrite=False,
+                                  stocks=stocks)
+
+        if existing.empty:
+            return new
+        if new.empty:
+            print(f"  [最新] {name} 无需扩展")
+            return existing
+
+        combined = pd.concat([existing, new])
+        combined = combined[~combined.index.duplicated(keep="last")]
+        combined.sort_index(inplace=True)
+        combined.to_parquet(path, compression="zstd")
+        print(f"    扩展完成: {name} (现共 {len(combined)} 行)")
+        return combined
 
     def rebuild_all(self, start_date: str = "2010-01-01",
                     end_date: Optional[str] = None) -> Dict[str, pd.DataFrame]:

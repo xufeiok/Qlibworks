@@ -358,19 +358,24 @@ class QlibSynchronizer:
             calendar_map = {d: i for i, d in enumerate(calendar_list)}
 
 
-        for stock_code in tqdm(stocks, desc="同步股票数据"):
+        BATCH_SIZE = 50
+        for i in tqdm(range(0, len(stocks), BATCH_SIZE), desc="同步股票数据"):
+            batch = stocks[i:i + BATCH_SIZE]
             try:
-                stock_start = instruments_dict.get(stock_code, start_date) if instruments_dict else start_date
+                batch_start = start_date
+                if instruments_dict:
+                    batch_starts = [instruments_dict.get(c, start_date) for c in batch]
+                    batch_start = min(batch_starts)
 
                 df = self.api.get_daily_data(
-                    ts_codes=[stock_code],
-                    start_date=stock_start,
+                    ts_codes=batch,
+                    start_date=batch_start,
                     end_date=end_date,
                     adj=True
                 )
 
                 if df.empty:
-                    failed_count += 1
+                    failed_count += len(batch)
                     continue
 
                 df.columns = df.columns.str.lower()
@@ -379,46 +384,51 @@ class QlibSynchronizer:
                     "trade_date": "date",
                 })
                 if "date" not in df.columns:
-                    print(f"    同步 {stock_code} 失败：缺少 date 字段")
-                    failed_count += 1
+                    print(f"    批次 {i}-{i+len(batch)} 失败：缺少 date 字段")
+                    failed_count += len(batch)
                     continue
-                df["date"] = pd.to_datetime(df["date"]).dt.strftime('%Y-%m-%d')
+                df["date"] = df["date"].apply(lambda x: str(x)[:10])
 
-                # 去重
-                before_dedup = len(df)
-                df = df.drop_duplicates(subset=['symbol', 'date'], keep='last').reset_index(drop=True)
-                deduped = before_dedup - len(df)
-                if deduped > 0:
-                    tqdm.write(f"    {stock_code}: 去重 {deduped} 行")
+                for stock_code, grp in df.groupby("symbol"):
+                    try:
+                        stock_start = instruments_dict.get(stock_code, start_date) if instruments_dict else start_date
+                        grp = grp[grp["date"] >= stock_start].copy()
+                        if grp.empty:
+                            failed_count += 1
+                            continue
 
-                # 保存数据
-                code_short = stock_code.lower()
-                stock_dir = self.features_dir / code_short
-                stock_dir.mkdir(parents=True, exist_ok=True)
+                        before_dedup = len(grp)
+                        grp = grp.drop_duplicates(subset=['symbol', 'date'], keep='last').reset_index(drop=True)
+                        deduped = before_dedup - len(grp)
+                        if deduped > 0:
+                            tqdm.write(f"    {stock_code}: 去重 {deduped} 行")
 
-                # 写入每个字段
-                for qlib_field, ch_field in self.field_mapping.items():
-                    if ch_field not in df.columns:
-                        continue
-                    series = df.set_index("date")[ch_field]
-                    _valid = [(calendar_map[d], self._to_float(v)) for d, v in series.items()
-                              if d in calendar_map and pd.notna(v)]
-                    if _valid:
-                        _valid.sort(key=lambda x: x[0])
-                        _arr = np.full(_valid[-1][0] - _valid[0][0] + 1, np.nan, dtype=np.float32)
-                        for idx, val in _valid:
-                            _arr[idx - _valid[0][0]] = val
-                        self._write_bin(stock_dir / f"{qlib_field}.day.bin", _valid[0][0], _arr)
+                        code_short = stock_code.lower()
+                        stock_dir = self.features_dir / code_short
+                        stock_dir.mkdir(parents=True, exist_ok=True)
 
-                # 同步后使缓存失效
-                # self.bin_writer.invalidate_cache(stock_code)
+                        for qlib_field, ch_field in self.field_mapping.items():
+                            if ch_field not in grp.columns:
+                                continue
+                            series = grp.set_index("date")[ch_field]
+                            _valid = [(calendar_map[d], self._to_float(v)) for d, v in series.items()
+                                      if d in calendar_map and pd.notna(v)]
+                            if _valid:
+                                _valid.sort(key=lambda x: x[0])
+                                _arr = np.full(_valid[-1][0] - _valid[0][0] + 1, np.nan, dtype=np.float32)
+                                for idx, val in _valid:
+                                    _arr[idx - _valid[0][0]] = val
+                                self._write_bin(stock_dir / f"{qlib_field}.day.bin", _valid[0][0], _arr)
 
-                success_count += 1
-                
+                        success_count += 1
+                    except Exception as e:
+                        print(f"\n    同步 {stock_code} 失败：{e}")
+                        failed_count += 1
+
             except Exception as e:
-                print(f"\n    同步 {stock_code} 失败：{e}")
-                failed_count += 1
-        
+                print(f"\n    批次 {i}-{i+len(batch)} 失败：{e}")
+                failed_count += len(batch)
+
         print(f"\n    成功：{success_count} 只 | 失败：{failed_count} 只")
 
     def sync_fields(

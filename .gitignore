@@ -22,6 +22,15 @@ _gen_changes.py
 _add_debug.py
 _test*.py
 _*.py
+_vendor/
+_gen_out.txt
+
+# 运行时生成的分析文件
+stock_stats.py
+stock_data_stats.json
+
+# 下载进度缓存
+.download_progress.json
 
 # 前端
 frontend/node_modules/
