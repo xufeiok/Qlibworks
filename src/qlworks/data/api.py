@@ -332,7 +332,11 @@ class QuantDataAPI:
             查询结果的 DataFrame
         """
         sql, params = self._convert_placeholders(sql, params)
-        return self._get_ch_client().query_df(sql, params)
+        client = self._get_ch_client()
+        try:
+            return client.query_df(sql, params, use_numpy=True)
+        except TypeError:
+            return client.query_df(sql, params)
 
     def _convert_placeholders(self, sql: str, params: list) -> tuple:
         """将 ? 占位符转换为 ClickHouse 的 $n 格式"""
