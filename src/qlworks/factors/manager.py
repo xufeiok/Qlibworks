@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 import yaml
 from tabulate import tabulate
 
@@ -14,8 +15,8 @@ class FactorLibraryManager:
         :param repo_path: 因子 YAML 配置文件的存放目录
         """
         if repo_path is None:
-            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-            self.repo_path = os.path.join(base_dir, 'factors_repo')
+            base_dir = Path(__file__).resolve().parents[3]  # Qlibworks/
+            self.repo_path = str(base_dir / "factor_data" / "factor_library")
         else:
             self.repo_path = repo_path
 
@@ -25,7 +26,8 @@ class FactorLibraryManager:
     def list_strategies(self):
         strategies = []
         for file in os.listdir(self.repo_path):
-            if file.endswith('.yaml') or file.endswith('.yml'):
+            full_path = os.path.join(self.repo_path, file)
+            if os.path.isfile(full_path) and (file.endswith('.yaml') or file.endswith('.yml')):
                 strategies.append(file.split('.')[0])
         return strategies
 

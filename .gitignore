@@ -46,3 +46,6 @@ drafts/*.json
 bt_output/
 data/cache/*.duckdb
 
+# 因子仓库与评测数据（可重新计算/生成）
+factor_data/
+

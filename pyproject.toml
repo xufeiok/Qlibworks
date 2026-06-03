@@ -1,4 +1,4 @@
-[build-system]
+﻿[build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
@@ -33,7 +33,7 @@ dl = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 
-[tool.setuptools.packages.find]
+# evaluation module auto-discovered\n[tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]
@@ -43,3 +43,4 @@ target-version = "py38"
 [tool.ruff.lint]
 select = ["E", "F", "B", "I", "UP", "S", "NPY", "PD"]
 ignore = ["E501"]
+

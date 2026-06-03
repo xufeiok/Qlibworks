@@ -277,7 +277,6 @@ def create_custom_dataset(
         data_loader=data_loader_config,
         infer_processors=infer_processors,
         learn_processors=learn_processors,
-        num_workers=8,
     )
     dataset = create_dataset_from_handler(handler, segments)
     return handler, dataset
