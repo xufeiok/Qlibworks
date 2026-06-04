@@ -1,4 +1,7 @@
-from .manager import FactorLibraryManager
-from .synthesis import synthesize_factors
+"""
+因子库模块
+"""
 
-__all__ = ["FactorLibraryManager", "synthesize_factors"]
+from .manager import FactorLibraryManager
+
+__all__ = ["FactorLibraryManager"]

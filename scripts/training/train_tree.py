@@ -32,7 +32,7 @@ import qlib
 CONFIG = {
     # [Renaissance 改进] 摒弃静态的 List 股票池，直接使用 Qlib 内置的动态别名
     # 这样 Qlib 内部会根据每一天的日期，动态过滤出当天真实属于 csi500 且未退市的成分股，彻底杜绝前视偏差与幸存者偏差
-    "instruments": "csi500", 
+    "instruments": "all", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     
@@ -40,7 +40,7 @@ CONFIG = {
     "model_type": "tree", # 机器学习模型类型 (tree / linear 等)
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"], # 预测标签名称
-    "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"], # 待加载的因子文件
+    "factor_files": ["reversal_momentum_factors"], # 待加载的因子文件
     "factor_cache_names": ["ret_1d", "ma_5", "price_position_20"], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
     "neutralize_features": False, # 是否对特征进行横截面中性化
     "neutralize_labels": True, # 是否对标签进行横截面中性化 (防范日内跳空带来的前视偏差错位)

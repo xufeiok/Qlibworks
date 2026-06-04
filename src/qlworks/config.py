@@ -1,13 +1,17 @@
-﻿import os
+import os
 from pathlib import Path
 
 try:
     from dotenv import load_dotenv
-    _p = Path(__file__).resolve().parent.parent.parent / '.env'
+    _p = Path(__file__).resolve().parents[2] / '.env'
+    print(f"Loading .env file: {_p}")
     if _p.exists():
         load_dotenv(dotenv_path=str(_p), override=True)
+        print(f".env file loaded")
+    else:
+        print(f".env file not found")
 except ImportError:
-    pass
+    print(f"python-dotenv not installed")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -30,6 +34,9 @@ CH_DATABASE = os.environ.get('CH_DATABASE', 'quant_db')
 
 FS_CACHE_DIR = _resolve_path('FS_CACHE_DIR', 'factor_data/cache')
 FACTOR_CACHE_DIR = FS_CACHE_DIR / 'factors'
+
+# ==================== 因子仓库配置 ====================
+WAREHOUSE_DIR = _resolve_path('WAREHOUSE_DIR', 'factor_data/warehouse')
 
 # ==================== 鏁版嵁瑙勮寖閰嶇疆 ====================
 FORCE_ADJUSTED_PRICES = os.environ.get('FORCE_ADJUSTED_PRICES', 'true').lower() == 'true'

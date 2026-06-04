@@ -25,6 +25,14 @@ from tqdm import tqdm
 
 from qlworks.config import QLIB_DATA_DIR, FORCE_ADJUSTED_PRICES
 
+# 尝试导入 qlib，如果失败则使用替代方案
+try:
+    import qlib
+    QLIB_AVAILABLE = True
+except ImportError:
+    QLIB_AVAILABLE = False
+    print("qlib 模块未安装，将使用简化的数据处理方案")
+
 
 class QlibSynchronizer:
     """
@@ -279,6 +287,10 @@ class QlibSynchronizer:
         print("Qlib 增量同步")
         print("=" * 60)
         
+        if not QLIB_AVAILABLE:
+            print("    qlib 不可用，跳过增量同步")
+            return
+        
         try:
             import qlib
             qlib.init(provider_uri=str(self.qlib_dir))
@@ -314,6 +326,9 @@ class QlibSynchronizer:
             print("Qlib 增量同步完成！")
             print("=" * 60)
             
+        except ImportError as e:
+            print(f"    qlib 导入失败：{e}")
+            print("    跳过增量同步，建议执行全量同步")
         except Exception as e:
             print(f"增量同步失败：{e}")
             raise

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import pandas as pd
 
 if __name__ == "__main__":
     sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -13,12 +14,81 @@ from qlworks.features.builder import FeatureBundle
 
 
 # DuckDB + Parquet 预计算因子到 Qlib 表达式的映射
-# 训练时直接用 Qlib 引擎从 .bin 数据求值，无需从 Parquet 加载
+# 训练时直接用 Qlib 引擎从 .bin 数据求值，和 Parquet 结果一致
 FACTOR_CACHE_EXPRESSIONS = {
     "ret_1d": "$close / Ref($close, 1) - 1",
     "ma_5": "Mean($close, 5)",
     "price_position_20": "($close - Min($close, 20)) / (Max($close, 20) - Min($close, 20))",
 }
+
+
+def _load_factors_from_warehouse(feature_bundle, start_time, end_time):
+    """
+    尝试从 warehouse 加载因子数据
+    
+    加载顺序：
+    1. 优先从 factor_data/warehouse/{因子名}/{年份}.parquet 加载
+    2. 如果 warehouse 中没有，则返回 None，让上层使用表达式构建
+    
+    Args:
+        feature_bundle: 因子配置对象
+        start_time: 开始时间
+        end_time: 结束时间
+        
+    Returns:
+        (loaded_factors_dict, remaining_factors_list) 或 (None, all_factors_list)
+    """
+    from pathlib import Path
+    from qlworks.config import WAREHOUSE_DIR
+    
+    warehouse_base = Path(WAREHOUSE_DIR)
+    loaded_factors = {}
+    remaining_factors = []
+    
+    # 遍历所有需要加载的因子（从 names 获取因子名）
+    for field_name in feature_bundle.names:
+        factor_dir = warehouse_base / field_name
+        
+        # 检查 warehouse 中是否有该因子的 parquet 文件
+        if factor_dir.exists():
+            parquet_files = sorted(factor_dir.glob("*.parquet"))
+            if parquet_files:
+                # 有 parquet 文件，尝试加载
+                dfs = []
+                for file in parquet_files:
+                    # 根据文件名判断年份是否在时间范围内
+                    try:
+                        file_year = int(file.stem)
+                        if start_time and file_year < int(start_time[:4]):
+                            continue
+                        if end_time and file_year > int(end_time[:4]):
+                            continue
+                    except ValueError:
+                        pass  # 非年份文件名，直接加载
+                    
+                    try:
+                        df = pd.read_parquet(file)
+                        dfs.append(df)
+                    except Exception as e:
+                        print(f"    [警告] 读取 {file} 失败：{e}")
+                
+                if dfs:
+                    # 合并所有年份数据
+                    df = pd.concat(dfs, ignore_index=True)
+                    if 'datetime' in df.columns:
+                        df['datetime'] = pd.to_datetime(df['datetime'])
+                        df = df.set_index(['instrument', 'datetime'])
+                    
+                    # 提取 value 列作为因子值
+                    if 'value' in df.columns:
+                        loaded_factors[field_name] = df['value']
+                        print(f"    [warehouse 加载] {field_name}: {len(df):,} 条记录")
+                        continue
+        
+        # warehouse 中没有，需要后续用表达式构建
+        remaining_factors.append(field_name)
+    
+    return loaded_factors, remaining_factors
 
 
 def _build_processors(
@@ -101,65 +171,59 @@ def _build_processors(
     return base_infer, base_learn
 
 
-def create_dataset_from_handler(handler, segments: Dict[str, tuple]):
+def create_dataset_from_handler(handler, segments):
     """
     功能概述：
-    - 基于已有 Qlib handler 创建 `DatasetH`，统一训练/验证/测试切分入口。
+    - 从 Handler 构建 DatasetH，并支持动态切换 segment。
     输入：
-    - handler: 已实例化的数据处理器。
-    - segments: 时间切分字典。
+    - handler: Qlib DataHandler 对象。
+    - segments: 数据切分配置，如 {"train": ("2020-01-01", "2020-06-30"), ...}。
     输出：
-    - `DatasetH` 数据集对象。
-    边界条件：
-    - segments 至少应包含 `train`。
-    性能/安全注意事项：
-    - 只做配置装配，不主动触发全部数据计算。
+    - DatasetH 对象。
     """
     from qlib.data.dataset import DatasetH
 
-    return DatasetH(handler=handler, segments=segments)
+    dataset = DatasetH(handler, segments)
+    return dataset
 
 
 def create_alpha158_dataset(
-    instruments="csi300",
+    instruments: str | list = "csi300",
     start_time: str = "2020-01-01",
     end_time: str = "2020-12-31",
     fit_start_time: str = "2020-01-01",
     fit_end_time: str = "2020-06-30",
     freq: str = "day",
-    model_type: str = "tree", # ["tree", "linear", "nn"]
-    neutralize_features: bool = False, # 是否对特征 X 进行中性化 (推荐线性模型开启)
-    neutralize_labels: bool = False,   # 是否对标签 Y 进行中性化 (推荐树模型开启)
     infer_processors: Optional[list] = None,
     learn_processors: Optional[list] = None,
     segments: Optional[Dict[str, tuple]] = None,
+    model_type: str = "tree",
+    **kwargs,
 ):
     """
     功能概述：
-    - 构建 Alpha158 标准数据集，适合作为传统机器学习基线。
+    - 构建 Alpha158 标准数据集，适合树模型（如 LightGBM/XGBoost）。
     输入：
-    - instruments/时间区间/处理器配置。
+    - 股票池、时间区间、切分配置。
     输出：
     - `(handler, dataset)` 二元组。
     边界条件：
-    - 处理器缺失时使用课程代码中常见的稳健标准化与缺失值填充。
+    - 如果处理器未指定，自动根据模型类型匹配最佳流水线。
     性能/安全注意事项：
-    - Alpha158 特征量适中，适合快速验证与调参。
-    - 注意：默认配置未包含市值中性化与行业中性化。若需截面中性化，
-      可在 learn_processors 中引入 CSZScoreNorm 或 CSRobustZScoreNorm。
+    - 使用 Qlib 内置的 Alpha158 处理器，无需手动配置。
     """
     from qlib.contrib.data.handler import Alpha158
 
-    # [Point72 ML 研究员提示]
-    # 对于 XGBoost/LightGBM 等基于树的模型，截面 Z-Score 会破坏时间序列上的绝对动量信息（单调性）。
-    # 推荐将 `RobustZScoreNorm` 替换为 `CSQuantileNorm` (截面分位数化)，或在树模型中直接传入原始值。
-    # 仅当使用 Ridge/Lasso 线性模型或 神经网络 时，才需要保留 Z-Score 标准化。
-    if infer_processors is None and learn_processors is None:
-        infer_processors, learn_processors = _build_processors(
-            model_type=model_type,
-            neutralize_features=neutralize_features,
-            neutralize_labels=neutralize_labels,
-        )
+    infer_processors = infer_processors or [
+        {"class": "CSQuantileNorm", "module_path": "qlworks.processors.quantile_norm", "kwargs": {"fields_group": "feature"}},
+        {"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}},
+    ]
+    learn_processors = learn_processors or [
+        {"class": "DropnaLabel"},
+        {"class": "CSQuantileNorm", "module_path": "qlworks.processors.quantile_norm", "kwargs": {"fields_group": "feature"}},
+        {"class": "Fillna", "kwargs": {"fields_group": "feature", "fill_value": 0}},
+    ]
+    
     segments = segments or {
         "train": (fit_start_time, fit_end_time),
         "valid": ("2020-07-01", "2020-09-30"),
@@ -201,6 +265,14 @@ def create_custom_dataset(
     """
     功能概述：
     - 构建完全自定义的数据集，支持传入 FeatureBundle 或 任意因子表达式字典。
+    - 优先从 factor_data/warehouse 加载已有的单因子 parquet 文件
+    - warehouse 中没有的因子才使用表达式构建
+    
+    加载顺序：
+    1. warehouse/{因子名}/{年份}.parquet (已有单因子文件)
+    2. factor_cache_names 中定义的表达式
+    3. feature_bundle 中定义的表达式
+    
     输入：
     - feature_bundle: 来自 builder.py 的 FeatureBundle 对象 (推荐)。
     - custom_features: 特征字典，格式如 `{"MA5": "Mean($close, 5)"}` (作为备选)。
@@ -217,35 +289,66 @@ def create_custom_dataset(
 
     # 解析特征和标签配置
     if feature_bundle is not None:
-        feature_exprs = list(feature_bundle.fields)
-        feature_names = list(feature_bundle.names)
+        all_feature_exprs = list(feature_bundle.fields)
+        all_feature_names = list(feature_bundle.names)
         label_exprs = list(feature_bundle.label_fields)
         label_names = list(feature_bundle.label_names)
     elif custom_features is not None and custom_labels is not None:
-        feature_exprs = list(custom_features.values())
-        feature_names = list(custom_features.keys())
+        all_feature_exprs = list(custom_features.values())
+        all_feature_names = list(custom_features.keys())
         label_exprs = list(custom_labels.values())
         label_names = list(custom_labels.keys())
     else:
         raise ValueError("必须提供 feature_bundle，或者同时提供 custom_features 和 custom_labels。")
 
-    # 注入 DuckDB + Parquet 预计算因子的 Qlib 表达式
-    # 训练时 Qlib 直接从 .bin 文件求值，和 Parquet 结果一致
+    # [重要改进] 优先从 warehouse 加载因子数据
+    loaded_factors = {}
+    final_feature_exprs = []
+    final_feature_names = []
+    
+    if feature_bundle is not None:
+        # 尝试从 warehouse 加载因子
+        loaded_factors, remaining_fields = _load_factors_from_warehouse(
+            feature_bundle, start_time, end_time
+        )
+        
+        # 为剩余没有 warehouse 数据的因子构建表达式
+        # fields 和 names 是平行列表，需要根据名称索引找到表达式
+        for field_name in remaining_fields:
+            try:
+                idx = feature_bundle.names.index(field_name)
+                expr = feature_bundle.fields[idx]
+                final_feature_exprs.append(expr)
+                final_feature_names.append(field_name)
+                print(f"    [表达式构建] {field_name}: {expr}")
+            except ValueError:
+                print(f"    [警告] 因子 {field_name} 在 names 列表中未找到")
+    else:
+        # 没有 feature_bundle，使用原始逻辑
+        final_feature_exprs = all_feature_exprs
+        final_feature_names = all_feature_names
+    
+    # 注入 DuckDB + Parquet 预计算因子的 Qlib 表达式（factor_cache_names 优先级最低）
     if factor_cache_names:
         for name in factor_cache_names:
+            # 如果已经从 warehouse 加载了，就跳过
+            if name in loaded_factors:
+                print(f"    [跳过] {name} 已从 warehouse 加载")
+                continue
+            
             expr = FACTOR_CACHE_EXPRESSIONS.get(name)
             if expr is None:
-                raise ValueError(f"未知因子 `{name}`，可用: {list(FACTOR_CACHE_EXPRESSIONS.keys())}")
-            feature_exprs.append(expr)
-            feature_names.append(name)
+                raise ValueError(f"未知因子 `{name}`，可用：{list(FACTOR_CACHE_EXPRESSIONS.keys())}")
+            final_feature_exprs.append(expr)
+            final_feature_names.append(name)
             print(f"    [因子注入] {name}: {expr}")
-
+    
     # Qlib 要求的特征与标签配置格式
     data_loader_config = {
         "class": "QlibDataLoader",
         "kwargs": {
             "config": {
-                "feature": (feature_exprs, feature_names),
+                "feature": (final_feature_exprs, final_feature_names),
                 "label": (label_exprs, label_names),
             },
             "freq": freq,
@@ -378,4 +481,4 @@ if __name__ == "__main__":
         print(df_train.head(2))
 
     except Exception as e:
-        print(f"\n[!] 演示跳过: {e} (需确保 pyqlib 安装且有本地数据)")
+        print(f"\n[!] 演示跳过：{e} (需确保 pyqlib 安装且有本地数据)")

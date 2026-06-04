@@ -47,5 +47,10 @@ bt_output/
 data/cache/*.duckdb
 
 # 因子仓库与评测数据（可重新计算/生成）
-factor_data/
+factor_data/warehouse/
+factor_data/cache/
+factor_data/reports/
+factor_data/qualified_factors/
+factor_data/registry/
+# factor_data/factor_library/ - 保留，需要版本控制
 

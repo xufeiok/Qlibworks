@@ -1,0 +1,199 @@
+factors:
+  # ──────────────────────────────────────────────────────
+  # 反转因子 (Reversal Factors)
+  # ──────────────────────────────────────────────────────
+  
+  - name: STR_20d
+    version: "1.0"
+    category: "reversal"
+    sub_category: "short_term"
+    expression:
+      qlib: "Ref($close / Ref($close, 20) - 1, 1) * (-1)"
+      duckdb: "-1 * LAG(close / LAG(close, 20) - 1, 1)"
+    logic:
+      return_source: "close"
+      theory: "短期过度反应后的均值回归"
+      expected_direction: "positive"
+    parameters:
+      lookback: 20
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去20个交易日收益率取负，捕捉短期反转效应"
+    ref: "Jegadeesh & Titman (1993)"
+    lifecycle_stage: "active"
+
+  - name: STR_5d
+    version: "1.0"
+    category: "reversal"
+    sub_category: "short_term"
+    expression:
+      qlib: "Ref($close / Ref($close, 5) - 1, 1) * (-1)"
+      duckdb: "-1 * LAG(close / LAG(close, 5) - 1, 1)"
+    logic:
+      return_source: "close"
+      theory: "超短期过度反应后的快速修正"
+      expected_direction: "positive"
+    parameters:
+      lookback: 5
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去5个交易日收益率取负，捕捉超短期反转效应"
+    ref: "Lehmann (1990)"
+    lifecycle_stage: "active"
+
+  - name: LTR_12m
+    version: "1.0"
+    category: "reversal"
+    sub_category: "long_term"
+    expression:
+      qlib: "Ref($close / Ref($close, 252) - 1, 20) * (-1)"
+      duckdb: "-1 * LAG(close / LAG(close, 252) - 1, 20)"
+    logic:
+      return_source: "close"
+      theory: "长期过度反应后的均值回归"
+      expected_direction: "positive"
+    parameters:
+      lookback: 252
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去1年收益率取负（跳过最近20天），捕捉长期反转效应"
+    ref: "De Bondt & Thaler (1985)"
+    lifecycle_stage: "active"
+
+  - name: VOL_REV
+    version: "1.0"
+    category: "reversal"
+    sub_category: "volatility"
+    expression:
+      qlib: "Ref(Std($close / Ref($close, 1) - 1, 60), 1) * (-1)"
+      duckdb: "-1 * LAG(STDDEV((close - LAG(close)) / LAG(close), 60), 1)"
+    logic:
+      return_source: "close"
+      theory: "高波动率后的均值回归"
+      expected_direction: "positive"
+    parameters:
+      lookback: 60
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去60日收益率标准差取负，捕捉波动率反转效应"
+    ref: "French et al. (1987)"
+    lifecycle_stage: "exploration"
+
+  - name: EXTREME_REV
+    version: "1.0"
+    category: "reversal"
+    sub_category: "extreme"
+    expression:
+      qlib: "If(Abs($close / Ref($close, 1) - 1) > 0.095, ($close / Ref($close, 1) - 1) * (-1), 0)"
+      duckdb: "CASE WHEN ABS((close - LAG(close)) / LAG(close)) > 0.095 THEN -(close - LAG(close)) / LAG(close) ELSE 0 END"
+    logic:
+      return_source: "close"
+      theory: "涨停/跌停后的反转效应"
+      expected_direction: "positive"
+    parameters:
+      lookback: 1
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "当日涨跌幅超过9.5%时取反，否则为0"
+    ref: "A股特有现象"
+    lifecycle_stage: "active"
+
+  # ──────────────────────────────────────────────────────
+  # 动量因子 (Momentum Factors)
+  # ──────────────────────────────────────────────────────
+  
+  - name: MOM_6m
+    version: "1.0"
+    category: "momentum"
+    sub_category: "medium_term"
+    expression:
+      qlib: "$close / Ref($close, 126) - 1"
+      duckdb: "close / LAG(close, 126) - 1"
+    logic:
+      return_source: "close"
+      theory: "中期价格趋势延续"
+      expected_direction: "positive"
+    parameters:
+      lookback: 126
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去6个月收益率，捕捉中期动量效应"
+    ref: "Jegadeesh & Titman (1993)"
+    lifecycle_stage: "active"
+
+  - name: MOM_12m
+    version: "1.0"
+    category: "momentum"
+    sub_category: "long_term"
+    expression:
+      qlib: "$close / Ref($close, 252) - 1"
+      duckdb: "close / LAG(close, 252) - 1"
+    logic:
+      return_source: "close"
+      theory: "长期价格趋势延续"
+      expected_direction: "positive"
+    parameters:
+      lookback: 252
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去1年收益率，捕捉长期动量效应"
+    ref: "Carhart (1997)"
+    lifecycle_stage: "active"
+
+  - name: MOM_skip1m
+    version: "1.0"
+    category: "momentum"
+    sub_category: "risk_adjusted"
+    expression:
+      qlib: "$close / Ref($close, 232) - 1"
+      duckdb: "close / LAG(close, 232) - 1"
+    logic:
+      return_source: "close"
+      theory: "跳过最近一个月避免短期反转干扰"
+      expected_direction: "positive"
+    parameters:
+      lookback: 252
+      skip: 20
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "过去1年收益率（跳过最近20天），避免短期反转干扰"
+    ref: "Jegadeesh & Titman (2001)"
+    lifecycle_stage: "active"
+
+  - name: IND_NEUT_MOM
+    version: "1.0"
+    category: "momentum"
+    sub_category: "industry_neutral"
+    expression:
+      qlib: "($close / Ref($close, 126) - 1 - $sw_industry_mean_ret_126) / $sw_industry_std_ret_126"
+      duckdb: "(close / LAG(close, 126) - 1 - IND_AVG_RET_126D) / IND_STD_RET_126D"
+    logic:
+      return_source: "close"
+      theory: "行业内标准化后的动量得分"
+      expected_direction: "positive"
+    parameters:
+      lookback: 126
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "在申万一级行业内做Z-score标准化的6个月动量"
+    ref: "Asness et al. (2013)"
+    lifecycle_stage: "active"
+
+  - name: MOM_ACCEL
+    version: "1.0"
+    category: "momentum"
+    sub_category: "acceleration"
+    expression:
+      qlib: "($close / Ref($close, 63) - 1) - ($close / Ref($close, 126) - 1)"
+      duckdb: "(close / LAG(close, 63) - 1) - (close / LAG(close, 126) - 1)"
+    logic:
+      return_source: "close"
+      theory: "动量加速度，近期表现强于远期"
+      expected_direction: "positive"
+    parameters:
+      lookback: 126
+      freq: "daily"
+    data_source: "qlib"
+    meaning: "近期3个月动量减去过去6个月动量，衡量动量加速度"
+    ref: "Chaves (2012)"
+    lifecycle_stage: "exploration"

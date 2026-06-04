@@ -212,7 +212,11 @@ def main():
             )
             q = result["qual_result"]
             icon = {"core": "[OK]", "satellite": "[~]", "archive": "[ ]"}.get(q["tier"], "[ ]")
-            last_rows = f"({warehouse_meta.get('total_rows', '?'):,}行, 至{warehouse_meta.get('last_date', '?')})" if not args.recompute else ""
+            total_rows = warehouse_meta.get('total_rows', '?')
+            last_date = warehouse_meta.get('last_date', '?')
+            if total_rows != '?':
+                total_rows = f"{total_rows:,}"
+            last_rows = f"({total_rows}行, 至{last_date})" if not args.recompute else ""
             print(f"  {icon} 等级={q['tier']:10s} IC={result['ic_stats']['ic_mean']:.4f} ICIR={result['ic_stats']['icir']:.2f} 评分={q['composite_score']:.1f} {last_rows}")
 
         except Exception as e:

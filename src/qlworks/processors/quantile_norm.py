@@ -1,27 +1,106 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
+"""
+分位数归一化处理器
+
+用于将特征值转换到均匀分布，减少异常值影响，使不同量纲的因子具有可比性。
+"""
+
+from __future__ import annotations
 
 import pandas as pd
-from qlib.data.dataset.processor import Processor, get_group_columns
+import numpy as np
 
-class CSQuantileNorm(Processor):
-    """截面分位数标准化（CSQuantileNorm）。
 
-    作用：对每个交易日的截面数据做秩变换，将特征映射到 [0, 1] 的分位数（rank(pct=True)）。
-
-    设计动机：
-    - 对树模型（XGBoost/LightGBM 等）更友好：树主要依赖相对大小与排序信息，分位数化可保留单调排名关系。
-    - 严格有界：将特征压到 [0, 1]，可降低极端值对训练的影响。
-    - 相比 Z-Score：当截面方差很大或分布重尾时，Z-Score 可能放大极端点并扰动截面排序；分位数化通常更稳。
+class CSQuantileNorm:
     """
+    Cross-Sectional Quantile Normalization 横截面分位数归一化
+    
+    将每个时间点的横截面特征值转换为其分位数位置，使因子值在 [0, 1] 区间内均匀分布。
+    
+    优点：
+    - 对异常值具有鲁棒性
+    - 使不同量纲的因子具有可比性
+    - 适用于非线性模型和树模型
+    """
+    
+    def __init__(self, eps: float = 1e-6, **kwargs):
+        """
+        参数：
+        - eps: 防止除零的小值，确保输出在 (0, 1) 区间内
+        - **kwargs: 其他 Qlib 传递的参数（如 fields_group）
+        """
+        self.eps = eps
+        # 忽略其他未使用的参数
+    
+    def fit(self, df: pd.DataFrame):
+        """拟合（本处理器不需要拟合）"""
+        return self
+    
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """执行横截面分位数归一化"""
+        # 按行（时间维度）进行横截面归一化
+        return df.apply(self._quantile_normalize_series, axis=1)
+    
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """拟合并转换"""
+        return self.transform(df)
+    
+    def _quantile_normalize_series(self, s: pd.Series) -> pd.Series:
+        """对单个序列进行分位数归一化"""
+        # 使用 rank 获取分位数位置
+        ranks = s.rank(pct=True, na_option='keep')
+        # 处理边界值，确保在 (0, 1) 区间内
+        ranks = ranks.clip(self.eps, 1 - self.eps)
+        return ranks
+    
+    def readonly(self):
+        """Qlib 要求的方法：返回是否只读（不修改原始数据）"""
+        return False
+    
+    def is_for_infer(self):
+        """Qlib 要求的方法：返回是否用于推理阶段"""
+        return True
 
-    def __init__(self, fields_group=None):
-        self.fields_group = fields_group
 
-    def __call__(self, df: pd.DataFrame):
-        cols = get_group_columns(df, self.fields_group)
+class QuantileNormProcessor:
+    """
+    分位数归一化处理器（通用接口）
+    """
+    
+    def __init__(self, axis: int = 0, eps: float = 1e-6):
+        """
+        参数：
+        - axis: 归一化轴，0 表示按行（时间维度），1 表示按列（特征维度）
+        - eps: 防止除零的小值
+        """
+        self.axis = axis
+        self.eps = eps
+    
+    def fit(self, df: pd.DataFrame):
+        """拟合（本处理器不需要拟合）"""
+        return self
+    
+    def transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """执行分位数归一化"""
+        if self.axis == 0:
+            # 按行（时间维度）进行横截面归一化
+            return df.apply(self._quantile_normalize_series, axis=1)
+        else:
+            # 按列（特征维度）进行归一化
+            return df.apply(self._quantile_normalize_series, axis=0)
+    
+    def fit_transform(self, df: pd.DataFrame) -> pd.DataFrame:
+        """拟合并转换"""
+        return self.transform(df)
+    
+    def _quantile_normalize_series(self, s: pd.Series) -> pd.Series:
+        """对单个序列进行分位数归一化"""
+        # 使用 rank 获取分位数位置
+        ranks = s.rank(pct=True, na_option='keep')
+        # 处理边界值，确保在 (0, 1) 区间内
+        ranks = ranks.clip(self.eps, 1 - self.eps)
+        return ranks
 
-        # 按 datetime 分组做截面排名，rank(pct=True) 返回分位数（0.0~1.0）
-        df[cols] = df[cols].groupby(level="datetime", group_keys=False).rank(pct=True)
 
-        return df
+def get_quantile_norm_processor(**kwargs):
+    """工厂函数：创建分位数归一化处理器"""
+    return QuantileNormProcessor(**kwargs)

@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
@@ -33,7 +33,8 @@ dl = [
 [tool.setuptools]
 package-dir = {"" = "src"}
 
-# evaluation module auto-discovered\n[tool.setuptools.packages.find]
+# evaluation module auto-discovered
+[tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.ruff]

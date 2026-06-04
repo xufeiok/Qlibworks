@@ -1,4 +1,3 @@
-from .evaluation import evaluate_prediction_frame, select_top_instruments
 from .selection import (
     FeatureSelectionResult,
     apply_feature_selection,
@@ -8,14 +7,20 @@ from .selection import (
     select_features, cached_select_features,
     wrapper_feature_selection,
 )
-from .training import prepare_split_frames, train_lgb_model, train_linear_baseline
+from .training import (
+    prepare_split_frames, 
+    train_lgb_model, 
+    train_xgb_model, 
+    train_catboost_model,
+    train_lstm_model,
+    train_ridge_model,
+    train_linear_baseline,
+    predict_ensemble_models,
+)
 from .tuning import tune_lgbm_hyperparameters
-from .portfolio import optimize_portfolio
 from .attribution import factor_attribution
 
 __all__ = [
-    "evaluate_prediction_frame",
-    "select_top_instruments",
     "FeatureSelectionResult",
     "prepare_feature_selection_data",
     "filter_feature_selection",
@@ -26,8 +31,12 @@ __all__ = [
     "apply_feature_selection",
     "prepare_split_frames",
     "train_lgb_model",
+    "train_xgb_model",
+    "train_catboost_model",
+    "train_lstm_model",
+    "train_ridge_model",
     "train_linear_baseline",
+    "predict_ensemble_models",
     "tune_lgbm_hyperparameters",
-    "optimize_portfolio",
     "factor_attribution",
 ]
