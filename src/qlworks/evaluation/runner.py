@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 import numpy as np
 import pandas as pd
+import duckdb
 
 warnings.filterwarnings("ignore", category=RuntimeWarning)
 warnings.filterwarnings("ignore", message="overflow encountered")
@@ -68,39 +69,9 @@ class FactorEvaluator:
     def _load_labels(self, start_time, end_time):
         """加载标签收益率。
 
-        优先从 ClickHouse 实时计算（前复权价格）。
-        ClickHouse 不可用时回退到本地 Qlib 数据（已复权）。
+        Qlib 数据已含复权价格，直接从本地 Qlib 计算标签。
         """
-        import duckdb
-
-        # 第 1 层：ClickHouse 实时计算
-        try:
-            from qlworks.data import QuantDataAPI
-            api = QuantDataAPI()
-            fields = ["open", "high", "low", "close"]
-            adj = ", ".join(f"p.{f} * a.adj_factor / latest.adj_factor AS {f}" for f in fields)
-            sql = f"""SELECT p.ts_code, p.trade_date, {adj}
-FROM daily_prices p
-JOIN daily_adj_factors a ON p.ts_code=a.ts_code AND p.trade_date=a.trade_date
-JOIN (SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor FROM daily_adj_factors GROUP BY ts_code) latest ON p.ts_code=latest.ts_code
-WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_code, p.trade_date"""
-            raw = api.query(sql)
-            if not raw.empty:
-                conn = duckdb.connect()
-                conn.register("_raw", raw)
-                label_expr = self.config.label_expr.replace("$close", "close").replace("$open", "open")
-                r = conn.execute(f"SELECT ts_code, trade_date, {label_expr} AS {self.config.label_name} FROM _raw").df()
-                conn.close()
-                if not r.empty:
-                    r["trade_date"] = pd.to_datetime(r["trade_date"])
-                    r = r.set_index(["ts_code", "trade_date"])
-                    r.index.names = ["instrument", "datetime"]
-                    return r[[self.config.label_name]]
-        except Exception:
-            pass
-
-        # 第 2 层：本地 Qlib 数据兜底（已复权）
-        logger.info("[标签] ClickHouse 不可用，从本地 Qlib 数据计算标签...")
+        logger.info("[标签] 从本地 Qlib 数据计算标签...")
         try:
             import qlib
             from qlib.config import REG_CN
@@ -110,9 +81,10 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
             if not self._qinited:
                 qlib.init(provider_uri=str(QLIB_DATA_DIR), region=REG_CN)
                 self._qinited = True
-            # Windows 上用单线程加载避免 multiprocessing 启动开销
+            # Windows 强制单线程，避免 joblib multiprocessing 死锁
             from qlib.config import C as _QC
             _QC.dataloader_workers = 1
+            _QC.joblib_backend = "threading"
 
             # 从 instruments/all.txt 读取股票列表
             ins_file = Path(str(QLIB_DATA_DIR)) / "instruments" / "all.txt"
@@ -183,6 +155,10 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
             if r.empty:
                 return None
             r["datetime"] = pd.to_datetime(r["datetime"])
+            # 过滤 inf/-inf，并裁剪极端值（避免开源/除零产生的异常收益率污染统计）
+            col = self.config.label_name
+            r[col] = r[col].replace([np.inf, -np.inf], np.nan)
+            r[col] = r[col].clip(-1.0, 10.0)  # -100% ~ +1000%，裁掉明显异常值
             r = r.set_index(["instrument", "datetime"])
             r = r[r.index.get_level_values("datetime") >= start_time]
             r = r[r.index.get_level_values("datetime") <= end_time]
@@ -203,9 +179,10 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
         if not self._qinited:
             qlib.init(provider_uri=str(QLIB_DATA_DIR), region=REG_CN)
             self._qinited = True
-        # Windows 单线程加载
+        # Windows 强制单线程
         from qlib.config import C as _QC
         _QC.dataloader_workers = 1
+        _QC.joblib_backend = "threading"
 
         ifile = Path(str(QLIB_DATA_DIR)) / "instruments" / "all.txt"
         pool = []
@@ -289,7 +266,7 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
         ic_stats["monotonicity"] = round(mono, 4)
 
         ls_df = long_short_returns(q_df, config.quantiles - 1, 0, cost=config.robustness_ls_cost)
-        ls_stats = calc_ls_stats(ls_df, config.ic_annual_factor)
+        ls_stats = calc_ls_stats(ls_df, config.ic_annual_factor, config.label_horizon)
         ls_stats["monotonicity"] = round(mono, 4)
 
         turnover_stats = calc_turnover(q_df) if not q_df.empty else {}
@@ -308,7 +285,8 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
         # 4. 稳健性检验 — 子时段 + 子股票池
         robustness_df = test_sub_periods(
             df_proc, factor_col, label_col,
-            config.robustness_sub_periods, config.ic_annual_factor,
+            config.robustness_sub_periods,
+            config.ic_annual_factor, config.label_horizon,
         )
         if hasattr(config, 'robustness_sub_pools') and config.robustness_sub_pools:
             try:
@@ -324,6 +302,7 @@ WHERE p.trade_date>='{start_time}' AND p.trade_date<='{end_time}' ORDER BY p.ts_
                     [factor_col, label_col],
                     {factor_col: factor_col, label_col: label_col},
                     config.ic_annual_factor,
+                    label_horizon=config.label_horizon,
                 )
                 n_pools = len(sub_pool_results) if not sub_pool_results.empty else 0
                 if n_pools:

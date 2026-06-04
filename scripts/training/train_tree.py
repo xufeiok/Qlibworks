@@ -20,7 +20,7 @@ import numpy as np
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
 from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
-from qlworks.features.dataset import create_custom_dataset
+from qlworks.features.dataset import create_custom_dataset, FACTOR_CACHE_EXPRESSIONS
 from qlworks.models.training import train_lgb_model, train_xgb_model, train_catboost_model, predict_ensemble_models
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
@@ -32,7 +32,7 @@ import qlib
 CONFIG = {
     # [Renaissance 改进] 摒弃静态的 List 股票池，直接使用 Qlib 内置的动态别名
     # 这样 Qlib 内部会根据每一天的日期，动态过滤出当天真实属于 csi500 且未退市的成分股，彻底杜绝前视偏差与幸存者偏差
-    "instruments": "all", 
+    "instruments": "csi500", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     
@@ -213,8 +213,11 @@ def run_ml_pipeline():
         # 因为在树模型中，被选出的 max_features=20 已经在算法内做了限制，
         # 但为了更清晰的隔离，我们通过重新生成一个小 dataset 来保证干净：
         
-        # 从 bundle_all 中提取选中的因子公式
+        # 从 bundle_all 中提取选中的因子公式（含 factor_cache_names）
         expr_map = dict(zip(bundle_all.names, bundle_all.fields))
+        for name in CONFIG["factor_cache_names"]:
+            if name not in expr_map and name in FACTOR_CACHE_EXPRESSIONS:
+                expr_map[name] = FACTOR_CACHE_EXPRESSIONS[name]
         selected_exprs = [expr_map[name] for name in selected_factor_names]
         
         bundle_sub = FeatureBundle(
@@ -225,10 +228,11 @@ def run_ml_pipeline():
         )
         
         print(f"\n[3.3 - {window_name}] 根据选出的因子重构轻量级 DatasetH...")
+        # [重要] 因 bundle_sub 已包含选中因子（含缓存因子），传空列表避免重复注入导致列名冲突
         _, dataset_sub = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_sub,
-            factor_cache_names=CONFIG["factor_cache_names"],
+            factor_cache_names=[],
             start_time=segments["train"][0],
             end_time=segments["test"][1],
             fit_start_time=segments["train"][0],

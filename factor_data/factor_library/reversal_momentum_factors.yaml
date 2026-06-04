@@ -9,7 +9,13 @@ factors:
     sub_category: "short_term"
     expression:
       qlib: "Ref($close / Ref($close, 20) - 1, 1) * (-1)"
-      duckdb: "-1 * LAG(close / LAG(close, 20) - 1, 1)"
+      duckdb: |
+        WITH ret AS (
+          SELECT ts_code, trade_date,
+                 close / LAG(close, 20) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1 AS ret_20d
+          FROM _raw
+        )
+        SELECT ts_code, trade_date, -1 * LAG(ret_20d, 1) OVER (PARTITION BY ts_code ORDER BY trade_date) AS value FROM ret
     logic:
       return_source: "close"
       theory: "短期过度反应后的均值回归"
@@ -28,7 +34,13 @@ factors:
     sub_category: "short_term"
     expression:
       qlib: "Ref($close / Ref($close, 5) - 1, 1) * (-1)"
-      duckdb: "-1 * LAG(close / LAG(close, 5) - 1, 1)"
+      duckdb: |
+        WITH ret AS (
+          SELECT ts_code, trade_date,
+                 close / LAG(close, 5) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1 AS ret_5d
+          FROM _raw
+        )
+        SELECT ts_code, trade_date, -1 * LAG(ret_5d, 1) OVER (PARTITION BY ts_code ORDER BY trade_date) AS value FROM ret
     logic:
       return_source: "close"
       theory: "超短期过度反应后的快速修正"
@@ -47,7 +59,13 @@ factors:
     sub_category: "long_term"
     expression:
       qlib: "Ref($close / Ref($close, 252) - 1, 20) * (-1)"
-      duckdb: "-1 * LAG(close / LAG(close, 252) - 1, 20)"
+      duckdb: |
+        WITH ret AS (
+          SELECT ts_code, trade_date,
+                 close / LAG(close, 252) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1 AS ret_252d
+          FROM _raw
+        )
+        SELECT ts_code, trade_date, -1 * LAG(ret_252d, 20) OVER (PARTITION BY ts_code ORDER BY trade_date) AS value FROM ret
     logic:
       return_source: "close"
       theory: "长期过度反应后的均值回归"
@@ -66,7 +84,18 @@ factors:
     sub_category: "volatility"
     expression:
       qlib: "Ref(Std($close / Ref($close, 1) - 1, 60), 1) * (-1)"
-      duckdb: "-1 * LAG(STDDEV((close - LAG(close)) / LAG(close), 60), 1)"
+      duckdb: |
+        WITH ret AS (
+          SELECT ts_code, trade_date,
+                 (close - LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date)) / LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date) AS ret_1d
+          FROM _raw
+        ),
+        vol AS (
+          SELECT ts_code, trade_date,
+                 STDDEV_SAMP(ret_1d) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW) AS vol_60d
+          FROM ret
+        )
+        SELECT ts_code, trade_date, -1 * LAG(vol_60d, 1) OVER (PARTITION BY ts_code ORDER BY trade_date) AS value FROM vol
     logic:
       return_source: "close"
       theory: "高波动率后的均值回归"
@@ -85,7 +114,7 @@ factors:
     sub_category: "extreme"
     expression:
       qlib: "If(Abs($close / Ref($close, 1) - 1) > 0.095, ($close / Ref($close, 1) - 1) * (-1), 0)"
-      duckdb: "CASE WHEN ABS((close - LAG(close)) / LAG(close)) > 0.095 THEN -(close - LAG(close)) / LAG(close) ELSE 0 END"
+      duckdb: "CASE WHEN ABS((close - LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date)) / NULLIF(LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date), 0)) > 0.095 THEN -((close - LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date)) / NULLIF(LAG(close) OVER (PARTITION BY ts_code ORDER BY trade_date), 0)) ELSE 0 END"
     logic:
       return_source: "close"
       theory: "涨停/跌停后的反转效应"
@@ -108,7 +137,7 @@ factors:
     sub_category: "medium_term"
     expression:
       qlib: "$close / Ref($close, 126) - 1"
-      duckdb: "close / LAG(close, 126) - 1"
+      duckdb: "close / LAG(close, 126) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1"
     logic:
       return_source: "close"
       theory: "中期价格趋势延续"
@@ -127,7 +156,7 @@ factors:
     sub_category: "long_term"
     expression:
       qlib: "$close / Ref($close, 252) - 1"
-      duckdb: "close / LAG(close, 252) - 1"
+      duckdb: "close / LAG(close, 252) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1"
     logic:
       return_source: "close"
       theory: "长期价格趋势延续"
@@ -146,7 +175,7 @@ factors:
     sub_category: "risk_adjusted"
     expression:
       qlib: "$close / Ref($close, 232) - 1"
-      duckdb: "close / LAG(close, 232) - 1"
+      duckdb: "close / LAG(close, 232) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1"
     logic:
       return_source: "close"
       theory: "跳过最近一个月避免短期反转干扰"
@@ -166,7 +195,27 @@ factors:
     sub_category: "industry_neutral"
     expression:
       qlib: "($close / Ref($close, 126) - 1 - $sw_industry_mean_ret_126) / $sw_industry_std_ret_126"
-      duckdb: "(close / LAG(close, 126) - 1 - IND_AVG_RET_126D) / IND_STD_RET_126D"
+      duckdb: |
+        WITH stock_ret AS (
+          SELECT r.ts_code, r.trade_date,
+                 r.close / LAG(r.close, 126) OVER (PARTITION BY r.ts_code ORDER BY r.trade_date) - 1 AS ret_126d,
+                 i.sw_l1
+          FROM _raw r
+          LEFT JOIN _sw_industry i ON r.ts_code = i.ts_code
+        ),
+        ind_stats AS (
+          SELECT trade_date, sw_l1,
+                 AVG(ret_126d) AS ind_mean,
+                 STDDEV_SAMP(ret_126d) AS ind_std
+          FROM stock_ret
+          WHERE sw_l1 IS NOT NULL AND ret_126d IS NOT NULL
+          GROUP BY trade_date, sw_l1
+        )
+        SELECT s.ts_code, s.trade_date,
+               (s.ret_126d - i.ind_mean) / NULLIF(i.ind_std, 0) AS value
+        FROM stock_ret s
+        LEFT JOIN ind_stats i ON s.trade_date = i.trade_date AND s.sw_l1 = i.sw_l1
+        WHERE s.ret_126d IS NOT NULL AND i.ind_std IS NOT NULL AND i.ind_std > 0
     logic:
       return_source: "close"
       theory: "行业内标准化后的动量得分"
@@ -185,7 +234,7 @@ factors:
     sub_category: "acceleration"
     expression:
       qlib: "($close / Ref($close, 63) - 1) - ($close / Ref($close, 126) - 1)"
-      duckdb: "(close / LAG(close, 63) - 1) - (close / LAG(close, 126) - 1)"
+      duckdb: "(close / LAG(close, 63) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1) - (close / LAG(close, 126) OVER (PARTITION BY ts_code ORDER BY trade_date) - 1)"
     logic:
       return_source: "close"
       theory: "动量加速度，近期表现强于远期"

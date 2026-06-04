@@ -1,12 +1,26 @@
-﻿"""
+"""
 评测全局配置：所有可调参数集中管理，便于实验对比。
 
 支持三级准入门槛 + 生命周期配置 + 监控告警阈值。
 """
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
+
+
+def _parse_label_horizon(label_expr: str) -> int:
+    """从标签表达式自动解析持有期（交易日）。
+
+    解析规则：从 Ref($close, -N) 中提取 N。
+    例如 "Ref($close, -5) / Ref($open, -1) - 1" → 5
+    如果无法解析则默认返回 5。
+    """
+    m = re.search(r'Ref\(\$\w+,\s*(-\d+)\)', label_expr)
+    if m:
+        return abs(int(m.group(1)))
+    return 5
 
 
 @dataclass
@@ -24,6 +38,7 @@ class EvalConfig:
     # ── 收益率标签 ──
     label_expr: str = "Ref($close, -5) / Ref($open, -1) - 1"
     label_name: str = "LABEL_5D"
+    label_horizon: int = 0  # 0=自动从 label_expr 解析，也可以手动指定覆盖
 
     # ── 预处理 ──
     winsorize_method: str = "mad"
@@ -68,6 +83,11 @@ class EvalConfig:
     robustness_sub_periods: list = field(default_factory=lambda: [])
     robustness_sub_pools: list = field(default_factory=lambda: [])
     robustness_ls_cost: float = 0.001
+
+    def __post_init__(self):
+        """自动计算 label_horizon（0=从表达式解析）。"""
+        if self.label_horizon == 0:
+            self.label_horizon = _parse_label_horizon(self.label_expr)
 
 
 # 项目根目录：从 config.py 位置 src/qlworks/evaluation/config.py 向上

@@ -109,6 +109,18 @@ def _find_factor(m, name):
     return None
 
 
+def _meta_val(meta: dict, key: str, default=None):
+    """兼容新旧 meta 格式读取辅助函数。"""
+    # 新格式在 data_range 下
+    dr = meta.get("data_range", {}) if meta else {}
+    if key in dr and dr[key]:
+        return dr[key]
+    # 旧格式在顶层
+    if meta and key in meta and meta[key]:
+        return meta[key]
+    return default
+
+
 def show_status(store):
     """显示仓库中所有因子的状态。"""
     factors = store.list_warehouse_factors()
@@ -120,9 +132,10 @@ def show_status(store):
         eval_meta = store.get_evaluated_meta(name)
         tier = eval_meta.get("tier", "未评测") if eval_meta else "未评测"
         if meta:
-            years = ",".join(str(y) for y in (meta.get("years") or []))
-            total = meta.get("total_rows", 0)
-            last = meta.get("last_date", "")
+            years_list = _meta_val(meta, "years", [])
+            years = ",".join(str(y) for y in (years_list or []))
+            total = _meta_val(meta, "total_records", 0) or _meta_val(meta, "total_rows", 0)
+            last = _meta_val(meta, "last_date", "")
             print(f"  {name:30s} {years:20s} {total:>10,}  {last:14s}  {tier:12s}")
         else:
             print(f"  {name:30s} {'无元数据':20s}")
@@ -189,9 +202,10 @@ def main():
                                            duckdb_expr=duckdb_expr)
             else:
                 warehouse_meta = store.get_warehouse_meta(name)
-                wh_start = warehouse_meta.get("first_date", "")
-                wh_end = warehouse_meta.get("last_date", "")
-                logger.info(f"{name} 从仓库读取 ({wh_start} ~ {wh_end}, {warehouse_meta.get('total_rows', 0):,} 行)")
+                wh_start = _meta_val(warehouse_meta, "first_date", "")
+                wh_end = _meta_val(warehouse_meta, "last_date", "")
+                total_rows_val = _meta_val(warehouse_meta, "total_records", 0) or _meta_val(warehouse_meta, "total_rows", 0)
+                logger.info(f"{name} 从仓库读取 ({wh_start} ~ {wh_end}, {total_rows_val:,} 行)")
 
             # 从仓库加载数据（仓库列名为 value，需重命名为因子名）
             df = store.load_from_warehouse(name, args.start, args.end)
@@ -212,11 +226,13 @@ def main():
             )
             q = result["qual_result"]
             icon = {"core": "[OK]", "satellite": "[~]", "archive": "[ ]"}.get(q["tier"], "[ ]")
-            total_rows = warehouse_meta.get('total_rows', '?')
-            last_date = warehouse_meta.get('last_date', '?')
-            if total_rows != '?':
-                total_rows = f"{total_rows:,}"
-            last_rows = f"({total_rows}行, 至{last_date})" if not args.recompute else ""
+            # 读取最新 meta 信息（兼容新旧格式）
+            cur_meta = store.get_warehouse_meta(name) or {}
+            total_str = _meta_val(cur_meta, "total_records", 0) or _meta_val(cur_meta, "total_rows", 0)
+            if total_str:
+                total_str = f"{total_str:,}"
+            last_dt = _meta_val(cur_meta, "last_date", "?")
+            last_rows = f"({total_str}行, 至{last_dt})" if not args.recompute else ""
             print(f"  {icon} 等级={q['tier']:10s} IC={result['ic_stats']['ic_mean']:.4f} ICIR={result['ic_stats']['icir']:.2f} 评分={q['composite_score']:.1f} {last_rows}")
 
         except Exception as e:

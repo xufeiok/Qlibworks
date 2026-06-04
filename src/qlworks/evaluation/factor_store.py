@@ -99,6 +99,40 @@ class FactorStore:
             return []
         return sorted(int(f.stem) for f in d.glob("*.parquet") if f.stem.isdigit())
 
+    def inject_warehouse_meta(self, name: str, yaml_meta: dict):
+        """
+        向已有 warehouse 因子注入 YAML 语义元数据。
+        
+        不影响数据覆盖范围等自动计算的字段，只补充：version, category, sub_category,
+        expression, function_description, theory_background, applicable_conditions,
+        reference, lifecycle_stage, meaning, usage_scenario, strategy_hint.
+
+        Args:
+            name: 因子名
+            yaml_meta: 从 YAML 因子库提取的元数据字典
+        """
+        meta = self.get_warehouse_meta(name) or {}
+        semantic_keys = {
+            "version", "category", "sub_category",
+            "expression", "function_description", "theory_background",
+            "applicable_conditions", "reference", "lifecycle_stage",
+            "meaning", "usage_scenario", "strategy_hint",
+        }
+        for k in semantic_keys:
+            if k in yaml_meta and yaml_meta[k]:
+                meta[k] = yaml_meta[k]
+
+        # 确保 data_version
+        if "data_version" not in meta:
+            meta["data_version"] = "3.0"
+
+        p = self._warehouse_meta_path(name)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(meta, f, ensure_ascii=False, indent=2)
+
+        logger.info(f"[仓库] 已注入 YAML 元数据到 {name}")
+
     def compute_to_warehouse(self, name: str, expr: str,
                                start_date: str, end_date: str,
                                stocks: Optional[List[str]] = None,
@@ -145,6 +179,129 @@ class FactorStore:
         self._update_warehouse_meta(name)
         return stats
 
+    def batch_compute(self, factors: List[Tuple[str, str]],
+                       start_date: str, end_date: str,
+                       stocks: Optional[List[str]] = None,
+                       overwrite: bool = False) -> Dict[str, Dict[int, int]]:
+        """
+        批量计算多个价格类因子（共享同一份 OHLCV 数据），大幅减少 ClickHouse 查询次数。
+
+        Args:
+            factors: [(因子名, duckdb_表达式), ...] 列表
+            start_date/end_date: 日期范围
+            stocks: 可选股票列表
+            overwrite: 是否覆盖已有年份
+
+        Returns:
+            {因子名: {年份: 行数}} 字典
+        """
+        if not factors:
+            return {}
+
+        existing_all = True
+        to_compute = []
+        for name, ds in factors:
+            existing_years = set(self.get_warehouse_years(name))
+            target_years = set(range(int(start_date[:4]), int(end_date[:4]) + 1))
+            if overwrite or not target_years.issubset(existing_years):
+                to_compute.append((name, ds))
+                existing_all = False
+
+        if existing_all and not overwrite:
+            logger.info("[批量] 所有因子已存在，跳过")
+            return {}
+
+        try:
+            import duckdb
+            from qlworks.data import QuantDataAPI
+        except ImportError:
+            return {}
+
+        api = QuantDataAPI()
+        sd, ed = start_date, end_date
+
+        logger.info(f"[批量] 一次 ClickHouse 查询 ({sd} ~ {ed})，{len(to_compute)} 个因子")
+
+        sql = self._build_adj_sql(sd, ed, stocks)
+        raw = api.query(sql)
+        if raw.empty:
+            logger.warning("[批量] ClickHouse 返回空数据")
+            return {}
+
+        conn = duckdb.connect()
+        conn.register("_raw", raw)
+
+        # 分离 CTE 和非 CTE 表达式（CTE 需要单独执行，不能嵌入 SELECT）
+        cte_factors = [(n, ds) for n, ds in to_compute if ds.strip().upper().startswith("WITH")]
+        simple_factors = [(n, ds) for n, ds in to_compute if not ds.strip().upper().startswith("WITH")]
+
+        stats_all = {}
+
+        # 注册行业数据（缓存，供 CTE 中引用 _sw_industry）
+        self._register_industry(conn)
+
+        # 1. 非 CTE 表达式：合并为一次查询
+        if simple_factors:
+            select_parts = [f"{ds} AS \"{name}\"" for name, ds in simple_factors]
+            sql_all = f"SELECT ts_code, trade_date, {', '.join(select_parts)} FROM _raw WHERE ts_code IS NOT NULL AND trade_date IS NOT NULL"
+            try:
+                result = conn.execute(sql_all).df()
+                if not result.empty:
+                    result["trade_date"] = pd.to_datetime(result["trade_date"])
+                    for name, _ in simple_factors:
+                        if name in result.columns:
+                            stats_all[name] = self._save_factor_result(name, result)
+            except Exception as e:
+                logger.error(f"[批量] 简单表达式计算失败: {e}")
+
+        # 2. CTE 表达式：每个单独执行
+        for name, ds in cte_factors:
+            try:
+                part = conn.execute(ds).df()
+                if not part.empty and "value" in part.columns:
+                    part["trade_date"] = pd.to_datetime(part["trade_date"])
+                    part = part.rename(columns={"ts_code": "instrument", "value": name})
+                    part = part.set_index(["instrument", "trade_date"])
+                    part.index.names = ["instrument", "datetime"]
+                    part = part.astype({name: "float32"})
+                    part = part.sort_index()
+                    stats_all[name] = self._save_single_factor(name, part)
+                else:
+                    logger.warning(f"[批量] {name} CTE 结果为空")
+            except Exception as e:
+                logger.error(f"[批量] {name} CTE 执行失败: {e}")
+
+        conn.close()
+        return stats_all
+
+    def _save_single_factor(self, name: str, df: pd.DataFrame) -> Dict[int, int]:
+        """将单因子 DataFrame 按年份写入 warehouse 并更新 meta。"""
+        factor_dir = self._warehouse_dir(name)
+        factor_dir.mkdir(parents=True, exist_ok=True)
+        years = {}
+        df["_year"] = df.index.get_level_values("datetime").year
+        for year, grp in df.groupby("_year"):
+            grp = grp.drop(columns=["_year"])
+            grp.to_parquet(factor_dir / f"{year}.parquet", compression="zstd")
+            years[int(year)] = len(grp)
+        self._update_warehouse_meta(name)
+        total = sum(years.values())
+        logger.info(f"[批量] {name}: {total:,} 行")
+        return years
+
+    def _save_factor_result(self, name: str, result: pd.DataFrame) -> Dict[int, int]:
+        """从批量结果中提取单因子写入 warehouse。"""
+        factor_df = result[["ts_code", "trade_date", name]].copy()
+        factor_df = factor_df.dropna(subset=[name])
+        factor_df = factor_df.rename(columns={"ts_code": "instrument", name: "value"})
+        factor_df = factor_df.set_index(["instrument", "trade_date"])
+        factor_df.index.names = ["instrument", "datetime"]
+        factor_df = factor_df.astype({"value": "float32"})
+        factor_df = factor_df.sort_index()
+        if factor_df.empty:
+            return {}
+        return self._save_single_factor(name, factor_df)
+
     def append_to_warehouse(self, name: str, expr: str,
                               start_date: Optional[str] = None,
                               stocks: Optional[List[str]] = None,
@@ -165,10 +322,10 @@ class FactorStore:
         warehouse_meta = self.get_warehouse_meta(name)
 
         if start_date is None:
-            if warehouse_meta and warehouse_meta.get("last_date"):
+            if warehouse_meta and warehouse_meta.get("data_range", {}).get("last_date"):
                 # 从最后日期之后开始
                 from datetime import datetime, timedelta
-                last = datetime.strptime(warehouse_meta["last_date"], "%Y-%m-%d").date()
+                last = datetime.strptime(warehouse_meta["data_range"]["last_date"], "%Y-%m-%d").date()
                 start_date = (last + timedelta(days=1)).strftime("%Y-%m-%d")
             else:
                 # 仓库为空，退化为全量计算
@@ -176,7 +333,7 @@ class FactorStore:
 
         today = pd.Timestamp.now().strftime("%Y-%m-%d")
         if start_date >= today:
-            logger.info(f"[仓库] {name} 已是最新（最后日期={warehouse_meta.get('last_date','?')}），无需追加")
+            logger.info(f"[仓库] {name} 已是最新（最后日期={warehouse_meta.get('data_range', {}).get('last_date','?')}），无需追加")
             return 0
 
         logger.info(f"[仓库] 增量追加 {name}: {start_date} ~ {today}")
@@ -264,16 +421,27 @@ class FactorStore:
         # 过滤退市股：只保留评测期内始终上市的股票
         if filter_alive:
             try:
-                from qlworks.data import QuantDataAPI
-                api = QuantDataAPI()
-                universe = api.query("SELECT DISTINCT ts_code FROM stock_universe WHERE list_status='L'")
+                import clickhouse_connect
+                from qlworks.config import CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
+                ch = clickhouse_connect.get_client(
+                    host=CH_HOST, port=CH_PORT,
+                    user=CH_USER, password=CH_PASSWORD,
+                    database=CH_DATABASE, connect_timeout=10,
+                )
+                universe = ch.query_df("SELECT DISTINCT ts_code FROM stock_universe WHERE list_status='L'")
+                ch.close()
                 if not universe.empty:
                     alive_codes = set(universe["ts_code"].tolist())
                     mask = df.index.get_level_values("instrument").isin(alive_codes)
+                    n_before = len(df)
                     df = df[mask]
-                    logger.info(f"[仓库] {name} 过滤退市股后: {len(df)} 行 (去除 {mask.shape[0] - mask.sum()} 行)")
-            except Exception:
-                pass
+                    removed = n_before - len(df)
+                    if removed > 0:
+                        logger.info(f"[仓库] {name} 过滤退市股: 去除 {removed} 行，保留 {len(df)} 行")
+                else:
+                    logger.warning(f"[仓库] {name} stock_universe 查询为空，跳过过滤")
+            except Exception as e:
+                logger.warning(f"[仓库] {name} 退市股过滤跳过（ClickHouse 不可用）: {e}")
 
         return df
 
@@ -329,8 +497,8 @@ class FactorStore:
             "warehouse_path": str(self._warehouse_dir(name)),
             "last_updated": str(datetime.now()),
             "years": self.get_warehouse_years(name),
-            "total_rows": meta.get("total_rows", 0) if meta else 0,
-            "last_date": meta.get("last_date", "") if meta else "",
+            "total_rows": meta.get("statistics", {}).get("total_records", 0) if meta else 0,
+            "last_date": meta.get("data_range", {}).get("last_date", "") if meta else "",
             "data_version": "3.0",
         }
         ref_path = out_dir / f"{name}.ref.json"
@@ -417,12 +585,17 @@ class FactorStore:
             self._save_warehouse_year(name, year, combined)
 
     def _update_warehouse_meta(self, name: str):
-        """更新仓库元信息。"""
+        """
+        更新仓库元信息。
+        
+        保留已有的 YAML 语义元数据（表达式、含义、理论背景等），
+        只更新数据覆盖范围与基本统计。
+        """
         years = self.get_warehouse_years(name)
         total_rows = 0
         first_date = None
         last_date = None
-        all_dates = []
+        n_unique_stocks = 0
 
         for y in years:
             df = self._load_warehouse_year(name, y)
@@ -430,31 +603,48 @@ class FactorStore:
                 continue
             total_rows += len(df)
             dates = df.index.get_level_values("datetime")
-            all_dates.extend(dates)
+            if first_date is None or dates.min() < pd.Timestamp(first_date):
+                first_date = dates.min().strftime("%Y-%m-%d")
+            if last_date is None or dates.max() > pd.Timestamp(last_date):
+                last_date = dates.max().strftime("%Y-%m-%d")
+            n_unique_stocks = max(n_unique_stocks, df.index.get_level_values("instrument").nunique())
 
-        if all_dates:
-            all_dates = pd.to_datetime(all_dates)
-            first_date = all_dates.min().strftime("%Y-%m-%d")
-            last_date = all_dates.max().strftime("%Y-%m-%d")
+        # 读取已有的 meta.json，保留 YAML 语义字段
+        existing_meta = {}
+        p = self._warehouse_meta_path(name)
+        if p.exists():
+            try:
+                with open(p, encoding="utf-8") as f:
+                    existing_meta = json.load(f)
+            except Exception:
+                pass
+
+        # 从已有 meta 中提取 YAML 语义字段（这些由 YAML 因子库注入，不应被覆盖）
+        semantic_fields = {
+            "version", "category", "sub_category",
+            "expression", "function_description", "theory_background",
+            "applicable_conditions", "reference", "lifecycle_stage",
+            "meaning", "usage_scenario", "strategy_hint",
+        }
 
         meta = {
             "factor_name": name,
-            "years": years,
-            "total_rows": total_rows,
-            "first_date": first_date or "",
-            "last_date": last_date or "",
-            "n_stocks": 0,
             "data_version": "3.0",
             "updated_at": pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "data_range": {
+                "years": years,
+                "first_date": first_date or "",
+                "last_date": last_date or "",
+                "total_records": total_rows,
+                "unique_stocks": n_unique_stocks,
+            },
         }
 
-        # 数股票
-        if years:
-            df = self._load_warehouse_year(name, years[-1])
-            if df is not None:
-                meta["n_stocks"] = df.index.get_level_values("instrument").nunique()
+        # 注入已有的 YAML 语义字段
+        for field in semantic_fields:
+            if field in existing_meta and existing_meta[field]:
+                meta[field] = existing_meta[field]
 
-        p = self._warehouse_meta_path(name)
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -800,6 +990,27 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
             return True
         return False
 
+    _industry_cache: Optional[pd.DataFrame] = None
+
+    def _register_industry(self, conn) -> bool:
+        """将行业数据注册到 DuckDB 连接（缓存，仅查询一次）。"""
+        if FactorStore._industry_cache is None:
+            try:
+                from qlworks.data import QuantDataAPI
+                api = QuantDataAPI()
+                ind = api.query("""
+                    SELECT ts_code, l1_code AS sw_l1, l1_name AS sw_l1_name
+                    FROM sw_industry_members
+                """)
+                if not ind.empty:
+                    FactorStore._industry_cache = ind
+            except Exception:
+                return False
+        if FactorStore._industry_cache is not None:
+            conn.register("_sw_industry", FactorStore._industry_cache)
+            return True
+        return False
+
     def _try_duckdb(self, name, expr, start_date=None, end_date=None, stocks=None, duckdb_expr=None):
         try:
             import duckdb
@@ -830,6 +1041,7 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
 
             conn = duckdb.connect()
             conn.register("_raw", raw)
+            self._register_industry(conn)
             try:
                 if ds.strip().upper().startswith("WITH"):
                     # CTE 表达式：直接执行完整 SQL（里面自己引用 _raw）

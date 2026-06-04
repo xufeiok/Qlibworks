@@ -202,7 +202,7 @@ class QlibSynchronizer:
                         list_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
                     elif ' ' in date_str:  # datetime 格式，如 "1999-11-10 00:00:00"
                         list_date = date_str.split(' ')[0]
-                    f.write(f"{s}\t{list_date}\t9999-99-99\n")
+                    f.write(f"{s}\t{list_date}\t9999-12-31\n")
             print(f"    {fname}: {len(slist)} 只")
     
     def _get_main_board_stocks(self) -> List[str]:

@@ -4,14 +4,12 @@ from pathlib import Path
 try:
     from dotenv import load_dotenv
     _p = Path(__file__).resolve().parents[2] / '.env'
-    print(f"Loading .env file: {_p}")
-    if _p.exists():
-        load_dotenv(dotenv_path=str(_p), override=True)
-        print(f".env file loaded")
-    else:
-        print(f".env file not found")
+    if not hasattr(load_dotenv, '_already_loaded'):
+        if _p.exists():
+            load_dotenv(dotenv_path=str(_p), override=True)
+        load_dotenv._already_loaded = True
 except ImportError:
-    print(f"python-dotenv not installed")
+    pass
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 

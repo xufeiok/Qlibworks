@@ -29,6 +29,8 @@ def quantile_returns(
     for dt, grp in df.groupby("datetime"):
         f = grp[factor_col]
         l = grp[label_col]
+        # 过滤 inf/-inf
+        l = l.replace([np.inf, -np.inf], np.nan)
         valid = f.notna() & l.notna()
         if valid.sum() < quantiles * 2:
             continue
@@ -104,19 +106,17 @@ def long_short_returns(
     return pd.DataFrame(records).set_index("datetime") if records else pd.DataFrame()
 
 
-def calc_ls_stats(ls_df: pd.DataFrame, annual_factor: float = 252.0) -> dict:
+def calc_ls_stats(ls_df: pd.DataFrame, annual_factor: float = 252.0, label_horizon: int = 5) -> dict:
     """计算多空组合统计量。
 
     Args:
         ls_df: 多空收益数据，含 ls_return 列
         annual_factor: 年化因子（日度=252）
+        label_horizon: 标签收益率对应的持有期（交易日），
+                       如 5 日标签 label_horizon=5，则年化时除以 5，累积用日频等效
 
     Returns:
         含 annual_return, annual_vol, sharpe, max_drawdown, cumulative 的字典
-
-    注意事项:
-        - 自动丢弃 ls_return 中的 NaN，避免统计量传播为 NaN
-        - 非数值（NaN/Inf）统一替换为 0.0，确保后续格式化不报错
     """
     if ls_df.empty or len(ls_df) < 5:
         return {"annual_return": 0.0, "annual_vol": 0.0, "sharpe": 0.0, "max_drawdown": 0.0, "cumulative": pd.Series()}
@@ -125,11 +125,15 @@ def calc_ls_stats(ls_df: pd.DataFrame, annual_factor: float = 252.0) -> dict:
     if len(returns) < 5:
         return {"annual_return": 0.0, "annual_vol": 0.0, "sharpe": 0.0, "max_drawdown": 0.0, "cumulative": pd.Series()}
 
-    ann_ret = float(returns.mean()) * annual_factor
-    ann_vol = float(returns.std()) * np.sqrt(annual_factor)
+    # 将多期标签收益率转为日频等效后再年化
+    # 如 5日标签: 日频等效 = 标签值 / 5
+    daily_equiv = returns / label_horizon if label_horizon > 1 else returns
+    ann_ret = float(daily_equiv.mean()) * annual_factor
+    ann_vol = float(returns.std()) / np.sqrt(label_horizon) * np.sqrt(annual_factor) if label_horizon > 1 else float(returns.std()) * np.sqrt(annual_factor)
     sharpe = ann_ret / ann_vol if ann_vol > 1e-12 else 0.0
 
-    cum = (1 + returns).cumprod()
+    # 累积用日频等效收益，避免多期标签的复利爆炸
+    cum = (1 + daily_equiv).cumprod()
     running_max = cum.cummax()
     dd = (cum - running_max) / running_max.where(running_max > 0, np.nan)
     mdd = float(np.nanmin(dd)) if not dd.isna().all() else 0.0

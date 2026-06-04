@@ -21,6 +21,7 @@ def test_sub_periods(
     label_col: str,
     periods: list,
     annual_factor: float = 252.0,
+    label_horizon: int = 5,
 ) -> pd.DataFrame:
     """子时段检验。"""
     rows = []
@@ -32,7 +33,7 @@ def test_sub_periods(
         stats = calc_ic_stats(ic_s, annual_factor)
         q_df = quantile_returns(sub, factor_col, label_col)
         ls_df = long_short_returns(q_df, cost=0.001)
-        ls_s = calc_ls_stats(ls_df, annual_factor)
+        ls_s = calc_ls_stats(ls_df, annual_factor, label_horizon)
         rows.append({
             "period": f"{start}~{end}",
             "ic_mean": stats["ic_mean"],
@@ -47,7 +48,7 @@ def test_sub_periods(
 
 
 def test_sub_pools(
-    accessor_call: Callable,
+    df: pd.DataFrame,
     factor_col: str,
     label_col: str,
     start_time: str,
@@ -56,6 +57,7 @@ def test_sub_pools(
     label_expr: str,
     field_exprs: dict,
     annual_factor: float = 252.0,
+    label_horizon: int = 5,
 ) -> pd.DataFrame:
     """子股票池检验。"""
     rows = []
@@ -73,7 +75,7 @@ def test_sub_pools(
             ls_df = long_short_returns(q_df)
 
             n_stocks = len(df.index.get_level_values("instrument").unique()) if isinstance(df.index, pd.MultiIndex) else 0
-            ls_s = calc_ls_stats(ls_df, annual_factor)
+            ls_s = calc_ls_stats(ls_df, annual_factor, label_horizon)
 
             rows.append({
                 "pool": pool,

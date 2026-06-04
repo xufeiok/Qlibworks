@@ -31,6 +31,10 @@ class CSQuantileNorm:
         self.eps = eps
         # 忽略其他未使用的参数
     
+    def __call__(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Qlib 处理器接口：允许对象被直接调用"""
+        return self.fit_transform(df)
+
     def fit(self, df: pd.DataFrame):
         """拟合（本处理器不需要拟合）"""
         return self

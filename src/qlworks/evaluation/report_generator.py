@@ -16,6 +16,16 @@ import plotly.express as px
 from plotly.subplots import make_subplots
 
 
+def _load_plotly_js() -> str:
+    """从本地 Plotly 包中读取 plotly.min.js，用于内嵌到 HTML 实现离线查看。"""
+    import plotly as _pl
+    _js_path = Path(_pl.__file__).parent / "package_data" / "plotly.min.js"
+    if _js_path.exists():
+        return _js_path.read_text(encoding="utf-8")
+    # fallback: 尝试从 CDN 加载（已安装 plotly 时不应走到这里）
+    return '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>'
+
+
 class FactorReportGenerator:
     """生成单因子测评 HTML 报告。"""
 
@@ -88,8 +98,8 @@ class FactorReportGenerator:
         colors = px.colors.sequential.Blues[2:2 + max(len(group_means), 1)]
         vals_safe = []
         texts = []
+        any_valid = False
         for v in group_means.values:
-            # 兼容 float32（仓库存储）和 float64 的 NaN/Inf
             import math as _m
             if hasattr(v, 'item'):
                 v = v.item()
@@ -97,8 +107,16 @@ class FactorReportGenerator:
                 vals_safe.append(0.0)
                 texts.append('N/A')
             else:
+                any_valid = True
                 vals_safe.append(float(v) * 100)
-                texts.append(f'{float(v) * 100:.3f}%')
+                texts.append(f'{float(v) * 100:.4f}%')
+        # 全部 NaN 也画图，但显示提示信息
+        fig.add_annotation(
+            xref="paper", yref="paper",
+            x=0.5, y=0.5,
+            text="数据不足（因子分层后各分组平均收益均为 NaN）" if not any_valid else "",
+            showarrow=False, font=dict(size=14, color="#94a3b8"),
+        )
         fig.add_trace(go.Bar(
             x=[f"Q{i+1}" for i in group_means.index],
             y=vals_safe,
@@ -246,15 +264,21 @@ class FactorReportGenerator:
         import math as _m
         safe_vals = []
         safe_texts = []
+        any_valid = False
         for v in hpr_df['ls_return']:
             vv = v.item() if hasattr(v, 'item') else v
             if isinstance(vv, float) and (_m.isnan(vv) or _m.isinf(vv)):
                 safe_vals.append(0.0)
                 safe_texts.append('N/A')
             else:
+                any_valid = True
                 safe_vals.append(float(vv) * 100)
                 safe_texts.append(f'{float(vv) * 100:.2f}%')
         fig = go.Figure()
+        if not any_valid:
+            fig.add_annotation(xref="paper", yref="paper", x=0.5, y=0.5,
+                text="数据不足（各持有期收益均为 NaN）", showarrow=False,
+                font=dict(size=14, color="#94a3b8"))
         fig.add_trace(go.Bar(
             x=[f'{h}日' for h in hpr_df['horizon']],
             y=safe_vals,
@@ -333,7 +357,7 @@ class FactorReportGenerator:
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>单因子评测报告 — {self.factor_name}</title>
-<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<script>{_load_plotly_js()}</script>
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f5f7fa; color: #333; padding: 20px; }}
