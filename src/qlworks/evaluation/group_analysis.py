@@ -161,6 +161,7 @@ def calc_holding_period_returns(
     label_col: str,
     quantiles: int = 5,
     horizons: list = None,
+    cost_bps: float = 0.0,
 ) -> pd.DataFrame:
     """多期持有收益分析：在不同调仓频率下因子的分层收益。
 
@@ -204,7 +205,7 @@ def calc_holding_period_returns(
             "horizon": h,
             "q0_mean": q_means.get(0, 0),
             f"q{quantiles - 1}_mean": q_means.get(quantiles - 1, 0),
-            "ls_return": ls_ret,
+            "ls_return": ls_ret - cost_bps / 10000.0 * 252,  # net of slippage
             "monotonicity": mono,
             "n_days": q_df["datetime"].nunique() if not q_df.empty else 0,
         })
@@ -264,3 +265,63 @@ def calc_turnover(q_df: pd.DataFrame) -> dict:
         "max_turnover": round(mx, 4),
     }
 
+# ── A 股交易约束过滤 ──
+
+def filter_ashare_constraints(df, factor_col=None, limit_up_pct=0.095, limit_down_pct=-0.095, filter_suspended=True, volume_col='volume'):
+    import numpy as np
+    result = df.copy()
+    n_before = len(result)
+    reasons = []
+    if limit_up_pct is not None and 'change_pct' in result.columns:
+        limit_up_mask = result['change_pct'] >= limit_up_pct
+        if volume_col in result.columns:
+            vol = pd.to_numeric(result[volume_col], errors='coerce').fillna(0)
+            limit_up_mask = limit_up_mask & (vol < result[volume_col].quantile(0.5))
+        result = result[~limit_up_mask]
+        reasons.append(f'涨跌停过滤: {limit_up_mask.sum()} 行')
+    if filter_suspended and volume_col in result.columns:
+        vol = pd.to_numeric(result[volume_col], errors='coerce').fillna(0)
+        suspended = vol == 0
+        result = result[~suspended]
+        reasons.append(f'停牌过滤: {suspended.sum()} 行')
+    n_removed = n_before - len(result)
+    if n_removed > 0 and factor_col:
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f'[A 股约束] {factor_col}: 去除 {n_removed} 行')
+    return result
+
+
+def calc_capacity_analysis(df, factor_col, label_col, aum_levels=None, turnover_rate=0.5, annual_factor=252.0):
+    import numpy as np
+    import pandas as pd
+    if aum_levels is None:
+        aum_levels = [1e8, 5e8, 1e9, 5e9, 1e10]
+    q_df = quantile_returns(df, factor_col, label_col)
+    ls_df = long_short_returns(q_df, cost=0.0)
+    ls_stats = calc_ls_stats(ls_df, annual_factor)
+    base_ret = ls_stats.get('annual_return', 0)
+    base_sharpe = ls_stats.get('sharpe', 0)
+    if 'amount' in df.columns:
+        avg_daily_volume = pd.to_numeric(df['amount'], errors='coerce').median()
+    else:
+        avg_daily_volume = 1e8
+    rows = []
+    for aum in aum_levels:
+        daily_turnover = aum * turnover_rate
+        participation_rate = daily_turnover / avg_daily_volume if avg_daily_volume > 0 else 0
+        participation_rate = min(participation_rate, 1.0)
+        impact_cost = np.sqrt(participation_rate) * 0.001
+        annual_impact = impact_cost * annual_factor * turnover_rate
+        adj_return = base_ret - annual_impact
+        capacity_ratio = adj_return / base_ret if abs(base_ret) > 1e-8 else 0
+        rows.append({
+            'aum': aum,
+            'aum_label': f'{aum/1e8:.0f}亿',
+            'annual_return': round(adj_return, 4),
+            'sharpe': round(base_sharpe * max(0, capacity_ratio), 4),
+            'capacity_ratio': round(capacity_ratio, 4),
+            'participation_rate': round(participation_rate, 4),
+            'impact_cost_bps': round(impact_cost * 10000, 1),
+        })
+    return pd.DataFrame(rows)

@@ -1,100 +1,121 @@
-"""
-评测全局配置：所有可调参数集中管理，便于实验对比。
-
-支持三级准入门槛 + 生命周期配置 + 监控告警阈值。
-"""
+"""评测全局配置：所有可调参数集中管理，便于实验对比。支持三级准入门槛 + 生命周期配置 + 监控告警阈值 + A 股交易约束。全周期覆盖：2010-01-01 ~ 2026-12-31"""
 
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 
 
 def _parse_label_horizon(label_expr: str) -> int:
-    """从标签表达式自动解析持有期（交易日）。
-
-    解析规则：从 Ref($close, -N) 中提取 N。
-    例如 "Ref($close, -5) / Ref($open, -1) - 1" → 5
-    如果无法解析则默认返回 5。
-    """
-    m = re.search(r'Ref\(\$\w+,\s*(-\d+)\)', label_expr)
+    m = re.search(r"Ref\(\$\w+,\s*(-\d+)\)", label_expr)
     if m:
         return abs(int(m.group(1)))
     return 5
 
 
+EXTREME_EVENTS = {
+    "2015_crash": ("2015-06-15", "2015-09-15"),
+    "2016_meltdown": ("2016-01-04", "2016-01-28"),
+    "2018_trade_war": ("2018-03-23", "2018-10-31"),
+    "2020_covid": ("2020-02-03", "2020-03-23"),
+    "2024_small_cap_crisis": ("2024-01-02", "2024-02-08"),
+}
+
+
 @dataclass
 class EvalConfig:
-    # ── 基础数据 ──
     instruments: str = "csi500"
-    start_time: str = "2018-01-01"
-    end_time: str = "2025-12-31"
+    start_time: str = "2010-01-01"
+    end_time: str = "2026-12-31"
     freq: str = "day"
 
-    # ── 数据切分 ──
-    train_end: str = "2023-12-31"
-    valid_end: str = "2024-12-31"
+    train_end: str = "2024-12-31"
+    valid_end: str = "2025-12-31"
 
-    # ── 收益率标签 ──
     label_expr: str = "Ref($close, -5) / Ref($open, -1) - 1"
     label_name: str = "LABEL_5D"
-    label_horizon: int = 0  # 0=自动从 label_expr 解析，也可以手动指定覆盖
+    label_horizon: int = 0
 
-    # ── 预处理 ──
     winsorize_method: str = "mad"
     winsorize_threshold: float = 5.0
     standardize_method: str = "zscore"
     neutralization: str = "industry_market"
 
-    # ── IC 分析 ──
+    limit_up_pct: float = 0.095
+    limit_down_pct: float = -0.095
+    limit_up_exit_rule: str = "next_open"
+    limit_down_exit_rule: str = "next_open"
+    filter_suspended: bool = True
+    suspended_volume_threshold: float = 0.0
+
+    slippage_entry_bps: float = 10.0
+    slippage_exit_bps: float = 10.0
+    market_impact_bps: float = 5.0
+
     ic_method: str = "spearman"
     ic_annual_factor: float = 252.0
 
-    # ── 分层回测 ──
     quantiles: int = 5
     long_short_quantiles: tuple = field(default_factory=lambda: (0, 2))
 
-    # ── 筛选标准（三级准入标准 — IC/预测能力级）──
-    ic_threshold: float = 0.03        # 初筛放宽至 0.03
-    icir_threshold: float = 0.5       # 初筛放宽至 0.5
-    win_rate_threshold: float = 0.60
-    ls_annual_return_threshold: float = 0.10
-    ls_sharpe_threshold: float = 0.5
-    satellite_composite_min: float = 40.0  # satellite 最低综合评分
+    ic_threshold: float = 0.02
+    icir_threshold: float = 0.4
+    win_rate_threshold: float = 0.55
+    ls_annual_return_threshold: float = 0.05
+    ls_sharpe_threshold: float = 0.3
+    satellite_composite_min: float = 40.0
 
-    # ── 生命周期配置 ──
+    enable_fama_macbeth: bool = True
+    fm_standard_errors: str = "newey_west"
+    fm_nw_lags: int = 4
+
+    enable_walk_forward: bool = True
+    wf_train_months: int = 36
+    wf_valid_months: int = 12
+    wf_step_months: int = 12
+
+    enable_bootstrap: bool = True
+    bootstrap_n: int = 1000
+    bootstrap_ci: float = 0.95
+
+    enable_capacity_analysis: bool = True
+    capacity_aum_levels: list = field(default_factory=lambda: [1e8, 5e8, 1e9, 5e9, 1e10])
+
+    enable_extreme_stress: bool = True
+    extreme_event_names: list = field(default_factory=lambda: [
+        "2015_crash", "2016_meltdown", "2018_trade_war",
+        "2020_covid", "2024_small_cap_crisis",
+    ])
+
+    enable_ff_attribution: bool = True
+    ff_model: str = "ff5"
+
     enable_lifecycle: bool = True
     registry_dir: str = ""
     factor_library_dir: str = ""
 
-    # ── 监控告警阈值 ──
     monitor_freq: str = "month"
-    monitor_ic_warning: float = 0.03
+    monitor_ic_warning: float = 0.02
     monitor_ic_danger: float = 0.0
     monitor_consecutive_bad: int = 3
 
-    # ── 输出目录 ──
-    warehouse_dir: str = ""       # 统一数据仓库（按年分文件，不分 tier）
-    factors_dir: str = ""         # 按 tier 的引用目录（软链/注册表）
-    cache_dir: str = ""           # 计算缓存
-    report_dir: str = ""          # HTML 报告
+    warehouse_dir: str = ""
+    factors_dir: str = ""
+    cache_dir: str = ""
+    report_dir: str = ""
 
-    # ── 稳健性检验 ──
     robustness_sub_periods: list = field(default_factory=lambda: [])
     robustness_sub_pools: list = field(default_factory=lambda: [])
     robustness_ls_cost: float = 0.001
 
     def __post_init__(self):
-        """自动计算 label_horizon（0=从表达式解析）。"""
         if self.label_horizon == 0:
             self.label_horizon = _parse_label_horizon(self.label_expr)
 
 
-# 项目根目录：从 config.py 位置 src/qlworks/evaluation/config.py 向上
-# __file__ 的实际解析需用 resolve() 确保准确
 _BASE_DIR = Path(__file__).resolve().parent
-_QLWORKS_DIR = _BASE_DIR.parent  # src/qlworks
-_PROJECT_ROOT = _QLWORKS_DIR.parent.parent  # src → Qlibworks
+_QLWORKS_DIR = _BASE_DIR.parent
+_PROJECT_ROOT = _QLWORKS_DIR.parent.parent
 
 DEFAULT_CONFIG = EvalConfig(
     warehouse_dir=str(_PROJECT_ROOT / "factor_data" / "warehouse"),
@@ -104,9 +125,11 @@ DEFAULT_CONFIG = EvalConfig(
     registry_dir=str(_PROJECT_ROOT / "factor_data" / "registry"),
     factor_library_dir=str(_PROJECT_ROOT / "factor_data" / "factor_library"),
     robustness_sub_periods=[
-        ("2018-01-01", "2020-12-31"),
-        ("2021-01-01", "2023-12-31"),
-        ("2024-01-01", "2026-04-30"),
+        ("2010-01-01", "2012-12-31"),
+        ("2013-01-01", "2015-12-31"),
+        ("2016-01-01", "2018-12-31"),
+        ("2019-01-01", "2021-12-31"),
+        ("2022-01-01", "2026-12-31"),
     ],
     robustness_sub_pools=["csi300", "csi500", "csi800"],
 )

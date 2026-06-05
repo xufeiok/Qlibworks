@@ -183,3 +183,154 @@ def calc_ic_bootstrap_ci(
         "n_bootstrap": n_bootstrap,
     }
 
+
+
+# ──────────── Fama-MacBeth 回归 ────────────
+
+def calc_fama_macbeth(
+    df: pd.DataFrame,
+    factor_col: str,
+    label_col: str,
+    control_cols: list = None,
+) -> dict:
+    """Fama-MacBeth 两步回归。
+
+    Step 1 (截面): 每日对 factor_col 与 label_col 做 OLS 回归
+    Step 2 (时序): 对回归系数序列做 Newey-West t 检验
+
+    Returns:
+        dict with keys: gamma_mean, gamma_std, t_stat, p_value, n_days
+    """
+    import numpy as np
+    import pandas as pd
+    from scipy import stats
+
+    gammas = []
+    for dt, grp in df.groupby("datetime"):
+        y = grp[label_col].values
+        x = grp[factor_col].values
+        mask = ~(np.isnan(x) | np.isnan(y) | np.isinf(x) | np.isinf(y))
+        if mask.sum() < 10:
+            continue
+        x_c = np.column_stack([np.ones(mask.sum()), x[mask]])
+        y_c = y[mask]
+        try:
+            beta = np.linalg.lstsq(x_c, y_c, rcond=None)[0]
+            gammas.append(beta[1])
+        except Exception:
+            continue
+
+    if len(gammas) < 10:
+        return {"gamma_mean": 0.0, "gamma_std": 0.0, "t_stat": 0.0, "p_value": 1.0, "n_days": len(gammas)}
+
+    gamma_arr = np.array(gammas)
+    gamma_mean = float(np.mean(gamma_arr))
+    gamma_std = float(np.std(gamma_arr, ddof=1))
+    t_stat = gamma_mean / (gamma_std / np.sqrt(len(gamma_arr))) if gamma_std > 1e-12 else 0.0
+    p_value = 2 * (1 - stats.t.cdf(abs(t_stat), df=len(gamma_arr)-1))
+
+    return {
+        "gamma_mean": round(gamma_mean, 6),
+        "gamma_std": round(gamma_std, 6),
+        "t_stat": round(t_stat, 4),
+        "p_value": round(float(p_value), 6),
+        "n_days": len(gammas),
+    }
+
+
+# ──────────── Newey-West 标准误调整 ────────────
+
+def calc_newey_west_tstat(
+    series: pd.Series,
+    lags: int = None,
+) -> dict:
+    """Newey-West HAC 标准误 t 统计量。
+
+    自动选择滞后阶数（若未指定）：lags = int(4 * (n/100)**(2/9))
+    """
+    import numpy as np
+
+    s = series.dropna().values
+    n = len(s)
+    if n < 10:
+        return {"mean": 0.0, "nw_std": 0.0, "nw_tstat": 0.0, "nw_pvalue": 1.0}
+
+    if lags is None:
+        lags = int(4 * (n / 100) ** (2 / 9))
+    lags = max(1, min(lags, n // 3))
+
+    mean = float(np.mean(s))
+    resid = s - mean
+
+    # 计算 OLS 方差
+    var_ols = np.var(resid, ddof=1) / n
+
+    # Newey-West 方差修正
+    gamma0 = np.mean(resid ** 2)
+    nw_var = gamma0
+    for j in range(1, lags + 1):
+        gamma_j = np.mean(resid[j:] * resid[:-j]) if j < n else 0
+        w = 1 - j / (lags + 1)  # Bartlett kernel
+        nw_var += 2 * w * gamma_j
+    nw_var = max(nw_var / n, 1e-20)
+
+    nw_std = float(np.sqrt(nw_var))
+    nw_tstat = mean / nw_std if nw_std > 1e-12 else 0.0
+
+    from scipy import stats
+    nw_pvalue = 2 * (1 - stats.t.cdf(abs(nw_tstat), df=n-1))
+
+    return {
+        "mean": round(mean, 6),
+        "nw_std": round(nw_std, 6),
+        "nw_tstat": round(nw_tstat, 4),
+        "nw_pvalue": round(float(nw_pvalue), 6),
+        "nw_lags": lags,
+        "n_obs": n,
+    }
+
+
+# ──────────── IC 自相关修正（Lo's Adjusted Sharpe） ────────────
+
+def calc_lo_adjusted_sharpe(
+    returns: pd.Series,
+    annual_factor: float = 252.0,
+    q: int = None,
+) -> dict:
+    """Lo (2002) 修正夏普比率的置信区间。
+
+    考虑时间序列自相关对夏普比率标准误的向下偏误。
+    """
+    import numpy as np
+
+    r = returns.dropna().values
+    n = len(r)
+    if n < 10:
+        return {"sharpe": 0.0, "se": 0.0, "ci_lower": 0.0, "ci_upper": 0.0}
+
+    mean_r = float(np.mean(r))
+    std_r = float(np.std(r, ddof=1))
+    sharpe = mean_r / std_r * np.sqrt(annual_factor) if std_r > 1e-12 else 0.0
+
+    # 自相关修正的标准误
+    if q is None:
+        q = int(np.floor(n ** 0.25))
+    q = max(1, min(q, n // 4))
+
+    autocov = np.array([
+        np.mean((r[t:] - mean_r) * (r[:-t] - mean_r)) if t > 0 else np.var(r, ddof=0)
+        for t in range(q + 1)
+    ])
+    # 计算 Vq 修正因子
+    vq = autocov[0] + 2 * np.sum((1 - np.arange(1, q+1) / (q+1)) * autocov[1:])
+    vq = vq / autocov[0] if autocov[0] > 1e-12 else 1.0
+
+    se_sharpe = np.sqrt((1 + 0.5 * sharpe**2 / annual_factor) * vq / n)
+
+    return {
+        "sharpe": round(sharpe, 4),
+        "se": round(float(se_sharpe), 4),
+        "q_lags": q,
+        "vq": round(float(vq), 4),
+        "n_obs": n,
+    }

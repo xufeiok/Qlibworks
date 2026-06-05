@@ -25,6 +25,7 @@
 
 import json
 import logging
+import os
 import re
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Set
@@ -417,8 +418,7 @@ class FactorStore:
             df = df[df.index.get_level_values("datetime") >= start_date]
         if end_date:
             df = df[df.index.get_level_values("datetime") <= end_date]
-
-        # 过滤退市股：只保留评测期内始终上市的股票
+        # 过滤退市股：按每日上市状态过滤（Point-in-Time），避免幸存者偏差
         if filter_alive:
             try:
                 import clickhouse_connect
@@ -428,20 +428,56 @@ class FactorStore:
                     user=CH_USER, password=CH_PASSWORD,
                     database=CH_DATABASE, connect_timeout=10,
                 )
-                universe = ch.query_df("SELECT DISTINCT ts_code FROM stock_universe WHERE list_status='L'")
-                ch.close()
-                if not universe.empty:
-                    alive_codes = set(universe["ts_code"].tolist())
-                    mask = df.index.get_level_values("instrument").isin(alive_codes)
+                dates = df.index.get_level_values("datetime").unique()
+                date_list = sorted(dates)
+                all_alive = set()
+                for batch_start in range(0, len(date_list), 200):
+                    batch_dates = date_list[batch_start:batch_start+200]
+                    dr_str = ",".join(f"'{d.date()}'" for d in batch_dates)
+                    try:
+                        univ = ch.query_df(f"""
+                            SELECT ts_code, trade_date
+                            FROM stock_universe_daily
+                            WHERE trade_date IN ({dr_str})
+                                  AND list_status = 'L'
+                        """)
+                        if not univ.empty:
+                            for _, row in univ.iterrows():
+                                key = str(row["ts_code"]) + "@" + str(row["trade_date"])
+                                all_alive.add(key)
+                    except Exception:
+                        pass
+                if all_alive:
+                    idx = df.index.get_level_values("instrument") + "@" + df.index.get_level_values("datetime").astype(str)
                     n_before = len(df)
-                    df = df[mask]
+                    df = df[[x in all_alive for x in idx]]
                     removed = n_before - len(df)
                     if removed > 0:
-                        logger.info(f"[仓库] {name} 过滤退市股: 去除 {removed} 行，保留 {len(df)} 行")
+                        logger.info(f"[仓库] {name} PIT 退市股过滤: 去除 {removed} 行，保留 {len(df)} 行")
                 else:
-                    logger.warning(f"[仓库] {name} stock_universe 查询为空，跳过过滤")
+                    logger.warning(f"[仓库] {name} stock_universe_daily 查询为空，跳过过滤")
+                ch.close()
             except Exception as e:
-                logger.warning(f"[仓库] {name} 退市股过滤跳过（ClickHouse 不可用）: {e}")
+                try:
+                    logger.warning(f"[仓库] {name} PIT 过滤不可用，回退到当前状态: {e}")
+                    ch = clickhouse_connect.get_client(
+                        host=CH_HOST, port=CH_PORT,
+                        user=CH_USER, password=CH_PASSWORD,
+                        database=CH_DATABASE, connect_timeout=10,
+                    )
+                    universe = ch.query_df("SELECT DISTINCT ts_code FROM stock_universe WHERE list_status='L'")
+                    ch.close()
+                    if not universe.empty:
+                        alive_codes = set(universe["ts_code"].tolist())
+                        mask = df.index.get_level_values("instrument").isin(alive_codes)
+                        n_before = len(df)
+                        df = df[mask]
+                        removed = n_before - len(df)
+                        if removed > 0:
+                            logger.warning(f"[仓库] {name} 当前状态过滤: 去除 {removed} 行")
+                except Exception as e2:
+                    logger.warning(f"[仓库] {name} 退市股过滤全部跳过: {e2}")
+
 
         return df
 
@@ -664,24 +700,28 @@ class FactorStore:
             chunks.append((cur.strftime("%Y-%m-%d"), nxt.strftime("%Y-%m-%d")))
             cur = nxt + pd.Timedelta(days=1)
         return chunks
-
     def _build_adj_sql(self, start_date, end_date, stocks=None):
-        """构建前复权 OHLCV + 日频指标查询 SQL（price + daily_indicators）。"""
+        """????? OHLCV + ???? + ?? + ?????? SQL?"""
         adj = ", ".join(f"CAST(p.{f} * a.adj_factor / latest.adj_factor AS DOUBLE) AS {f}"
                         for f in ["open", "high", "low", "close"])
         indicator_fields = ", ".join(
-            f"CAST(i.{f} AS DOUBLE) AS {f}" if f in ('total_mv', 'circ_mv') else f"i.{f} AS {f}"
+            f"CAST(i.{f} AS DOUBLE) AS {f}" if f in ("total_mv", "circ_mv") else f"i.{f} AS {f}"
             for f in sorted(DAILY_INDICATOR_FIELDS)
         )
         stock_filter = ""
         if stocks:
             codes = ", ".join(f"'{c}'" for c in stocks)
             stock_filter = f" AND p.ts_code IN ({codes})"
-        return f"""SELECT p.ts_code AS ts_code, p.trade_date AS trade_date, {adj}, CAST(p.vol AS DOUBLE) AS volume, CAST(p.amount AS DOUBLE) AS amount, {indicator_fields}
+        return f"""SELECT p.ts_code AS ts_code, p.trade_date AS trade_date, {adj},
+       CAST(p.vol AS DOUBLE) AS volume, CAST(p.amount AS DOUBLE) AS amount,
+       CAST(p.pre_close AS DOUBLE) AS pre_close, CAST(p.change_pct AS DOUBLE) AS change_pct,
+       {indicator_fields},
+       sw.industry_name AS industry, sw.industry_code AS industry_code
 FROM daily_prices p
 JOIN daily_adj_factors a ON p.ts_code=a.ts_code AND p.trade_date=a.trade_date
 JOIN (SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor FROM daily_adj_factors GROUP BY ts_code) latest ON p.ts_code=latest.ts_code
 LEFT JOIN daily_indicators i ON p.ts_code=i.ts_code AND p.trade_date=i.trade_date
+LEFT JOIN sw_industry_mapping sw ON p.ts_code=sw.ts_code
 WHERE p.trade_date>='{start_date}' AND p.trade_date<='{end_date}'{stock_filter}
 ORDER BY p.ts_code, p.trade_date"""
 
@@ -944,23 +984,28 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         sd = start_date or self.config.start_time
         ed = end_date or self.config.end_time
 
-        # [Bloomberg Data Pipeline] 第 1 层：DuckDB + daily_prices/daily_indicators
-        # 覆盖量价因子 + 估值/市值类因子（pe_ttm, pb, circ_mv 等）
-        df = self._try_duckdb(name, expr, sd, ed, stocks, duckdb_expr=duckdb_expr)
-        if df is not None and not FactorStore._is_degenerate(df):
-            return df
-        if df is not None:
-            logger.warning(f"[计算] {name} DuckDB 结果退化（全零/常数），回退到 Qlib...")
-
-        # [AQR] 第 2 层：DuckDB + financial_indicators forward-fill
-        # 覆盖财务因子（roe, eps, netprofit_yoy 等）
-        ds = duckdb_expr or self._qlib_to_duckdb(expr)
-        if ds is not None and self._is_financial_factor(ds):
-            df = self._try_duckdb_financial(name, expr, sd, ed, stocks, duckdb_expr)
+        # 检查是否强制使用 Qlib
+        force_qlib = os.environ.get("FORCE_QLIB", "false").lower() == "true"
+        if not force_qlib:
+            # [Bloomberg Data Pipeline] 第 1 层：DuckDB + daily_prices/daily_indicators
+            # 覆盖量价因子 + 估值/市值类因子（pe_ttm, pb, circ_mv 等）
+            df = self._try_duckdb(name, expr, sd, ed, stocks, duckdb_expr=duckdb_expr)
             if df is not None and not FactorStore._is_degenerate(df):
                 return df
             if df is not None:
-                logger.warning(f"[计算] {name} DuckDB 财务结果退化，回退到 Qlib...")
+                logger.warning(f"[计算] {name} DuckDB 结果退化（全零/常数），回退到 Qlib...")
+
+            # [AQR] 第 2 层：DuckDB + financial_indicators forward-fill
+            # 覆盖财务因子（roe, eps, netprofit_yoy 等）
+            ds = duckdb_expr or self._qlib_to_duckdb(expr)
+            if ds is not None and self._is_financial_factor(ds):
+                df = self._try_duckdb_financial(name, expr, sd, ed, stocks, duckdb_expr)
+                if df is not None and not FactorStore._is_degenerate(df):
+                    return df
+                if df is not None:
+                    logger.warning(f"[计算] {name} DuckDB 财务结果退化，回退到 Qlib...")
+        else:
+            logger.info(f"[计算] {name} 强制使用 Qlib (FORCE_QLIB=true)")
 
         # 第 3 层：Qlib 兜底（最慢但最全）
         df = self._try_qlib(name, expr, sd, ed, stocks)
@@ -969,6 +1014,18 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         raise RuntimeError(f"无法计算因子 {name}: {expr}")
 
     @staticmethod
+
+    @staticmethod
+    def _detect_suspension(df: pd.DataFrame) -> pd.Series:
+        """?????????? 0 ?????????? bool Series?"""
+        if df is None or df.empty:
+            return pd.Series(dtype=bool)
+        vol = df.get("volume", df.get("vol", None))
+        if vol is None:
+            return pd.Series(False, index=df.index)
+        vol = pd.to_numeric(vol, errors="coerce").fillna(0)
+        return vol == 0
+
     def _is_degenerate(df: pd.DataFrame) -> bool:
         """检测因子计算结果是否退化（全零/常数）。
         
@@ -1128,7 +1185,7 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
                 self._qlib_inited = True
             # Windows 单线程加速
             from qlib.config import C as _QC
-            _QC.dataloader_workers = 1
+            _QC.dataloader_workers = 0
         except Exception:
             pass
 

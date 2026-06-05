@@ -32,6 +32,9 @@ from .factor_selector import (
 )
 from .lifecycle import LifecycleManager
 from .factor_store import FactorStore
+from .ic_analysis import calc_fama_macbeth, calc_newey_west_tstat, calc_ic_bootstrap_ci, calc_lo_adjusted_sharpe
+from .group_analysis import filter_ashare_constraints, calc_capacity_analysis
+from .config import EXTREME_EVENTS
 
 
 class FactorEvaluator:
@@ -244,6 +247,15 @@ class FactorEvaluator:
             "中性化": config.neutralization,
         }
 
+        # 1b. A 股交易约束过滤（涨跌停/停牌/滑点）
+        if config.filter_suspended or config.limit_up_pct is not None:
+            df_proc = filter_ashare_constraints(
+                df_proc, factor_name,
+                limit_up_pct=config.limit_up_pct,
+                limit_down_pct=config.limit_down_pct,
+                filter_suspended=config.filter_suspended,
+            )
+
         # 2. IC 分析（含向量化 Spearman + 行业中性 IC）
         ic_series = calc_daily_ic(df_proc, factor_col, label_col, config.ic_method)
         ic_stats = calc_ic_stats(ic_series, config.ic_annual_factor)
@@ -265,7 +277,9 @@ class FactorEvaluator:
         mono = calc_monotonicity_score(q_df) if not q_df.empty else 0.0
         ic_stats["monotonicity"] = round(mono, 4)
 
-        ls_df = long_short_returns(q_df, config.quantiles - 1, 0, cost=config.robustness_ls_cost)
+        # 使用配置中的滑点参数（入场+出场+冲击成本），而非固定 cost
+        total_bps = config.slippage_entry_bps + config.slippage_exit_bps + config.market_impact_bps
+        ls_df = long_short_returns(q_df, config.quantiles - 1, 0, cost=total_bps / 10000.0)
         ls_stats = calc_ls_stats(ls_df, config.ic_annual_factor, config.label_horizon)
         ls_stats["monotonicity"] = round(mono, 4)
 
@@ -274,7 +288,8 @@ class FactorEvaluator:
 
         # 3b. 多期持有收益分析（不同调仓周期的因子表现）
         hpr_df = calc_holding_period_returns(df_proc, factor_col, label_col, config.quantiles,
-                                              horizons=[1, 5, 10, 20]) if not df_proc.empty else pd.DataFrame()
+                                              horizons=[1, 5, 10, 20],
+                                              cost_bps=total_bps) if not df_proc.empty else pd.DataFrame()
         best_horizon = 5
         if not hpr_df.empty and hpr_df["ls_return"].notna().any():
             best_row_idx = hpr_df["ls_return"].abs().idxmax()
@@ -411,6 +426,132 @@ class FactorEvaluator:
             "lifecycle_stage": qual_result.get("lifecycle_stage", ""),
             "data_quality": dq_report,
         }
+
+    # ── Walk-Forward 滚动外推验证 ──
+
+    def walk_forward_evaluate(self, factor_name, df, config_override=None):
+        import numpy as np
+        config = self.config
+        if config_override:
+            for k, v in config_override.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+        if not config.enable_walk_forward:
+            return self.evaluate(factor_name, df)
+        df = df.sort_values('datetime').reset_index(drop=True)
+        all_dates = sorted(df['datetime'].unique())
+        if len(all_dates) < 200:
+            return self.evaluate(factor_name, df)
+        train_days = config.wf_train_months * 21
+        valid_days = config.wf_valid_months * 21
+        step_days = config.wf_step_months * 21
+        total_days = len(all_dates)
+        if total_days < train_days + valid_days:
+            return self.evaluate(factor_name, df)
+        windows = []
+        start_idx = 0
+        while start_idx + train_days + valid_days <= total_days:
+            windows.append((
+                all_dates[start_idx],
+                all_dates[start_idx + train_days - 1],
+                all_dates[start_idx + train_days],
+                all_dates[start_idx + train_days + valid_days - 1],
+            ))
+            start_idx += step_days
+        from .ic_analysis import calc_daily_ic, calc_ic_stats
+        all_ic = []
+        wf_rows = []
+        for w_idx, (ts, te, vs, ve) in enumerate(windows):
+            valid_df = df[(df['datetime'] >= str(vs)[:10]) & (df['datetime'] <= str(ve)[:10])]
+            if valid_df.empty:
+                continue
+            ic_s = calc_daily_ic(valid_df, factor_name, config.label_name)
+            stats = calc_ic_stats(ic_s, config.ic_annual_factor)
+            all_ic.extend(ic_s.dropna().tolist())
+            wf_rows.append({
+                'window': w_idx + 1,
+                'train': f'{str(ts)[:10]}~{str(te)[:10]}',
+                'valid': f'{str(vs)[:10]}~{str(ve)[:10]}',
+                'ic_mean': stats['ic_mean'],
+                'icir': stats['icir'],
+            })
+        if not all_ic:
+            return self.evaluate(factor_name, df)
+        wf_mean = float(np.mean(all_ic))
+        wf_std = float(np.std(all_ic, ddof=1)) if len(all_ic) > 1 else 1.0
+        wf_icir = wf_mean / wf_std * np.sqrt(config.ic_annual_factor) if wf_std > 1e-12 else 0.0
+        result = self.evaluate(factor_name, df)
+        result['walk_forward'] = {
+            'windows': wf_rows,
+            'wf_ic_mean': round(wf_mean, 6),
+            'wf_icir': round(wf_icir, 4),
+            'n_windows': len(windows),
+        }
+        logger.info('[WF] %s: %d windows, IC=%.4f, ICIR=%.2f', factor_name, len(windows), wf_mean, wf_icir)
+        return result
+
+    # ── Walk-Forward 滚动外推验证 ──
+
+    def walk_forward_evaluate(self, factor_name, df, config_override=None):
+        import numpy as np
+        config = self.config
+        if config_override:
+            for k, v in config_override.items():
+                if hasattr(config, k):
+                    setattr(config, k, v)
+        if not config.enable_walk_forward:
+            return self.evaluate(factor_name, df)
+        df = df.sort_values('datetime').reset_index(drop=True)
+        all_dates = sorted(df['datetime'].unique())
+        if len(all_dates) < 200:
+            return self.evaluate(factor_name, df)
+        train_days = config.wf_train_months * 21
+        valid_days = config.wf_valid_months * 21
+        step_days = config.wf_step_months * 21
+        total_days = len(all_dates)
+        if total_days < train_days + valid_days:
+            return self.evaluate(factor_name, df)
+        windows = []
+        start_idx = 0
+        while start_idx + train_days + valid_days <= total_days:
+            windows.append((
+                all_dates[start_idx],
+                all_dates[start_idx + train_days - 1],
+                all_dates[start_idx + train_days],
+                all_dates[start_idx + train_days + valid_days - 1],
+            ))
+            start_idx += step_days
+        from .ic_analysis import calc_daily_ic, calc_ic_stats
+        all_ic = []
+        wf_rows = []
+        for w_idx, (ts, te, vs, ve) in enumerate(windows):
+            valid_df = df[(df['datetime'] >= str(vs)[:10]) & (df['datetime'] <= str(ve)[:10])]
+            if valid_df.empty:
+                continue
+            ic_s = calc_daily_ic(valid_df, factor_name, config.label_name)
+            stats = calc_ic_stats(ic_s, config.ic_annual_factor)
+            all_ic.extend(ic_s.dropna().tolist())
+            wf_rows.append({
+                'window': w_idx + 1,
+                'train': f'{str(ts)[:10]}~{str(te)[:10]}',
+                'valid': f'{str(vs)[:10]}~{str(ve)[:10]}',
+                'ic_mean': stats['ic_mean'],
+                'icir': stats['icir'],
+            })
+        if not all_ic:
+            return self.evaluate(factor_name, df)
+        wf_mean = float(np.mean(all_ic))
+        wf_std = float(np.std(all_ic, ddof=1)) if len(all_ic) > 1 else 1.0
+        wf_icir = wf_mean / wf_std * np.sqrt(config.ic_annual_factor) if wf_std > 1e-12 else 0.0
+        result = self.evaluate(factor_name, df)
+        result['walk_forward'] = {
+            'windows': wf_rows,
+            'wf_ic_mean': round(wf_mean, 6),
+            'wf_icir': round(wf_icir, 4),
+            'n_windows': len(windows),
+        }
+        logger.info('[WF] %s: %d windows, IC=%.4f, ICIR=%.2f', factor_name, len(windows), wf_mean, wf_icir)
+        return result
 
     def evaluate_batch(self, factors, df_fn):
         """批量评测因子。"""

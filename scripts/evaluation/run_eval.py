@@ -155,6 +155,7 @@ def main():
     parser.add_argument("--end", default="2025-12-31")
     parser.add_argument("--recompute", action="store_true",
                         help="强制从 ClickHouse 实时计算并写入仓库（跳过仓库缓存）")
+    parser.add_argument("--walk-forward", action="store_true", help="启用 Walk-Forward 滚动外推验证")
     parser.add_argument("--dry-run", action="store_true", help="仅列出因子，不评测")
     args = parser.parse_args()
 
@@ -220,10 +221,16 @@ def main():
                 df = df.join(df_label, how="inner")
 
             # [AQR] 完整评测流水线
-            result = evaluator.evaluate(
-                name, df.reset_index(),
-                category=f.get("category", "satellite"),
-            )
+            if args.walk_forward:
+                result = evaluator.walk_forward_evaluate(
+                    name, df.reset_index(),
+                    config_override={"category": f.get("category", "satellite")},
+                )
+            else:
+                result = evaluator.evaluate(
+                    name, df.reset_index(),
+                    category=f.get("category", "satellite"),
+                )
             q = result["qual_result"]
             icon = {"core": "[OK]", "satellite": "[~]", "archive": "[ ]"}.get(q["tier"], "[ ]")
             # 读取最新 meta 信息（兼容新旧格式）
