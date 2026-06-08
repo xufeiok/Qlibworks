@@ -1,4 +1,4 @@
-"""
+﻿"""
 因子数据存储层 — 统一数据仓库 + 增量追加
 
 架构：
@@ -221,13 +221,31 @@ class FactorStore:
         api = QuantDataAPI()
         sd, ed = start_date, end_date
 
-        logger.info(f"[批量] 一次 ClickHouse 查询 ({sd} ~ {ed})，{len(to_compute)} 个因子")
+        # Split into 3-year chunks to avoid single massive query timeout
+        n_chunks = (int(ed[:4]) - int(sd[:4])) // 3 + 1
+        if n_chunks > 1:
+            logger.info("""[批量] 分 %d 批查询 (%s ~ %s)，%d 个因子""" % (n_chunks, sd, ed, len(to_compute)))
+        else:
+            logger.info("""[批量] 一次 ClickHouse 查询 (%s ~ %s)，%d 个因子""" % (sd, ed, len(to_compute)))
 
-        sql = self._build_adj_sql(sd, ed, stocks)
-        raw = api.query(sql)
-        if raw.empty:
+        all_raw = []
+        for ci in range(n_chunks):
+            cs = str(int(sd[:4]) + ci * 3) + '-01-01'
+            ce = str(min(int(sd[:4]) + (ci + 1) * 3 - 1, int(ed[:4]))) + '-12-31'
+            logger.info("""  [批次 %d/%d] %s ~ %s""" % (ci + 1, n_chunks, cs, ce))
+            sql = self._build_adj_sql(cs, ce, stocks)
+            try:
+                raw = api.query(sql)
+                if not raw.empty:
+                    all_raw.append(raw)
+            except Exception as e:
+                logger.warning("""  [批次 %d/%d] 查询失败: %s""" % (ci + 1, n_chunks, e))
+
+        if not all_raw:
             logger.warning("[批量] ClickHouse 返回空数据")
             return {}
+        import pandas as pd
+        raw = pd.concat(all_raw, ignore_index=True)
 
         conn = duckdb.connect()
         conn.register("_raw", raw)
@@ -714,14 +732,14 @@ class FactorStore:
             stock_filter = f" AND p.ts_code IN ({codes})"
         return f"""SELECT p.ts_code AS ts_code, p.trade_date AS trade_date, {adj},
        CAST(p.vol AS DOUBLE) AS volume, CAST(p.amount AS DOUBLE) AS amount,
-       CAST(p.pre_close AS DOUBLE) AS pre_close, CAST(p.change_pct AS DOUBLE) AS change_pct,
+       CAST(p.pre_close AS DOUBLE) AS pre_close, CAST(p.pct_chg AS DOUBLE) AS change_pct,
        {indicator_fields},
-       sw.industry_name AS industry, sw.industry_code AS industry_code
+       sw.l1_name AS industry, sw.l1_code AS industry_code
 FROM daily_prices p
 JOIN daily_adj_factors a ON p.ts_code=a.ts_code AND p.trade_date=a.trade_date
 JOIN (SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor FROM daily_adj_factors GROUP BY ts_code) latest ON p.ts_code=latest.ts_code
 LEFT JOIN daily_indicators i ON p.ts_code=i.ts_code AND p.trade_date=i.trade_date
-LEFT JOIN sw_industry_mapping sw ON p.ts_code=sw.ts_code
+LEFT JOIN sw_industry_members sw ON p.ts_code=sw.ts_code
 WHERE p.trade_date>='{start_date}' AND p.trade_date<='{end_date}'{stock_filter}
 ORDER BY p.ts_code, p.trade_date"""
 
@@ -1158,11 +1176,41 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
             return f"STDDEV({f}) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN {n-1} PRECEDING AND CURRENT ROW)"
 
         e = re.sub(r"Std\((\$\w+),\s*(\d+)\)", _s, e)
+
+        def _minmax(m, func):
+            f = m.group(1).lstrip("$")
+            n = int(m.group(2))
+            return f"{func}({f}) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN {n-1} PRECEDING AND CURRENT ROW)"
+
+        e = re.sub(r"Min\((\$\w+),\s*(\d+)\)", lambda m: _minmax(m, "MIN"), e)
+        e = re.sub(r"Max\((\$\w+),\s*(\d+)\)", lambda m: _minmax(m, "MAX"), e)
+        e = re.sub(r"Sum\((\$\w+),\s*(\d+)\)", lambda m: _minmax(m, "SUM"), e)
+        e = re.sub(r"Ts_Max\((\$\w+),\s*(\d+)\)", lambda m: _minmax(m, "MAX"), e)
+
+        # Delta($field, N) -> field - LAG(field, N) OVER (...)
+        def _delta(m):
+            f = m.group(1).lstrip("$")
+            off = abs(int(m.group(2)))
+            return f"{f} - LAG({f},{off}) OVER (PARTITION BY ts_code ORDER BY trade_date)"
+
+        e = re.sub(r"Delta\((\$\w+),\s*(-?\d+)\)", _delta, e)
+
+        # If(cond, then, else) -> CASE WHEN cond THEN then ELSE else END
+        e = re.sub(r"If\((.+?),\s*(.+?),\s*(.+?)\)", r"CASE WHEN \1 THEN \2 ELSE \3 END", e)
+        # Greater(a, b) -> CASE WHEN a > b THEN 1 ELSE 0 END
+        e = re.sub(r"Greater\((.+?),\s*(.+?)\)", r"CASE WHEN \1 > \2 THEN 1 ELSE 0 END", e)
+        # Less(a, b) -> CASE WHEN a < b THEN 1 ELSE 0 END
+        e = re.sub(r"Less\((.+?),\s*(.+?)\)", r"CASE WHEN \1 < \2 THEN 1 ELSE 0 END", e)
+        # Abs($field) -> ABS(field)
+        e = re.sub(r"Abs\((\$\w+)\)", r"ABS(\1)", e)
+        # Sign($field) -> SIGN(field)
+        e = re.sub(r"Sign\((\$\w+)\)", r"SIGN(\1)", e)
+
         # 转换 Log($field) → ln(nullif(field, 0)) 防止 log(0) 报错
         e = re.sub(r"Log\((\$\w+)\)", r"ln(nullif(\1, 0))", e)
         e = re.sub(r"\$(\w+)", r"\1", e)
         # 如果 Mean/Std 还有未匹配的（复杂表达式含窗口函数嵌套），退回 Qlib
-        if 'Mean(' in e or 'Std(' in e:
+        if 'Mean(' in e or 'Std(' in e or 'Corr(' in e or 'Rank(' in e or 'Ts_Rank(' in e:
             return None
         for kw in ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE"]:
             if kw in e.upper():
@@ -1262,3 +1310,4 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         r = pd.concat(frames, axis=1)
         r.columns = frames.keys()
         return r
+
