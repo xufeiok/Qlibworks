@@ -312,15 +312,21 @@ def create_custom_dataset(
             feature_bundle, start_time, end_time
         )
         
-        # 为剩余没有 warehouse 数据的因子构建表达式
-        # fields 和 names 是平行列表，需要根据名称索引找到表达式
-        for field_name in remaining_fields:
+        # ===== 修复：warehouse 加载的因子也要加入表达式 =====
+        # loaded_factors 中的因子数据存在但无法注入 QlibDataLoader，
+        # QlibDataLoader 只能通过表达式从 .bin 数据计算特征。
+        # 因此即使 warehouse 有数据，也必须添加对应的 Qlib 表达式，
+        # 让所有因子都能进入特征选择流程。
+        for field_name in feature_bundle.names:
             try:
                 idx = feature_bundle.names.index(field_name)
                 expr = feature_bundle.fields[idx]
                 final_feature_exprs.append(expr)
                 final_feature_names.append(field_name)
-                print(f"    [表达式构建] {field_name}: {expr}")
+                if field_name in loaded_factors:
+                    print(f"    [表达式构建·已缓存] {field_name}: {len(loaded_factors[field_name]):,} 条warehouse数据可用")
+                else:
+                    print(f"    [表达式构建] {field_name}: {expr}")
             except ValueError:
                 print(f"    [警告] 因子 {field_name} 在 names 列表中未找到")
     else:
@@ -328,12 +334,12 @@ def create_custom_dataset(
         final_feature_exprs = all_feature_exprs
         final_feature_names = all_feature_names
     
-    # 注入 DuckDB + Parquet 预计算因子的 Qlib 表达式（factor_cache_names 优先级最低）
+    # 注入 DuckDB + Parquet 预计算因子的 Qlib 表达式（作为额外增量因子）
     if factor_cache_names:
         for name in factor_cache_names:
-            # 如果已经从 warehouse 加载了，就跳过
-            if name in loaded_factors:
-                print(f"    [跳过] {name} 已从 warehouse 加载")
+            # 如果已在 feature_bundle 中（含 warehouse 加载的），跳过避免重复
+            if name in final_feature_names:
+                print(f"    [跳过] {name} 已在 feature_bundle 中")
                 continue
             
             expr = FACTOR_CACHE_EXPRESSIONS.get(name)

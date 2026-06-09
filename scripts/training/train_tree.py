@@ -2,6 +2,9 @@ import os
 import sys
 import warnings
 
+# MLflow 新版禁止文件系统存储，设置环境变量启用（Qlib 默认使用文件系统）
+os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
+
 # Conda site-packages 优先，Roaming 放后面（解决 Roaming 路径污染）
 sp = list(sys.path)
 conda_sp = [p for p in sp if 'Anaconda' in p and 'site-packages' in p]
@@ -41,7 +44,7 @@ CONFIG = {
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"], # 预测标签名称
     "factor_files": ["reversal_momentum_factors"], # 待加载的因子文件
-    "factor_cache_names": ["ret_1d", "ma_5", "price_position_20"], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
+    "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
     "neutralize_features": False, # 是否对特征进行横截面中性化
     "neutralize_labels": True, # 是否对标签进行横截面中性化 (防范日内跳空带来的前视偏差错位)
     

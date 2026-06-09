@@ -178,6 +178,16 @@ class EnhancedQlibStrategy(bt.Strategy):
                 current_price = d.close[0]
                 high_price = d.high[0]
                 
+                # 跳过无效价格
+                if current_price is None or np.isnan(current_price) or current_price <= 0:
+                    self.log(f"  [跳过风控] {d._name} 当日价格无效 ({current_price})")
+                    continue
+                entry_price = state.get('entry_price')
+                if entry_price is None or np.isnan(entry_price) or entry_price <= 0:
+                    self.log(f"  [跳过风控] {d._name} 入场价格无效 ({entry_price})，清除状态")
+                    del self.trade_states[d]
+                    continue
+                
                 # 更新最高价
                 if high_price > state['max_high']:
                     state['max_high'] = high_price
@@ -280,7 +290,11 @@ class EnhancedQlibStrategy(bt.Strategy):
                         
                 # [A股优化] 强制将目标金额转换为 100 的整数倍股数 (一手)
                 final_target_value = self.broker.getvalue() * target_weight
-                target_shares = int((final_target_value / d.close[0]) // 100 * 100)
+                close_price = d.close[0]
+                if close_price is None or np.isnan(close_price) or close_price <= 0:
+                    self.log(f"  [跳过] {d._name} 当日收盘价无效 ({close_price})，跳过调仓")
+                    continue
+                target_shares = int((final_target_value / close_price) // 100 * 100)
                 
                 if target_shares >= 100 or target_shares < self.getposition(d).size: # 允许卖出非整手，但买入必须整手
                     self.order_target_size(d, target=target_shares)
