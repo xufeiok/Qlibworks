@@ -83,6 +83,11 @@ class EnhancedQlibStrategy(bt.Strategy):
             for d in self.instruments:
                 self.atrs[d] = bt.indicators.ATR(d, period=self.p.atr_period)
 
+        # [Virtu 改进] 成交量均线用于容量限制校验（避免使用当日成交量做未来函数）
+        self.vol_smas = {}
+        for d in self.instruments:
+            self.vol_smas[d] = bt.indicators.SMA(d.volume, period=20)
+
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             return
@@ -277,9 +282,9 @@ class EnhancedQlibStrategy(bt.Strategy):
                 
                 # 如果是买入，检查是否超过成交量限制
                 if delta_value > 0:
-                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)
-                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0
-                    max_allowed_shares = available_volume * self.p.volume_limit_pct
+                    # [Virtu 改进] 使用过去20日均量作为可用流动性参考，避免使用当日成交量（未来函数）
+                    avg_volume = self.vol_smas[d][0] if not np.isnan(self.vol_smas[d][0]) else (d.volume[0] if not np.isnan(d.volume[0]) else 0)
+                    max_allowed_shares = avg_volume * self.p.volume_limit_pct
                     max_allowed_value = max_allowed_shares * d.close[0]
                     
                     if delta_value > max_allowed_value:

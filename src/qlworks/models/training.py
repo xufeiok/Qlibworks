@@ -235,6 +235,14 @@ def train_ridge_model(dataset, params: Dict[str, object] = None):
     x_train = train_frame.drop(columns=[label_col]).fillna(0.0)
     y_train = train_frame[label_col].fillna(train_frame[label_col].median())
 
+    # [安全防护] 移除 y 中的无穷大值，否则 sklearn 会报 "Input y contains infinity"
+    finite_mask = np.isfinite(y_train) & np.all(np.isfinite(x_train), axis=1)
+    if not finite_mask.all():
+        count = (~finite_mask).sum()
+        print(f"    清理 {count} 条包含无穷大值的样本")
+        x_train = x_train.loc[finite_mask]
+        y_train = y_train.loc[finite_mask]
+
     # [Citadel Alpha Lab 改进] 指数时间衰减权重 (Exponential Decay Weighting)
     # 距离当前越近的样本权重越大。半衰期设定为 252 个交易日 (约1年)。
     dates = x_train.index.get_level_values('datetime')

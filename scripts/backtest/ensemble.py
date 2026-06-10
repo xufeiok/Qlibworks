@@ -20,7 +20,7 @@ import warnings
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
 
 from qlworks.backtest.bt_runner import run_qlib_backtrader, EnhancedQlibStrategy
-from qlworks.backtest.industry import load_industry_map, apply_industry_constraint
+from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
 import qlib
 from qlib.data import D
 
@@ -120,8 +120,8 @@ def load_subsample_set():
     return inst_set
 
 
-def run_backtest_for_score(pred_df, label, industry_map=None, subsample_set=None, strategy_params=None):
-    """对单份评分数据执行一次完整的回测（加载行情 → 行业约束 → 子样本过滤 → 运行引擎 → 解析指标），返回绩效指标字典和输出目录。"""
+def run_backtest_for_score(pred_df, label, industry_maps=None, subsample_set=None, strategy_params=None):
+    """对单份评分数据执行一次完整的回测（加载行情 → 行业约束(PIT) → 子样本过滤 → 运行引擎 → 解析指标），返回绩效指标字典和输出目录。"""
     tag = f"{label}" + ("_约束" if CONFIG["industry_neutral"] else "_无约束")
     print(f"\n{'='*56}")
     print(f"    回测模型: {tag}")
@@ -151,8 +151,8 @@ def run_backtest_for_score(pred_df, label, industry_map=None, subsample_set=None
         df = df[df.index.get_level_values('instrument').isin(subsample_set)]
         print(f"    [子样本] {before_count} 条 → {len(df)} 条，仅保留指定成分股")
 
-    if CONFIG["industry_neutral"] and industry_map is not None:
-        df = apply_industry_constraint(df, industry_map, top_k=CONFIG["top_k"], max_per_industry=CONFIG["max_per_industry"])
+    if CONFIG["industry_neutral"] and industry_maps is not None:
+        df = apply_industry_constraint_pit(df, industry_maps, top_k=CONFIG["top_k"], max_per_industry=CONFIG["max_per_industry"])
 
     all_instruments = df.index.get_level_values('instrument').unique().tolist()
     price_dict = get_price_dict(all_instruments, CONFIG["start_date"], CONFIG["end_date"])
@@ -252,12 +252,12 @@ def run_model_comparison():
         score_df = load_score(model_name)
         if score_df is not None:
             all_instruments.update(score_df.index.get_level_values('instrument').unique().tolist())
-    industry_map = load_industry_map(list(all_instruments), CONFIG["start_date"])
+    industry_maps = load_industry_maps_pit(list(all_instruments), CONFIG["start_date"], CONFIG["end_date"])
     if all_instruments:
-        coverage = sum(1 for inst in industry_map) / len(all_instruments) * 100
-        print(f"    行业数据覆盖率: {len(industry_map)}/{len(all_instruments)} = {coverage:.1f}%")
+        first_map = next(iter(industry_maps.values()))
+        coverage = sum(1 for inst in first_map) / len(all_instruments) * 100
+        print(f"    行业数据覆盖率: {len(first_map)}/{len(all_instruments)} = {coverage:.1f}% ({len(industry_maps)} 个年度快照)")
     else:
-        coverage = 0
         print("    行业数据覆盖率: 无可用股票数据")
 
     subsample_set = load_subsample_set()
@@ -267,13 +267,13 @@ def run_model_comparison():
         score_df = load_score(model_name)
         if score_df is None:
             continue
-        metrics, _ = run_backtest_for_score(score_df, model_name, industry_map, subsample_set)
+        metrics, _ = run_backtest_for_score(score_df, model_name, industry_maps, subsample_set)
         all_metrics.append(metrics)
 
     print(f"\n    [Model Stacking] 融合权重: {CONFIG['ensemble_weights']}")
     ensemble_score = build_ensemble_score()
     if ensemble_score is not None:
-        metrics, _ = run_backtest_for_score(ensemble_score, 'ensemble', industry_map, subsample_set)
+        metrics, _ = run_backtest_for_score(ensemble_score, 'ensemble', industry_maps, subsample_set)
         all_metrics.append(metrics)
 
     print_comparison(all_metrics)

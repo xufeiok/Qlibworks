@@ -19,14 +19,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../s
 from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
 from qlworks.features.dataset import create_custom_dataset
 from qlworks.models.training import train_ridge_model, predict_ensemble_models
-from qlworks.models import prepare_feature_selection_data, select_features
+from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
 import qlib
 
 # ==============================================================================
 # [配置加载] 优先从 YAML 文件加载，兼容传统内嵌 CONFIG 字典
 # ==============================================================================
-from _config import load_config
 
 # 解析命令行参数
 _parser = argparse.ArgumentParser(description="线性模型训练脚本")
@@ -36,6 +35,7 @@ _args, _ = _parser.parse_known_args()
 
 # 加载 YAML 配置，失败时回退到传统 CONFIG 字典
 try:
+    from _config import load_config
     CONFIG = load_config(_args.config)
     if not CONFIG:
         raise ValueError("配置为空")
@@ -53,8 +53,8 @@ except Exception as e:
         "model_type": "linear",
         "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"],
         "label_names": ["LABEL_5D"],
-        "factor_files": ["style_factors", "quality_factors", "price_volume_factors", "sentiment_factors", "risk_factors"],
-        "factor_cache_names": ["ret_1d", "ma_5", "price_position_20"], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
+        "factor_files": ["reversal_momentum_factors"],
+        "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
         "neutralize_features": True,
         "neutralize_labels": True,
         "symmetric_orthogonalization": True,
@@ -64,7 +64,7 @@ except Exception as e:
             {"name": "Test_2024", "train": ("2021-01-01", "2022-12-20"), "valid": ("2023-01-01", "2023-12-20"), "test":  ("2024-01-01", "2024-12-31")},
             {"name": "Test_2025", "train": ("2022-01-01", "2023-12-20"), "valid": ("2024-01-01", "2024-12-20"), "test":  ("2025-01-01", "2025-12-31")},
         ],
-        "top_k_factors": 50,
+        "top_k_factors": 20,
         "icir_stability_check": {"enabled": True, "rolling_window": 60, "keep_ratio": 0.9},
         "feature_selection": {"method": "filter", "algo": "f_regression", "label_col": "LABEL_5D", "remove_collinearity": False},
     }
@@ -112,16 +112,18 @@ def run_ml_pipeline():
         
         # 3.1 为该窗口构建包含【全量因子】的 DatasetH，用于挑选因子
         print(f"\n[3.1 - {window_name}] 构建全量因子的 DatasetH (用于特征筛选)...")
-        # [Point72 改进] 仅提取当前 Window 所需时间段，避免每次循环计算全量(2020-2025)数据的巨大算力浪费
+        # [性能优化] 特征筛选只需要训练集数据，将时间范围限制在训练期内，避免计算全量数据
+        # 原始代码使用 segments["test"][1] 作为 end_time，导致计算 4 年的 10 个因子
+        # 改成 segments["train"][1] 后数据量减少 50-75%，大幅加速
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
             feature_bundle=bundle_all,
             factor_cache_names=CONFIG.get("factor_cache_names"),
             start_time=segments["train"][0],
-            end_time=segments["test"][1],
+            end_time=segments["train"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
-            segments=segments,
+            segments={"train": segments["train"]},
             model_type=CONFIG["model_type"],
             neutralize_features=CONFIG["neutralize_features"], # 若出现严重截面偏移，可设为 True
             neutralize_labels=CONFIG["neutralize_labels"],
@@ -139,7 +141,7 @@ def run_ml_pipeline():
         x_train = x_train.loc[valid_idx]
         y_train = y_train.loc[valid_idx]
         
-        fs_result = select_features(
+        fs_result = cached_select_features(
             x_train, y_train, 
             method=fs_conf["method"], 
             algo=fs_conf["algo"], 

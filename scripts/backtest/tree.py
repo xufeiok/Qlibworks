@@ -8,7 +8,7 @@ import qlib
 from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
 from qlworks.backtest.bt_strategy import EnhancedQlibStrategy
-from qlworks.backtest.industry import load_industry_map, apply_industry_constraint
+from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
 from qlworks.config import QLIB_DATA_DIR
 
 # ==============================================================================
@@ -71,9 +71,9 @@ def main():
     print(f"    测试集: {start_date.date()} ~ {end_date.date()}  |  股票池: {len(instruments)} 只")
 
     if INDUSTRY_NEUTRAL:
-        print("\n[2.1] 加载行业映射并施加行业约束...")
-        industry_map = load_industry_map(instruments, start_date.strftime("%Y-%m-%d"))
-        pred_df = apply_industry_constraint(pred_df, industry_map, top_k=TOP_K, max_per_industry=MAX_PER_INDUSTRY)
+        print("\n[2.1] 加载行业映射(PIT)并施加行业约束...")
+        industry_maps = load_industry_maps_pit(instruments, start_date, end_date)
+        pred_df = apply_industry_constraint_pit(pred_df, industry_maps, top_k=TOP_K, max_per_industry=MAX_PER_INDUSTRY)
         instruments = pred_df.index.get_level_values("instrument").unique().tolist()
 
     print("\n[3] 拉取行情数据...")

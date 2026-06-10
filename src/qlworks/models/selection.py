@@ -158,6 +158,12 @@ def filter_feature_selection(
     else:
         raise ValueError(f"不支持的过滤法方法: {algo}")
 
+    # 移除 y 和 x 中的无穷大值，否则 sklearn 会报 ValueError
+    finite_mask = np.isfinite(y_train) & np.all(np.isfinite(x_train), axis=1)
+    if not finite_mask.all():
+        x_train = x_train.loc[finite_mask]
+        y_train = y_train.loc[finite_mask]
+
     selector.fit(x_train, y_train)
     selected_features = x_train.columns[selector.get_support()].tolist()
     scores = pd.Series(selector.scores_, index=x_train.columns, name="score").sort_values(
@@ -369,19 +375,19 @@ def cached_select_features(x_train, y_train, method, use_cache=True, **kwargs):
     import hashlib, json
     from pathlib import Path
     from qlworks.config import QLIB_DATA_DIR
-    xb = x_train.values.tobytes()
-    fp = hashlib.md5(xb[:1000000]).hexdigest()
-    yb = y_train.values.tobytes()
-    fp += hashlib.md5(yb[:100000]).hexdigest()
-    fp += str(x_train.shape)
-    fp += hashlib.md5(json.dumps(sorted(kwargs.items())).encode()).hexdigest()
+    # [Renaissance 改进] 全量数据哈希代替截断哈希，避免不同窗口因前 1MB 相同而混用缓存
+    fp_hasher = hashlib.md5()
+    fp_hasher.update(x_train.values.tobytes())
+    fp_hasher.update(y_train.values.tobytes())
+    fp_hasher.update(str(x_train.shape).encode())
+    fp_hasher.update(json.dumps(sorted(kwargs.items()), sort_keys=True).encode())
     qlib_data = Path(str(QLIB_DATA_DIR))
     if qlib_data.exists():
         bin_files = list(qlib_data.rglob("*.day.bin"))
         if bin_files:
             latest_mtime = max(p.stat().st_mtime for p in bin_files)
-            fp += str(latest_mtime)
-    key = hashlib.md5(fp.encode()).hexdigest()[:24]
+            fp_hasher.update(str(latest_mtime).encode())
+    key = fp_hasher.hexdigest()[:24]
     cp = FS_CACHE_DIR / f'fs_{method}_{key}.joblib'
     if cp.exists():
         try:
