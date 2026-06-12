@@ -13,6 +13,7 @@ src/qlworks/backtest/industry.py
 src/qlworks/data/__init__.py
 src/qlworks/data/api.py
 src/qlworks/data/qlib_sync.py
+src/qlworks/evaluation/__init__.py
 src/qlworks/evaluation/candidate_pool.py
 src/qlworks/evaluation/config.py
 src/qlworks/evaluation/factor_def.py
@@ -25,6 +26,7 @@ src/qlworks/evaluation/preprocessor.py
 src/qlworks/evaluation/report_generator.py
 src/qlworks/evaluation/robustness.py
 src/qlworks/evaluation/runner.py
+src/qlworks/factors/__init__.py
 src/qlworks/factors/manager.py
 src/qlworks/factors/synthesis.py
 src/qlworks/features/builder.py
@@ -37,4 +39,5 @@ src/qlworks/models/training.py
 src/qlworks/models/tuning.py
 src/qlworks/processors/neutralize.py
 src/qlworks/processors/orthogonalize.py
+src/qlworks/processors/quantile_norm.py
 tests/test_qlib_industry.py

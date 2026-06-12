@@ -212,6 +212,32 @@ def calc_holding_period_returns(
 
     return pd.DataFrame(results) if results else pd.DataFrame()
 
+def calc_group_cumulative_returns(q_df: pd.DataFrame) -> pd.DataFrame:
+    """计算每个分位组的累计净值曲线（分层净值曲线）。
+
+    q_df 包含 datetime / quantile / mean 三列（扁平格式）。
+    返回 DataFrame: index=datetime, columns=[G1, G2, ..., GN],
+    每个单元格为当日为止的累计净值。
+
+    这是「分层净值曲线」的数据基础，用于直观观察：
+      - 分层是否长期分化（G10 >> G1）
+      - 是否阶段性失效（某时间段所有组混在一起）
+    """
+    if q_df.empty:
+        return pd.DataFrame()
+
+    # 透视：每行=日期，每列=分组
+    piv = q_df.pivot_table(index="datetime", columns="quantile", values="mean", aggfunc="mean")
+    piv = piv.sort_index()
+
+    # 将多期标签收益转为日频等效（与 calc_ls_stats 保持一致）
+    # 从已有的 label_horizon 无法获取，这里保守不缩放，用原始 cumprod
+    # 因为报告显示的是相对趋势而非绝对年化，不影响分层分化判断
+    cum = (1 + piv).cumprod()
+    cum.columns = [f"G{int(c)+1}" for c in cum.columns]
+    return cum
+
+
 def calc_turnover(q_df: pd.DataFrame) -> dict:
     """计算分层组合的月均换手率（精确追踪成分股ID变化）。
 

@@ -293,6 +293,188 @@ class FactorReportGenerator:
         )
         return fig.to_html(include_plotlyjs=False, full_html=False)
 
+    def _decile_nav_plot(self, decile_nav: pd.DataFrame) -> str:
+        """分层净值曲线：显示全部 10 条分位组的累计净值。
+
+        这是判断因子是否「长期分化」、「阶段性失效」的核心图表。
+        G1（因子最小）→ 红色渐变，G10（因子最大）→ 绿色渐变。
+        """
+        if decile_nav.empty:
+            return ''
+        fig = go.Figure()
+
+        # 使用从红→橙→黄→绿的易区分渐变, G1~G10 顺序
+        colors = ['#d32f2f', '#f57c00', '#fbc02d', '#7cb342', '#388e3c',
+                  '#1976d2', '#1565c0', '#6a1b9a', '#c2185b', '#e91e63']
+        for i, col in enumerate(decile_nav.columns):
+            is_top = (i >= len(decile_nav.columns) - 2)
+            is_bottom = (i <= 1)
+            fig.add_trace(go.Scatter(
+                x=decile_nav.index,
+                y=decile_nav[col].values,
+                mode='lines',
+                name=col,
+                line=dict(color=colors[i % len(colors)], width=3 if is_top or is_bottom else 1.2),
+                opacity=0.9 if is_top or is_bottom else 0.6,
+            ))
+
+        # 标注各组的最终值（右末端标注）
+        last_idx = decile_nav.index[-1]
+        for i, col in enumerate(decile_nav.columns):
+            is_top = (i >= len(decile_nav.columns) - 2)
+            is_bottom = (i <= 1)
+            if is_top or is_bottom:
+                fig.add_annotation(
+                    x=last_idx, y=decile_nav[col].iloc[-1],
+                    text=f"{col} ({decile_nav[col].iloc[-1]:.3f})",
+                    showarrow=False, xanchor='left',
+                    font=dict(size=10, color=colors[i], weight='bold'),
+                )
+
+        fig.update_layout(
+            title='分层净值曲线（十分位组累计净值，G1=最小  G10=最大）',
+            xaxis_title='日期', yaxis_title='累计净值',
+            height=480, margin=dict(l=40, r=140, t=40, b=60),
+            legend=dict(orientation='v', x=1.02, y=1, xanchor='left', yanchor='top',
+                       font=dict(size=9), itemsizing='constant'),
+            hovermode='x unified',
+            hoverlabel=dict(font_size=10),
+        )
+        fig.update_xaxes(tickangle=45, nticks=15)
+        return fig.to_html(include_plotlyjs=False, full_html=False)
+
+    # ── 场景压力测试图表 ──
+
+    def _market_cap_ic_plot(self, df: pd.DataFrame) -> str:
+        """分市值 IC 柱状图。"""
+        if df.empty:
+            return ''
+        fig = go.Figure()
+        colors = ['#3b82f6', '#f59e0b', '#ef4444']
+        for i, (_, row) in enumerate(df.iterrows()):
+            fig.add_trace(go.Bar(
+                name=row['bucket'],
+                x=['IC 均值', 'ICIR', '多空年化%', '夏普'],
+                y=[row.get('ic_mean', 0) * 100, row.get('icir', 0),
+                   row.get('ls_ann_ret', 0), row.get('ls_sharpe', 0)],
+                marker_color=colors[i % len(colors)],
+                text=[f'{v:.3f}' for v in [row.get('ic_mean', 0) * 100, row.get('icir', 0),
+                      row.get('ls_ann_ret', 0), row.get('ls_sharpe', 0)]],
+                textposition='outside',
+            ))
+        fig.update_layout(
+            title='分市值检验（大/中/小盘）',
+            barmode='group',
+            height=350, margin=dict(l=40, r=40, t=40, b=40),
+        )
+        return fig.to_html(include_plotlyjs=False, full_html=False)
+
+    def _regime_ic_plot(self, df: pd.DataFrame) -> str:
+        """牛熊分段 IC 柱状图。"""
+        if df.empty:
+            return ''
+        regime_order = ['牛市', '震荡', '熊市']
+        df_plot = df.copy()
+        df_plot['regime_order'] = df_plot['regime'].apply(lambda x: regime_order.index(x) if x in regime_order else 99)
+        df_plot = df_plot.sort_values('regime_order')
+        fig = make_subplots(rows=1, cols=3, subplot_titles=('IC 均值', 'ICIR', '多空年化收益 (%)'))
+        for col_idx, metric in enumerate(['ic_mean', 'icir', 'ls_ann_ret'], 1):
+            colors = ['#22c55e' if r == '牛市' else '#f97316' if r == '震荡' else '#ef4444' for r in df_plot['regime']]
+            fig.add_trace(go.Bar(
+                x=df_plot['regime'], y=df_plot[metric].values,
+                marker_color=colors,
+                text=[f'{v:.4f}' for v in df_plot[metric].values],
+                textposition='outside',
+            ), row=1, col=col_idx)
+        fig.update_layout(height=350, margin=dict(l=40, r=40, t=40, b=40), showlegend=False)
+        return fig.to_html(include_plotlyjs=False, full_html=False)
+
+    def _sector_ic_plot(self, df: pd.DataFrame) -> str:
+        """分行业板块 IC 图。"""
+        if df.empty:
+            return ''
+        fig = make_subplots(rows=1, cols=3, subplot_titles=('IC 均值', 'ICIR', '多空年化收益 (%)'))
+        colors = ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899']
+        for col_idx, metric in enumerate(['ic_mean', 'icir', 'ls_ann_ret'], 1):
+            marker_c = colors[:len(df)]
+            fig.add_trace(go.Bar(
+                x=df['sector'].values, y=df[metric].values,
+                marker_color=marker_c,
+                text=[f'{v:.4f}' for v in df[metric].values],
+                textposition='outside',
+            ), row=1, col=col_idx)
+        fig.update_layout(height=350, margin=dict(l=40, r=40, t=40, b=40), showlegend=False)
+        return fig.to_html(include_plotlyjs=False, full_html=False)
+
+    def _bivariate_plot(self, df: pd.DataFrame) -> str:
+        """双变量分组柱状图。"""
+        if df.empty:
+            return ''
+        fig = go.Figure()
+        fig.add_trace(go.Bar(
+            x=[f'Q{g+1}' for g in df['primary_group']],
+            y=(df['ls_return'].values * 100),
+            marker_color=px.colors.sequential.Viridis[:len(df)],
+            text=[f'{v:.4f}%' for v in df['ls_return'].values * 100],
+            textposition='outside',
+        ))
+        fig.update_layout(
+            title='双变量分组（先按市值分5组，再按因子二次分层）',
+            xaxis_title='市值分组（从小到大）',
+            yaxis_title='组内多空收益 (%)',
+            height=350, margin=dict(l=40, r=40, t=40, b=40),
+        )
+        return fig.to_html(include_plotlyjs=False, full_html=False)
+
+    def _residual_summary_section(self, result: dict) -> str:
+        """残差因子评测摘要。"""
+        ic_s = result.get('residual_ic_stats', {})
+        ls_s = result.get('residual_ls_stats', {})
+        if not ic_s or 'ic_mean' not in ic_s:
+            return ''
+        control_cols = result.get('control_cols', [])
+        html = f'''<div class="section">
+  <h2>控制变量对冲二：残差因子评测</h2>
+  <div style="padding:6px 0;">
+    <p style="color:#64748b;font-size:13px;">
+      控制变量: {" + ".join(control_cols)} — 每日截面回归取残差，剔除已知风险因子干扰，确认因子本源收益
+    </p>
+  </div>
+  <table>
+    <tr><th>指标</th><th>残差因子值</th></tr>
+    <tr><td>IC 均值</td><td>{ic_s.get("ic_mean", 0):.6f}</td></tr>
+    <tr><td>ICIR</td><td>{ic_s.get("icir", 0):.4f}</td></tr>
+    <tr><td>胜率</td><td>{ic_s.get("win_rate", 0):.2%}</td></tr>
+    <tr><td>多空年化收益</td><td>{ls_s.get("annual_return", 0):.2f}%</td></tr>
+    <tr><td>多空夏普</td><td>{ls_s.get("sharpe", 0):.4f}</td></tr>
+    <tr><td>单调性</td><td>{ls_s.get("monotonicity", 0):.4f}</td></tr>
+  </table>
+</div>'''
+        return html
+
+    def _size_neutral_section(self, result: dict) -> str:
+        """规模分组检验（市值分布验证）。"""
+        factor_stats = result.get('cap_group_factor_stats')
+        cap_ic = result.get('cap_group_ic')
+        if factor_stats is None or factor_stats.empty:
+            return ''
+
+        html = '<div class="section">\n  <h2>控制变量对冲三：规模分组检验（市值中性化验证）</h2>'
+        html += '<div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">按市值分5组，查看因子均值分布——理想情况：各组因子均值接近0，验证中性化是否到位，避免分层收益只是市值带来的。</p></div>'
+        html += '<table><tr><th>市值组</th><th>因子均值</th><th>因子标准差</th><th>标签均值</th><th>样本数</th></tr>'
+        for _, row in factor_stats.iterrows():
+            html += f'<tr><td>{row["cap_group"]}</td><td>{row["factor_mean"]:.6f}</td><td>{row["factor_std"]:.6f}</td><td>{row["label_mean"]:.6f}</td><td>{int(row["count"])}</td></tr>'
+        html += '</table>'
+
+        if cap_ic is not None and not cap_ic.empty:
+            html += '<div style="margin-top:12px;"><table><tr><th>市值组</th><th>IC 均值</th><th>ICIR</th><th>有效天数</th></tr>'
+            for _, row in cap_ic.iterrows():
+                html += f'<tr><td>{row["cap_group"]}</td><td>{row["ic_mean"]:.6f}</td><td>{row["icir"]:.4f}</td><td>{int(row["n_days"])}</td></tr>'
+            html += '</table></div>'
+
+        html += '</div>'
+        return html
+
     def generate(
         self,
         ic_stats: dict,
@@ -308,6 +490,9 @@ class FactorReportGenerator:
         turnover_stats: Optional[dict] = None,
         qual_result: Optional[dict] = None,
         hpr_df: Optional[pd.DataFrame] = None,
+        decile_nav: Optional[pd.DataFrame] = None,
+        scenario_results: Optional[dict] = None,
+        control_results: Optional[dict] = None,
     ) -> str:
         """生成完整 HTML 报告。"""
         ic_series = ic_stats.get("ic_series", pd.Series())
@@ -398,9 +583,9 @@ td {{ font-size: 14px; }}
     <span>评测区间: {eval_period.get("start", "N/A") if eval_period else "N/A"} ~ {eval_period.get("end", "N/A") if eval_period else "N/A"}</span>
     <span>标签计算: {label_expr if label_expr else "N/A"}</span>
     <span>准入标准: IC>={thresholds_info.get("ic", 0.05) if thresholds_info else 0.05} | IR>={thresholds_info.get("icir", 1.0) if thresholds_info else 1.0} | 胜率>={self._fmt_pct(thresholds_info.get("win_rate", 0.65)) if thresholds_info else "65%"} | 多空>={thresholds_info.get("ls_ret", 15) if thresholds_info else 15}% | 夏普>={thresholds_info.get("ls_sharpe", 1.25) if thresholds_info else 1.25}</span>
+    <span>评分体系: 10 维综合评分（新增: 场景稳健性 + 残差独立性）</span>
   </div>
-</div>
-"""
+</div>"""
 
         # 核心指标卡片
         html += """<div class="section">
@@ -416,33 +601,46 @@ td {{ font-size: 14px; }}
         # 8 维评分详情
         if dim_scores:
             html += """<div class="section">
-  <h2>8 维评分详情（满分 100）</h2>
+  <h2>10 维评分详情（满分 100）</h2>
   <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px;">"""
             dim_names = {
-                "ic": ("IC 均值", 20), "icir": ("ICIR 稳定性", 15),
-                "win_rate": ("胜率", 15), "ls_return": ("多空收益", 15),
-                "ls_sharpe": ("多空夏普", 10), "decay": ("IC 衰减", 10),
-                "turnover": ("换手率", 5), "coverage": ("覆盖率", 10),
+                "ic": ("IC 均值", 16), "icir": ("ICIR 稳定性", 12),
+                "win_rate": ("胜率", 12), "ls_return": ("多空收益", 12),
+                "ls_sharpe": ("多空夏普", 8), "decay": ("IC 衰减", 8),
+                "turnover": ("换手率", 4), "coverage": ("覆盖率", 8),
+                "scenario_robustness": ("场景稳健性*", 12),
+                "residual_independence": ("残差独立性*", 8),
             }
             bar_colors = {"ic": "#2563eb", "icir": "#7c3aed", "win_rate": "#059669",
                           "ls_return": "#d97706", "ls_sharpe": "#dc2626",
-                          "decay": "#8b5cf6", "turnover": "#f59e0b", "coverage": "#0ea5e9"}
+                          "decay": "#8b5cf6", "turnover": "#f59e0b", "coverage": "#0ea5e9",
+                          "scenario_robustness": "#06b6d4", "residual_independence": "#14b8a6"}
             for k, (label, weight) in dim_names.items():
                 sc = dim_scores.get(k, 0)
                 score_pct = sc * 100
                 color = bar_colors.get(k, "#94a3b8")
+                star = "*" if k in ("scenario_robustness", "residual_independence") else ""
+                # 检测是否因数据缺失导致的默认中性分
+                is_default = (k in ("scenario_robustness", "residual_independence") and abs(sc - 0.5) < 0.01)
+                badge = '<span style="font-size:11px;color:#f59e0b;margin-left:4px;">⚠️ 无数据</span>' if is_default else ""
+                bar_color = "#d1d5db" if is_default else color
                 html += f"""<div style="background:#f8fafc;border-radius:8px;padding:12px;">
       <div style="display:flex;justify-content:space-between;font-size:13px;">
-        <span>{label}</span>
+        <span>{label}{star}{badge}</span>
         <span><strong>{sc:.2f}</strong> / {weight} 分 <span style="color:#94a3b8;font-size:11px;">({weight}%)</span></span>
       </div>
       <div style="background:#e2e8f0;border-radius:4px;height:6px;margin-top:6px;">
-        <div style="background:{color};width:{score_pct:.0f}%;height:6px;border-radius:4px;"></div>
+        <div style="background:{bar_color};width:{score_pct:.0f}%;height:6px;border-radius:4px;"></div>
       </div>
     </div>"""
             html += f"""</div>
-    <div style="margin-top:12px;font-size:14px;text-align:center;padding:10px;background:#f0fdf4;border-radius:8px;">
-      <strong>综合评分: {composite_score:.1f} / 100</strong> &nbsp;|&nbsp; 等级: {tier}
+    <div style="margin-top:12px;font-size:13px;color:#64748b;padding:8px 12px;background:#f0f9ff;border-radius:8px;">
+      <strong>* 新增维度</strong>：场景稳健性 = 跨市值/牛熊/行业的表现一致性打分；残差独立性 = 剔除市值/行业干扰后纯因子预测力。<br>
+      ⚠️ <strong>无数据</strong> = 因输入数据不完整（缺少市值/行业/板块等信息），该维度使用 0.5 中性分替代实际评分。<br>
+      <strong>判定标准</strong>：core = 0 项不达标；satellite = 综合分 ≥ {thresholds_info.get("satellite_min", 40) if thresholds_info else 40}；archive = 其余。
+    </div>
+    <div style="margin-top:8px;font-size:14px;text-align:center;padding:10px;background:#f0fdf4;border-radius:8px;">
+      <strong>综合评分: {composite_score:.1f} / 100</strong> &nbsp;|&nbsp; 等级: <span class="status-badge {tier}">{tier}</span>
     </div>
   </div>"""
 
@@ -480,6 +678,19 @@ td {{ font-size: 14px; }}
             html += f"""<div class="section">
   <h2>多空组合净值曲线</h2>
   <div class="chart-container">{self._long_short_plot(ls_cum, ls_stats)}</div>
+</div>"""
+
+        # 分层净值曲线（10条分位组累计净值）
+        if decile_nav is not None and not decile_nav.empty:
+            html += f"""<div class="section">
+  <h2>分层净值曲线</h2>
+  <div style="padding:6px 0;">
+    <p style="color:#64748b;font-size:13px;">
+      十分位分组累计净值，G1=因子值最小组合，G10=因子值最大组合。
+      理想状态：G10 >> G1 长期分化，且曲线走势平稳；若某段所有组交织在一起，说明因子阶段性失效。
+    </p>
+  </div>
+  <div class="chart-container">{self._decile_nav_plot(decile_nav)}</div>
 </div>"""
 
         # 换手率
@@ -555,6 +766,66 @@ td {{ font-size: 14px; }}
             html += """</table>
   </div>
 </div>"""
+
+        # ── 场景压力测试：分市值IC ──
+        if scenario_results:
+            mc_df = scenario_results.get('market_cap_ic', pd.DataFrame())
+            if isinstance(mc_df, pd.DataFrame) and not mc_df.empty:
+                html += f'''<div class="section">
+  <h2>场景压力测试一：分市值分组检验</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">检验因子在大盘/中盘/小盘股中是否都有效，避免因子仅在小盘生效、大盘完全失效。</p></div>
+  <div class="chart-container">{self._market_cap_ic_plot(mc_df)}</div>
+  <div style="margin-top:12px">
+    <table><tr><th>市值组</th><th>IC均值</th><th>ICIR</th><th>胜率</th><th>多空年化%</th><th>夏普</th><th>最大回撤%</th><th>单调性</th><th>天数</th></tr>'''
+                for _, row in mc_df.iterrows():
+                    html += f'<tr><td>{row["bucket"]}</td><td>{row["ic_mean"]:.6f}</td><td>{row["icir"]:.4f}</td><td>{row["win_rate"]:.2%}</td><td>{row["ls_ann_ret"]:.2f}</td><td>{row["ls_sharpe"]:.4f}</td><td>{row["max_drawdown"]:.2f}</td><td>{row["monotonicity"]:.4f}</td><td>{int(row["n_days"])}</td></tr>'''
+                html += '</table></div></div>'
+
+            regime_df = scenario_results.get('market_regime', pd.DataFrame())
+            if isinstance(regime_df, pd.DataFrame) and not regime_df.empty:
+                html += f'''<div class="section">
+  <h2>场景压力测试二：牛熊/震荡市分段检验</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">很多因子只在牛市有效，熊市持续回撤。按沪深300实际走势分段独立测算IC、分层收益。</p></div>
+  <div class="chart-container">{self._regime_ic_plot(regime_df)}</div>
+  <div style="margin-top:12px">
+    <table><tr><th>行情</th><th>时段</th><th>IC均值</th><th>ICIR</th><th>胜率</th><th>多空年化%</th><th>夏普</th><th>最大回撤%</th><th>单调性</th><th>天数</th></tr>'''
+                for _, row in regime_df.iterrows():
+                    html += f'<tr><td>{row["regime"]}</td><td>{row.get("period","")}</td><td>{row["ic_mean"]:.6f}</td><td>{row["icir"]:.4f}</td><td>{row["win_rate"]:.2%}</td><td>{row["ls_ann_ret"]:.2f}</td><td>{row["ls_sharpe"]:.4f}</td><td>{row["max_drawdown"]:.2f}</td><td>{row["monotonicity"]:.4f}</td><td>{int(row["n_days"])}</td></tr>'''
+                html += '</table></div></div>'
+
+            sector_df = scenario_results.get('industry_sector', pd.DataFrame())
+            if isinstance(sector_df, pd.DataFrame) and not sector_df.empty:
+                html += f'''<div class="section">
+  <h2>场景压力测试三：分行业板块检验</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">周期/消费/制造/金融/科技五大板块独立评测，验证因子是否全行业通用。</p></div>
+  <div class="chart-container">{self._sector_ic_plot(sector_df)}</div>
+  <div style="margin-top:12px">
+    <table><tr><th>板块</th><th>IC均值</th><th>ICIR</th><th>胜率</th><th>多空年化%</th><th>夏普</th><th>最大回撤%</th><th>单调性</th><th>股票数</th></tr>'''
+                for _, row in sector_df.iterrows():
+                    html += f'<tr><td>{row["sector"]}</td><td>{row["ic_mean"]:.6f}</td><td>{row["icir"]:.4f}</td><td>{row["win_rate"]:.2%}</td><td>{row["ls_ann_ret"]:.2f}</td><td>{row["ls_sharpe"]:.4f}</td><td>{row["max_drawdown"]:.2f}</td><td>{row["monotonicity"]:.4f}</td><td>{int(row.get("n_stocks",0))}</td></tr>'''
+                html += '</table></div></div>'
+
+        # ── 控制变量对冲 ──
+        if control_results:
+            bv_df = control_results.get('bivariate', pd.DataFrame())
+            if isinstance(bv_df, pd.DataFrame) and not bv_df.empty:
+                html += f'''<div class="section">
+  <h2>控制变量对冲一：双变量分组（剔除市值干扰）</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">先按市值分5组，再在每个市值组内按因子分5组，检验因子在控制市值后是否仍有独立预测力。</p></div>
+  <div class="chart-container">{self._bivariate_plot(bv_df)}</div>
+  <div style="margin-top:12px">
+    <table><tr><th>市值组</th><th>Q1收益</th><th>Q5收益</th><th>组内多空收益</th><th>天数</th></tr>'''
+                for _, row in bv_df.iterrows():
+                    html += f'<tr><td>Q{int(row["primary_group"])+1}</td><td>{float(row["q0_mean"]):.6f}</td><td>{float(row.get("q4_mean", row["qN_mean"])):.6f}</td><td>{float(row["ls_return"]):.6f}</td><td>{int(row["n_days"])}</td></tr>'
+                html += '</table></div></div>'
+
+            residual_res = control_results.get('residual', {})
+            if residual_res:
+                html += self._residual_summary_section(residual_res)
+
+            size_res = control_results.get('size_neutral', {})
+            if size_res:
+                html += self._size_neutral_section(size_res)
 
         # 等级判定详情
         if reasons:

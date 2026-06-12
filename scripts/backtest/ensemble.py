@@ -97,7 +97,6 @@ def _get_strategy_class():
 
 def get_price_dict(instruments, start_time, end_time):
     """从 Qlib 拉取多只个股的 OHLCV 行情数据，返回 {instrument: DataFrame} 格式的字典。"""
-    qlib.init(provider_uri=r"e:\Quant\Qlibworks\qlib_data", region="cn")
     df = D.features(instruments, ['$open', '$high', '$low', '$close', '$volume'],
                     start_time=start_time, end_time=end_time)
     df.columns = ['open', 'high', 'low', 'close', 'volume']
@@ -245,7 +244,8 @@ def run_model_comparison():
     print(f"  — 行业约束={'ON' if CONFIG['industry_neutral'] else 'OFF'}  |  调仓={CONFIG['rebalance_days']}d  |  TopK={CONFIG['top_k']} —")
     print("=" * 60)
 
-    qlib.init(provider_uri=r"e:\Quant\Qlibworks\qlib_data", region="cn")
+    from qlworks.config import QLIB_DATA_DIR
+    qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn")
 
     all_instruments = set()
     for model_name in ['tree', 'linear', 'icir']:

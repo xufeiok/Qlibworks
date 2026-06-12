@@ -55,14 +55,14 @@ class EvalConfig:
     ic_method: str = "spearman"
     ic_annual_factor: float = 252.0
 
-    quantiles: int = 5
-    long_short_quantiles: tuple = field(default_factory=lambda: (0, 2))
+    quantiles: int = 10
+    long_short_quantiles: tuple = field(default_factory=lambda: (0, 9))
 
-    ic_threshold: float = 0.02
-    icir_threshold: float = 0.4
+    ic_threshold: float = 0.03
+    icir_threshold: float = 0.5
     win_rate_threshold: float = 0.55
     ls_annual_return_threshold: float = 0.05
-    ls_sharpe_threshold: float = 0.3
+    ls_sharpe_threshold: float = 0.5
     satellite_composite_min: float = 40.0
 
     enable_fama_macbeth: bool = True
@@ -95,7 +95,7 @@ class EvalConfig:
     factor_library_dir: str = ""
 
     monitor_freq: str = "month"
-    monitor_ic_warning: float = 0.02
+    monitor_ic_warning: float = 0.03
     monitor_ic_danger: float = 0.0
     monitor_consecutive_bad: int = 3
 

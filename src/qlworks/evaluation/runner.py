@@ -25,6 +25,14 @@ from .group_analysis import (
     calc_holding_period_returns,
 )
 from .robustness import test_sub_periods, test_sub_pools
+from .scenario_analysis import (
+    test_by_market_cap_buckets,
+    test_by_market_regime,
+    test_by_industry_sector,
+    bivariate_sort,
+    residual_factor_test,
+    size_neutral_test,
+)
 from .report_generator import FactorReportGenerator
 from .factor_selector import (
     evaluate_qualification, update_factor_tier,
@@ -33,7 +41,7 @@ from .factor_selector import (
 from .lifecycle import LifecycleManager
 from .factor_store import FactorStore
 from .ic_analysis import calc_fama_macbeth, calc_newey_west_tstat, calc_ic_bootstrap_ci, calc_lo_adjusted_sharpe
-from .group_analysis import filter_ashare_constraints, calc_capacity_analysis
+from .group_analysis import filter_ashare_constraints, calc_capacity_analysis, calc_group_cumulative_returns
 from .config import EXTREME_EVENTS
 
 
@@ -277,6 +285,9 @@ class FactorEvaluator:
         mono = calc_monotonicity_score(q_df) if not q_df.empty else 0.0
         ic_stats["monotonicity"] = round(mono, 4)
 
+        # 3a. 分层净值曲线（10条分位组累计净值）
+        decile_nav = calc_group_cumulative_returns(q_df) if not q_df.empty else pd.DataFrame()
+
         # 使用配置中的滑点参数（入场+出场+冲击成本），而非固定 cost
         total_bps = config.slippage_entry_bps + config.slippage_exit_bps + config.market_impact_bps
         ls_df = long_short_returns(q_df, config.quantiles - 1, 0, cost=total_bps / 10000.0)
@@ -325,6 +336,78 @@ class FactorEvaluator:
             except Exception as e:
                 logger.warning(f"[稳健性] {factor_name} 子股票池检验跳过: {e}")
 
+        # 4b. 场景压力测试 — 分市值、牛熊市、分行业板块
+        scenario_results = {}
+        if "mkt_cap" in df_proc.columns:
+            try:
+                scenario_results["market_cap_ic"] = test_by_market_cap_buckets(
+                    df_proc, factor_col, label_col, "mkt_cap",
+                    config.quantiles, config.ic_annual_factor, config.label_horizon,
+                )
+            except Exception as e:
+                logger.warning(f"[场景] 分市值检验跳过: {e}")
+
+        try:
+            scenario_results["market_regime"] = test_by_market_regime(
+                df_proc, factor_col, label_col,
+                quantiles=config.quantiles,
+                annual_factor=config.ic_annual_factor,
+                label_horizon=config.label_horizon,
+            )
+        except Exception as e:
+            logger.warning(f"[场景] 牛熊分段跳过: {e}")
+
+        if "industry" in df_proc.columns:
+            try:
+                scenario_results["industry_sector"] = test_by_industry_sector(
+                    df_proc, factor_col, label_col, "industry",
+                    quantiles=config.quantiles,
+                    annual_factor=config.ic_annual_factor,
+                    label_horizon=config.label_horizon,
+                )
+            except Exception as e:
+                logger.warning(f"[场景] 行业板块跳过: {e}")
+
+        # 4c. 控制变量对冲 — 双变量分组 + 残差因子 + 规模分组
+        control_results = {}
+        if "mkt_cap" in df_proc.columns:
+            try:
+                control_results["bivariate"] = bivariate_sort(
+                    df_proc, factor_col, label_col, "mkt_cap",
+                    primary_n=5, secondary_n=5,
+                    annual_factor=config.ic_annual_factor,
+                    label_horizon=config.label_horizon,
+                )
+            except Exception as e:
+                logger.warning(f"[控制变量] 双变量分组跳过: {e}")
+
+        try:
+            control_cols = []
+            if "mkt_cap" in df_proc.columns:
+                control_cols.append("mkt_cap")
+            if "industry" in df_proc.columns:
+                control_cols.append("industry")
+            if control_cols:
+                control_results["residual"] = residual_factor_test(
+                    df_proc, factor_col, label_col, control_cols,
+                    quantiles=config.quantiles,
+                    annual_factor=config.ic_annual_factor,
+                    label_horizon=config.label_horizon,
+                )
+        except Exception as e:
+            logger.warning(f"[控制变量] 残差因子跳过: {e}")
+
+        if "mkt_cap" in df_proc.columns:
+            try:
+                control_results["size_neutral"] = size_neutral_test(
+                    df_proc, factor_col, label_col, "mkt_cap",
+                    quantiles=config.quantiles,
+                    annual_factor=config.ic_annual_factor,
+                    label_horizon=config.label_horizon,
+                )
+            except Exception as e:
+                logger.warning(f"[控制变量] 规模分组跳过: {e}")
+
         # 5. 等级判定（增强版：含衰减/换手率/覆盖率评分）
         total_dates = df_proc["datetime"].nunique() if "datetime" in df_proc.columns else 0
         n_dates_all = len(ic_series.dropna())
@@ -334,6 +417,8 @@ class FactorEvaluator:
             decay_df=decay_df,
             turnover_stats=turnover_stats,
             coverage_pct=coverage_pct,
+            scenario_results=scenario_results,
+            control_results=control_results,
         )
         tier = qual_result["tier"]
 
@@ -390,12 +475,16 @@ class FactorEvaluator:
                 "win_rate": config.win_rate_threshold,
                 "ls_ret": config.ls_annual_return_threshold * 100,
                 "ls_sharpe": config.ls_sharpe_threshold,
+                "satellite_min": config.satellite_composite_min,
             },
             eval_period={"start": config.start_time, "end": config.end_time},
             label_expr=config.label_expr, decay_df=decay_df,
             turnover_stats=turnover_stats,
             qual_result=qual_result,
             hpr_df=hpr_df,
+            decile_nav=decile_nav,
+            scenario_results=scenario_results,
+            control_results=control_results,
         )
         report_path = gen.save(html)
         csv_path = str(report_dir / "_summary.csv")

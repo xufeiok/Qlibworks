@@ -118,7 +118,122 @@ def _meta_val(meta: dict, key: str, default=None):
     # 旧格式在顶层
     if meta and key in meta and meta[key]:
         return meta[key]
+    # statistics 嵌套 (warehouse meta.json 格式)
+    stats = meta.get("statistics", {}) if meta else {}
+    if key in stats and stats[key]:
+        return stats[key]
+    # last_date 兼容：实际 key 为 end_date
+    if key == "last_date":
+        return dr.get("end_date", default)
     return default
+
+
+def _enrich_with_extra_fields(df, start_time, end_time, logger=None):
+    """从 Qlib 加载 mkt_cap（流通市值）和 industry（申万一级行业）并合并到 df。
+
+    这样场景压力测试（分市值、分行业板块）和控制变量对冲（双变量分组、残差因子）
+    才能获取数据，否则这些评测项目会因缺数据而使用 0.5 中性分。
+
+    Args:
+        df: DataFrame with MultiIndex (instrument, datetime), 含因子列和标签列
+        start_time: 起始日期
+        end_time: 结束日期
+
+    Returns:
+        合并后的 DataFrame，包含 mkt_cap 和 industry 列（如果 Qlib 数据可用）
+    """
+    log = logger or globals().get("logger")
+
+    try:
+        import qlib
+        from qlib.config import REG_CN
+        from qlib.data import D
+        from qlworks.config import QLIB_DATA_DIR
+        qlib.init(provider_uri=str(QLIB_DATA_DIR), region=REG_CN, mute_warning=True)
+    except Exception:
+        if log:
+            log.warning("[补充字段] Qlib 初始化失败")
+        return df
+
+    if not isinstance(df.index, pd.MultiIndex):
+        if log:
+            log.warning("[补充字段] DataFrame 非 MultiIndex，跳过")
+        return df
+
+    instruments = df.index.get_level_values("instrument").unique().tolist()
+
+    fields = ["$circ_mv", "$sw_l1"]
+    col_names = ["mkt_cap", "industry"]
+    try:
+        extra = D.features(instruments, fields, str(start_time)[:10], str(end_time)[:10])
+        if extra.empty:
+            if log:
+                log.warning("[补充字段] Qlib D.features 返回空")
+            return df
+
+        if isinstance(extra.columns, pd.MultiIndex):
+            extra.columns = [c[0] for c in extra.columns]
+        keep = [f for f in fields if f in extra.columns]
+        if not keep:
+            if log:
+                log.warning("[补充字段] Qlib 数据不含所需字段 (circ_mv, sw_l1)")
+            return df
+        extra = extra[keep].copy()
+
+        # 处理 industry 编码 — Qlib $sw_l1 可能存为数值ID
+        if "$sw_l1" in extra.columns:
+            mapping_path = Path(str(QLIB_DATA_DIR)) / "sw_industry_mapping.json"
+            if mapping_path.exists():
+                try:
+                    import json
+                    with open(mapping_path, encoding="utf-8") as f:
+                        id_map = json.load(f)
+                    reverse_map = {v: k for k, v in id_map.get("l1", {}).items()}
+                    if reverse_map:
+                        extra["$sw_l1"] = extra["$sw_l1"].map(reverse_map)
+                        if log:
+                            log.info(f"[补充字段] 行业编码已通过映射文件解码: {len(reverse_map)} 个行业")
+                except Exception:
+                    pass
+
+        if df.index.names != extra.index.names:
+            extra = extra.swaplevel()
+        extra = extra.reindex(df.index)
+        extra.columns = col_names
+
+        df["mkt_cap"] = extra["mkt_cap"]
+        df["industry"] = extra["industry"]
+
+        n_valid_mc = df["mkt_cap"].notna().sum()
+        n_valid_ind = df["industry"].notna().sum()
+        if log:
+            log.info(f"[补充字段] mkt_cap={n_valid_mc:,}行有效, industry={n_valid_ind:,}行有效 "
+                     f"(共{len(instruments)}只股票)")
+
+        # 尝试回退 $industry 作为行业补充
+        if n_valid_ind == 0 or df["industry"].dropna().apply(
+            lambda x: isinstance(x, (int, float))
+        ).sum() > n_valid_ind * 0.5:
+            try:
+                alt_fields = ["$industry"]
+                alt_extra = D.features(instruments, alt_fields, str(start_time)[:10], str(end_time)[:10])
+                if not alt_extra.empty:
+                    if isinstance(alt_extra.columns, pd.MultiIndex):
+                        alt_extra.columns = [c[0] for c in alt_extra.columns]
+                    if df.index.names != alt_extra.index.names:
+                        alt_extra = alt_extra.swaplevel()
+                    alt_extra = alt_extra.reindex(df.index)
+                    df["industry"] = alt_extra[alt_fields[0]]
+                    if log:
+                        log.info(f"[补充字段] 回退使用 $industry: {df['industry'].notna().sum():,}行有效")
+            except Exception:
+                pass
+
+    except Exception as e:
+        if log:
+            log.warning(f"[补充字段] 加载失败: {e}")
+
+    return df
 
 
 def show_status(store):
@@ -219,6 +334,9 @@ def main():
             df_label = evaluator._load_labels(args.start, args.end)
             if df_label is not None:
                 df = df.join(df_label, how="inner")
+
+            # 补充 mkt_cap + industry（场景压力测试/控制变量对冲必需）
+            df = _enrich_with_extra_fields(df, args.start, args.end, logger=logger)
 
             # [AQR] 完整评测流水线
             if args.walk_forward:
