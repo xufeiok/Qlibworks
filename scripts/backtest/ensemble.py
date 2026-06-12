@@ -17,7 +17,7 @@ import pandas as pd
 import numpy as np
 import warnings
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
 from qlworks.backtest.bt_runner import run_qlib_backtrader, EnhancedQlibStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
