@@ -118,13 +118,9 @@ def run_qlib_backtrader(
         end_date: 回测结束日期，若不指定则从 pred_df 推断
     """
 
-    # 确定回测日期范围
-    if start_date is None:
-        start_date = pred_df.index.get_level_values('datetime').min()
-    if end_date is None:
-        end_date = pred_df.index.get_level_values('datetime').max()
-    full_calendar = pd.bdate_range(start_date, end_date)
-    print(f"回测日期范围: {start_date.date()} ~ {end_date.date()} ({len(full_calendar)} 个交易日)")
+    # 确定回测日期范围（使用预测数据中的实际交易日，避免引入非交易日的 NaN）
+    full_calendar = pred_df.index.get_level_values('datetime').unique().sort_values()
+    print(f"回测日期范围: {full_calendar.min().date()} ~ {full_calendar.max().date()} ({len(full_calendar)} 个交易日)")
     
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
@@ -151,6 +147,18 @@ def run_qlib_backtrader(
                 df_bench.index.name = 'datetime'
             except:
                 pass
+        df_bench = df_bench[~df_bench.index.duplicated(keep='first')]
+        df_bench = df_bench.reindex(full_calendar)
+        invalid_bench_mask = (
+            df_bench['close'].isna() | (df_bench['close'] <= 0.01) | (df_bench['close'] > 1e6) |
+            df_bench['open'].isna() | (df_bench['open'] <= 0.01) | (df_bench['open'] > 1e6) |
+            df_bench['high'].isna() | (df_bench['high'] <= 0.01) | (df_bench['high'] > 1e6) |
+            df_bench['low'].isna() | (df_bench['low'] <= 0.01) | (df_bench['low'] > 1e6) |
+            df_bench['volume'].isna() | (df_bench['volume'] <= 0)
+        )
+        df_bench.loc[invalid_bench_mask, ['open', 'high', 'low', 'close']] = np.nan
+        df_bench[['open', 'high', 'low', 'close']] = df_bench[['open', 'high', 'low', 'close']].ffill().bfill().fillna(1.0)
+        df_bench['volume'] = df_bench['volume'].fillna(0)
         df_bench['score'] = np.nan # 补齐格式
         data_bench = QlibPandasData(dataname=df_bench, name='benchmark')
         cerebro.adddata(data_bench)
@@ -183,28 +191,48 @@ def run_qlib_backtrader(
         else:
             df['score'] = np.nan
 
-        # 移除重复索引（Qlib 可能存在重复日期）
+        # 移除重复索引
         df = df[~df.index.duplicated(keep='first')]
 
-        # 对齐到统一日期范围，避免新股上市日期偏斜整个回测起点
+        # 对齐到统一日期范围（所有数据源等长）
         df = df.reindex(full_calendar)
 
-        # [Bloomberg Eng] 不对未上市日期做假数据回填，保留 NaN。
-        # 这样 strategy 中 score 为 NaN 的股票不会被选中，杜绝 IPO 前向偏差。
-        # 下游 dropna(subset=['close']) 会自然过滤掉未上市前的行。
-        df['volume'] = df['volume'].fillna(0)
+        # 找出真正的无效天（原本就没有数据的天，或者价格<=0.01的天，防范 1e-19 极小值脏数据，或者异常大的脏数据，或者停牌日 volume<=0）
+        invalid_mask = (
+            df['close'].isna() | (df['close'] <= 0.01) | (df['close'] > 1e6) |
+            df['open'].isna() | (df['open'] <= 0.01) | (df['open'] > 1e6) |
+            df['high'].isna() | (df['high'] <= 0.01) | (df['high'] > 1e6) |
+            df['low'].isna() | (df['low'] <= 0.01) | (df['low'] > 1e6) |
+            df['volume'].isna() | (df['volume'] <= 0)
+        )
 
-        # 丢弃没有价格数据的行（防御性检查，自动过滤未上市日期）
-        df = df.dropna(subset=['close'])
+        # 把无效天的 score 强行置为 NaN，确保它在这天不会被策略选中买入
+        df.loc[invalid_mask, 'score'] = np.nan
+
+        # 修复价格数据，过滤掉任何<=0.01的坏价格
+        df.loc[invalid_mask, ['open', 'high', 'low', 'close']] = np.nan
+        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].ffill().bfill()
         
-        if len(df) > 0:
-            data = QlibPandasData(dataname=df, name=inst, timeframe=bt.TimeFrame.Days)
-            cerebro.adddata(data)
-            added_count += 1
+        # 兜底：如果连bfill都填不上（极小概率），填1.0防崩溃
+        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].fillna(1.0)
+        
+        df['volume'] = df['volume'].fillna(0)
+        df['openinterest'] = 0
+
+        # 现在 df 已经完美覆盖了 full_calendar，没有NaN价格，没有0价
+        data = QlibPandasData(dataname=df, name=inst, timeframe=bt.TimeFrame.Days)
+        cerebro.adddata(data)
+        added_count += 1
             
     print(f"成功加载了 {added_count} 个股票的数据源。")
-            
-    # 尝试加载 SuperPlot 分析器
+    # 诊断数据起始日期
+    min_date = pd.Timestamp('2099-01-01')
+    max_min_date = pd.Timestamp('1900-01-01')
+    for d in cerebro.datas:
+        d_min = d.p.dataname.index.min()
+        min_date = min(min_date, d_min)
+        max_min_date = max(max_min_date, d_min)
+    print(f"[DEBUG] 数据最早起始日: {min_date}, 最晚起始日: {max_min_date}")
     has_superplot = False
     if SuperPlot is not None:
         cerebro.addanalyzer(SuperPlot, 
@@ -227,6 +255,7 @@ def run_qlib_backtrader(
         
     print(f"=== 开始回测 ===")
     print(f"初始资金: {cerebro.broker.get_value():.2f}")
+    # 所有数据已经完全对齐，可以安全使用向量化模式加速
     results = cerebro.run()
     final_value = cerebro.broker.get_value()
     print(f"期末资金: {final_value:.2f}")
@@ -391,7 +420,8 @@ def run_duckdb_backtrader(
         
     print(f"=== 开始回测 ===")
     print(f"初始资金: {cerebro.broker.get_value():.2f}")
-    results = cerebro.run()
+    # runonce=False: 逐行处理兼容不等长数据
+    results = cerebro.run(runonce=False)
     final_value = cerebro.broker.get_value()
     print(f"期末资金: {final_value:.2f}")
     

@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 
 # Conda site-packages 优先，Roaming 放后面（解决 Roaming 路径污染）
 sp = list(sys.path)
@@ -13,21 +14,42 @@ import numpy as np
 import gc
 
 # 将项目根目录 src 文件夹加入 sys.path
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
 from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
 from qlworks.features.dataset import create_custom_dataset
 from qlworks.config import QLIB_DATA_DIR
 import qlib
+from _config import resolve_runtime_config
 
 # ==============================================================================
 # [全局配置区]
+# 默认运行时优先使用这里的 CONFIG。
+# 只有在命令行显式传入 `--config-source yaml` 时，才切换到 YAML 配置文件。
 # ==============================================================================
-CONFIG = {
+DEFAULT_YAML_CONFIG_NAME = "icir_2025"
+LOCAL_CONFIG = {
     "instruments": "csi500", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     
+    # 五个开关的语义必须分开理解，避免把“标准化”和“中性化”混淆：
+    # 1) normalize_features: 因子标准化开关。
+    #    - tree: True 时固定使用 CSQuantileNorm（特征横截面分位数化）
+    #    - linear/nn: True 时固定使用 RobustZScoreNorm（稳健 ZScore 标准化）
+    #    - 当前项目要求各模型都必须开启；若设为 False 会直接报错中断
+    # 2) neutralize_features: 因子中性化开关。
+    #    - 使用 CSNeutralize 剥离行业/市值暴露
+    #    - tree 默认 False，linear 常见为 True
+    # 3) renormalize_features_after_neutralize: 因子中性化后是否再标准化。
+    #    - tree 默认 False，linear/nn 默认 True
+    #    - 当前 ICIR 基线默认不做因子中性化，因此保持关闭
+    # 4) normalize_labels: 标签标准化开关。
+    #    - 当前默认使用 CSQuantileNorm 对标签做横截面分位数化
+    #    - 适合截面选股/排序型训练目标
+    # 5) neutralize_labels: 标签中性化开关。
+    #    - 使用 CSNeutralize 对标签做行业/市值残差化
+    #    - 只有当你明确要学习“残差 alpha”时再开启
     "model_type": "linear", 
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], 
     "label_names": ["LABEL_5D"], 
@@ -36,8 +58,11 @@ CONFIG = {
     
     # [Citadel Alpha Lab 改进] 传统 ICIR 基准不需要对特征进行严苛的中性化和正交化
     # 它反映的是因子原始的预测能力组合。只对特征进行去极值标准化即可。
+    "normalize_features": True,
     "neutralize_features": False, 
-    "neutralize_labels": True, 
+    "renormalize_features_after_neutralize": False,
+    "normalize_labels": True, 
+    "neutralize_labels": False, 
     "symmetric_orthogonalization": False,
 
     "rolling_windows": [
@@ -64,7 +89,13 @@ CONFIG = {
     "icir_window": 60,    # [Citadel 改进] 滚动 ICIR 计算窗口（交易日），60天约等于一个季度
 }
 
-def run_icir_baseline_pipeline():
+def run_icir_baseline_pipeline(config_source: str = "local", config_name: str | None = None):
+    CONFIG = resolve_runtime_config(
+        local_config=LOCAL_CONFIG,
+        default_yaml_name=DEFAULT_YAML_CONFIG_NAME,
+        config_source=config_source,
+        config_name=config_name,
+    )
     print("="*60)
     print("=== [基石引入] 传统多因子 ICIR 静态加权基准模型 ===")
     print("="*60)
@@ -106,7 +137,10 @@ def run_icir_baseline_pipeline():
             fit_end_time=segments["train"][1],
             segments=segments,
             model_type=CONFIG["model_type"],
+            normalize_features=CONFIG["normalize_features"],
             neutralize_features=CONFIG["neutralize_features"], 
+            renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+            normalize_labels=CONFIG["normalize_labels"],
             neutralize_labels=CONFIG["neutralize_labels"],
             symmetric_orthogonalization=CONFIG["symmetric_orthogonalization"]
         )
@@ -182,5 +216,23 @@ def run_icir_baseline_pipeline():
     print(f"\n>>> ICIR 传统加权预测得分已保存至: {output_path}")
     print("="*60)
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="ICIR 基线训练脚本")
+    parser.add_argument(
+        "--config-source",
+        choices=["local", "yaml"],
+        default="local",
+        help="参数来源：local=脚本内 [全局配置区]，yaml=加载 scripts/training/configs/ 下的 YAML",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=f"YAML 配置文件名（不含后缀）；为空时默认使用 {DEFAULT_YAML_CONFIG_NAME}",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_icir_baseline_pipeline()
+    args = _parse_args()
+    run_icir_baseline_pipeline(config_source=args.config_source, config_name=args.config)

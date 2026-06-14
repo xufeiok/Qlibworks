@@ -11,66 +11,82 @@ sys.path = conda_sp + other_sp + roaming_sp
 
 import pandas as pd
 import numpy as np
-import yaml
 import gc
+from qlib.data.dataset.handler import DataHandlerLP
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../src")))
+# 将项目根目录 src 文件夹加入 sys.path
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
-from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
-from qlworks.features.dataset import create_custom_dataset
+from qlworks.features.builder import build_factor_library_bundle
+from qlworks.features.dataset import (
+    create_custom_dataset,
+    build_custom_feature_cache,
+    wrap_dataset_with_cached_train_frame,
+)
 from qlworks.models.training import train_ridge_model, predict_ensemble_models
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
 import qlib
+from _config import resolve_runtime_config
 
 # ==============================================================================
-# [配置加载] 优先从 YAML 文件加载，兼容传统内嵌 CONFIG 字典
+# [全局配置区]
+# 默认运行时优先使用这里的 CONFIG。
+# 只有在命令行显式传入 `--config-source yaml` 时，才切换到 YAML 配置文件。
+# ==============================================================================
+DEFAULT_YAML_CONFIG_NAME = "linear_2025"
+LOCAL_CONFIG = {
+    "instruments": "csi500",
+    "start_time": "2020-01-01",
+    "end_time": "2025-12-31",
+
+    # 五个开关的语义必须分开理解，避免把“标准化”和“中性化”混淆：
+    # 1) normalize_features: 因子标准化开关。
+    #    - tree: True 时固定使用 CSQuantileNorm（特征横截面分位数化）
+    #    - linear/nn: True 时固定使用 RobustZScoreNorm（稳健 ZScore 标准化）
+    #    - 当前项目要求各模型都必须开启；若设为 False 会直接报错中断
+    # 2) neutralize_features: 因子中性化开关。
+    #    - 使用 CSNeutralize 剥离行业/市值暴露
+    #    - tree 默认 False，linear 常见为 True
+    # 3) renormalize_features_after_neutralize: 因子中性化后是否再标准化。
+    #    - tree 默认 False，linear/nn 默认 True
+    #    - linear/nn 开启后更符合“标准化 -> 中性化 -> 再标准化”的研究流程
+    # 4) normalize_labels: 标签标准化开关。
+    #    - 当前默认使用 CSQuantileNorm 对标签做横截面分位数化
+    #    - 适合截面选股/排序型训练目标
+    # 5) neutralize_labels: 标签中性化开关。
+    #    - 使用 CSNeutralize 对标签做行业/市值残差化
+    #    - 只有当你明确要学习“残差 alpha”时再开启
+    "model_type": "linear",
+    "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"],
+    "label_names": ["LABEL_5D"],
+    "factor_files": ["reversal_momentum_factors"],
+    "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
+    "normalize_features": True,
+    "neutralize_features": True,
+    "renormalize_features_after_neutralize": True,
+    "normalize_labels": True,
+    "neutralize_labels": False,
+    "symmetric_orthogonalization": True,
+
+    "rolling_windows": [
+        {"name": "Test_2023", "train": ("2020-01-01", "2021-12-20"), "valid": ("2022-01-01", "2022-12-20"), "test":  ("2023-01-01", "2023-12-31")},
+        {"name": "Test_2024", "train": ("2021-01-01", "2022-12-20"), "valid": ("2023-01-01", "2023-12-20"), "test":  ("2024-01-01", "2024-12-31")},
+        {"name": "Test_2025", "train": ("2022-01-01", "2023-12-20"), "valid": ("2024-01-01", "2024-12-20"), "test":  ("2025-01-01", "2025-12-31")},
+    ],
+    "top_k_factors": 20,
+    "icir_stability_check": {"enabled": True, "rolling_window": 60, "keep_ratio": 0.9},
+    "feature_selection": {"method": "filter", "algo": "f_regression", "label_col": "LABEL_5D", "remove_collinearity": False},
+}
 # ==============================================================================
 
-# 解析命令行参数
-_parser = argparse.ArgumentParser(description="线性模型训练脚本")
-_parser.add_argument("--config", type=str, default="linear_2025",
-                     help="策略配置文件名称（不含后缀，从 scripts/configs/ 加载）")
-_args, _ = _parser.parse_known_args()
-
-# 加载 YAML 配置，失败时回退到传统 CONFIG 字典
-try:
-    from _config import load_config
-    CONFIG = load_config(_args.config)
-    if not CONFIG:
-        raise ValueError("配置为空")
-    print(f"  使用 YAML 配置: {_args.config}")
-except Exception as e:
-    print(f"  YAML 配置加载失败 ({e})，使用内嵌 CONFIG 字典")
-    # ==============================================================================
-    # [全局配置区] 传统 CONFIG 字典（内嵌版本）
-    # ==============================================================================
-    CONFIG = {
-        "instruments": "csi500",
-        "start_time": "2020-01-01",
-        "end_time": "2025-12-31",
-
-        "model_type": "linear",
-        "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"],
-        "label_names": ["LABEL_5D"],
-        "factor_files": ["reversal_momentum_factors"],
-        "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
-        "neutralize_features": True,
-        "neutralize_labels": True,
-        "symmetric_orthogonalization": True,
-
-        "rolling_windows": [
-            {"name": "Test_2023", "train": ("2020-01-01", "2021-12-20"), "valid": ("2022-01-01", "2022-12-20"), "test":  ("2023-01-01", "2023-12-31")},
-            {"name": "Test_2024", "train": ("2021-01-01", "2022-12-20"), "valid": ("2023-01-01", "2023-12-20"), "test":  ("2024-01-01", "2024-12-31")},
-            {"name": "Test_2025", "train": ("2022-01-01", "2023-12-20"), "valid": ("2024-01-01", "2024-12-20"), "test":  ("2025-01-01", "2025-12-31")},
-        ],
-        "top_k_factors": 20,
-        "icir_stability_check": {"enabled": True, "rolling_window": 60, "keep_ratio": 0.9},
-        "feature_selection": {"method": "filter", "algo": "f_regression", "label_col": "LABEL_5D", "remove_collinearity": False},
-    }
-# ==============================================================================
-
-def run_ml_pipeline():
+def run_ml_pipeline(config_source: str = "local", config_name: str | None = None):
+    CONFIG = resolve_runtime_config(
+        local_config=LOCAL_CONFIG,
+        default_yaml_name=DEFAULT_YAML_CONFIG_NAME,
+        config_source=config_source,
+        config_name=config_name,
+    )
     print("="*60)
     print("=== 第二阶段：【终极改造】动态因子筛选与多因子机器学习建模 ===")
     print("="*60)
@@ -109,6 +125,16 @@ def run_ml_pipeline():
             "valid": window["valid"],
             "test":  window["test"],
         }
+
+        print(f"\n[3.0 - {window_name}] 构建窗口级底层特征缓存 (供筛因子与训练复用)...")
+        feature_cache = build_custom_feature_cache(
+            instruments=CONFIG["instruments"],
+            feature_bundle=bundle_all,
+            factor_cache_names=CONFIG.get("factor_cache_names"),
+            start_time=segments["train"][0],
+            end_time=segments["test"][1],
+            freq="day",
+        )
         
         # 3.1 为该窗口构建包含【全量因子】的 DatasetH，用于挑选因子
         print(f"\n[3.1 - {window_name}] 构建全量因子的 DatasetH (用于特征筛选)...")
@@ -117,15 +143,17 @@ def run_ml_pipeline():
         # 改成 segments["train"][1] 后数据量减少 50-75%，大幅加速
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
-            feature_bundle=bundle_all,
-            factor_cache_names=CONFIG.get("factor_cache_names"),
+            feature_cache=feature_cache,
             start_time=segments["train"][0],
             end_time=segments["train"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments={"train": segments["train"]},
             model_type=CONFIG["model_type"],
+            normalize_features=CONFIG["normalize_features"],
             neutralize_features=CONFIG["neutralize_features"], # 若出现严重截面偏移，可设为 True
+            renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+            normalize_labels=CONFIG["normalize_labels"],
             neutralize_labels=CONFIG["neutralize_labels"],
             # [AQR 改进]: 筛选因子时绝对不能开启正交化！因为正交化后的因子是全量因子的线性组合。
             # 必须用原始（去极值+中性化）的因子算 IC，挑出最好的 Top K，然后再对这 Top K 进小宇宙正交化！
@@ -182,42 +210,42 @@ def run_ml_pipeline():
             else:
                 print(f"    特征数或标签列不足，跳过 ICIR 稳定性校验")
 
-        # [Bloomberg Data Pipeline 改进] 内存核弹危机解除：因子筛选完成后，全量数百个因子的庞大 DataFrame 必须立即销毁
-        del dataset_full, train_frame_full, x_train, y_train, fs_result
-        gc.collect()
-        
         # 3.3 构建仅包含 Top K 因子的小数据集，防止过多无用特征干扰模型
         # 由于 dataset_full 的底层数据是通用的，我们可以利用它的 _data 结构，或者直接用切片，
         # 为了符合 Qlib 的原生训练模式，这里直接传入全量 dataset_full 也可以，
         # 因为在树模型中，被选出的 max_features=20 已经在算法内做了限制，
         # 但为了更清晰的隔离，我们通过重新生成一个小 dataset 来保证干净：
         
-        # 从 bundle_all 中提取选中的因子公式
-        expr_map = dict(zip(bundle_all.names, bundle_all.fields))
-        selected_exprs = [expr_map[name] for name in selected_factor_names]
-        
-        bundle_sub = FeatureBundle(
-            fields=selected_exprs,
-            names=selected_factor_names,
-            label_fields=bundle_all.label_fields,
-            label_names=bundle_all.label_names
-        )
-        
         print(f"\n[3.3 - {window_name}] 根据选出的因子重构轻量级 DatasetH...")
         _, dataset_sub = create_custom_dataset(
             instruments=CONFIG["instruments"],
-            feature_bundle=bundle_sub,
-            factor_cache_names=CONFIG.get("factor_cache_names"),
+            feature_cache=feature_cache,
+            selected_feature_names=selected_factor_names,
             start_time=segments["train"][0],
             end_time=segments["test"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments=segments,
             model_type=CONFIG["model_type"],
+            normalize_features=CONFIG["normalize_features"],
             neutralize_features=CONFIG["neutralize_features"],
+            renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+            normalize_labels=CONFIG["normalize_labels"],
             neutralize_labels=CONFIG["neutralize_labels"],
             symmetric_orthogonalization=CONFIG.get("symmetric_orthogonalization", False)
         )
+        if not CONFIG.get("symmetric_orthogonalization", False):
+            dataset_sub = wrap_dataset_with_cached_train_frame(
+                dataset_sub,
+                train_frame=train_frame_full,
+                selected_feature_names=selected_factor_names,
+                label_names=bundle_all.label_names,
+                learn_data_key=DataHandlerLP.DK_L,
+                infer_data_key=DataHandlerLP.DK_I,
+            )
+
+        del dataset_full, train_frame_full, x_train, y_train, fs_result
+        gc.collect()
 
         print(f"\n[3.4 - {window_name}] 开始训练机器学习模型 (Ridge with TimeSeriesCV) ...")
         print("    - 正在训练 Ridge 线性回归模型 ...")
@@ -240,7 +268,7 @@ def run_ml_pipeline():
         all_predictions.append(predictions)
         
         # [Bloomberg Data Pipeline 改进] 当前 Window 结束，彻底释放轻量数据集与模型占用的显存/内存
-        del dataset_sub, ridge_model
+        del dataset_sub, ridge_model, feature_cache
         gc.collect()
     
     # 4. 合并所有滚动窗口的样本外预测结果
@@ -264,5 +292,23 @@ def run_ml_pipeline():
     print("Backtrader 会模拟真实的交易环境：每天买入 Score 最高的 N 只股票，计算扣除印花税、滑点后的真实收益和换手率！")
     print("="*60)
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="线性模型训练脚本")
+    parser.add_argument(
+        "--config-source",
+        choices=["local", "yaml"],
+        default="local",
+        help="参数来源：local=脚本内 [全局配置区]，yaml=加载 scripts/training/configs/ 下的 YAML",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=f"YAML 配置文件名（不含后缀）；为空时默认使用 {DEFAULT_YAML_CONFIG_NAME}",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_ml_pipeline()
+    args = _parse_args()
+    run_ml_pipeline(config_source=args.config_source, config_name=args.config)

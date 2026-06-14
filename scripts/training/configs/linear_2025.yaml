@@ -18,10 +18,14 @@ factor_files:
   - price_volume_factors
   - sentiment_factors
   - risk_factors
+factor_cache_names: []
 
-# 预处理
+# 预处理开关
+normalize_features: true
 neutralize_features: true
-neutralize_labels: true
+renormalize_features_after_neutralize: true
+normalize_labels: true
+neutralize_labels: false
 symmetric_orthogonalization: true
 
 # 滚动窗口 (Walk-Forward)

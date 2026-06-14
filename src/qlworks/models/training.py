@@ -8,6 +8,7 @@ if __name__ == "__main__":
 
 from typing import Dict, Tuple
 
+import numpy as np
 import pandas as pd
 from sklearn.linear_model import LinearRegression
 
@@ -43,6 +44,30 @@ def _detect_gpu() -> bool:
 
 
 _USE_GPU = _detect_gpu()
+
+
+def _filter_finite_feature_label_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    过滤特征/标签中的无效样本，避免 XGBoost 等模型因 NaN/inf 标签直接崩溃。
+    """
+    if df.empty:
+        return df
+
+    if isinstance(df.columns, pd.MultiIndex):
+        label_df = df["label"] if "label" in df.columns.get_level_values(0) else pd.DataFrame(index=df.index)
+        feature_df = df["feature"] if "feature" in df.columns.get_level_values(0) else pd.DataFrame(index=df.index)
+    else:
+        label_cols = [c for c in df.columns if "LABEL" in str(c)]
+        feature_cols = [c for c in df.columns if c not in label_cols]
+        label_df = df[label_cols]
+        feature_df = df[feature_cols]
+
+    label_mask = np.isfinite(label_df.to_numpy()).all(axis=1) if not label_df.empty else np.ones(len(df), dtype=bool)
+    feature_mask = np.isfinite(feature_df.to_numpy()).all(axis=1) if not feature_df.empty else np.ones(len(df), dtype=bool)
+    valid_mask = label_mask & feature_mask
+    if valid_mask.all():
+        return df
+    return df.loc[valid_mask].copy()
 
 
 def prepare_split_frames(dataset) -> Dict[str, pd.DataFrame]:
@@ -85,18 +110,21 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
         "colsample_bytree": 0.8,
         "learning_rate": 0.1,
         "subsample": 0.8,
-        "n_estimators": 1000,
-        "early_stopping_rounds": 30,
         "max_depth": 6,
         "num_leaves": 64,
         "min_child_samples": 20,
         "verbose": -1,
         "device": "gpu" if _USE_GPU else "cpu",
     }
+    fit_params = {
+        "num_boost_round": 1000,
+        "early_stopping_rounds": 30,
+    }
     if params:
-        base_params.update(params)
+        base_params.update({k: v for k, v in params.items() if k not in fit_params})
+        fit_params.update({k: v for k, v in params.items() if k in fit_params})
     model = LGBModel(**base_params)
-    model.fit(dataset)
+    model.fit(dataset, **fit_params)
     return model
 
 
@@ -107,6 +135,8 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
     - GPU 自动检测：有 GPU 时使用 CUDA 加速，否则回退 CPU。
     """
     from qlib.contrib.model.xgboost import XGBModel
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlworks.features.dataset import PreparedDatasetView
 
     base_params = {
         "objective": "reg:squarederror",
@@ -114,16 +144,39 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
         "max_depth": 6,
         "subsample": 0.8,
         "colsample_bytree": 0.8,
-        "n_estimators": 1000,
-        "early_stopping_rounds": 30,
         "n_jobs": 4,
+    }
+    fit_params = {
+        "num_boost_round": 1000,
+        "early_stopping_rounds": 30,
     }
     if _USE_GPU:
         base_params.update({"tree_method": "hist", "device": "cuda"})
     if params:
-        base_params.update(params)
+        # Qlib 的 XGBModel.fit 使用 num_boost_round / early_stopping_rounds，
+        # 不能把这两个参数直接塞进构造器，否则会被底层 xgboost 当成无效参数。
+        if "n_estimators" in params and "num_boost_round" not in params:
+            params = dict(params)
+            params["num_boost_round"] = params.pop("n_estimators")
+        base_params.update({k: v for k, v in params.items() if k not in fit_params})
+        fit_params.update({k: v for k, v in params.items() if k in fit_params})
+    cached_results = {}
+    for segment in ("train", "valid"):
+        try:
+            frame = dataset.prepare(segment, col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
+        except Exception:
+            continue
+        cleaned = _filter_finite_feature_label_frame(frame)
+        dropped = len(frame) - len(cleaned)
+        if dropped > 0:
+            print(f"    [XGB 清洗] {segment}: 删除 {dropped} 条含 NaN/inf 的样本")
+        cached_results[(segment, ("feature", "label"), DataHandlerLP.DK_L)] = cleaned
+        if "feature" in cleaned.columns.get_level_values(0):
+            cached_results[(segment, "feature", DataHandlerLP.DK_L)] = cleaned["feature"]
+
+    wrapped_dataset = PreparedDatasetView(dataset, cached_prepare_results=cached_results)
     model = XGBModel(**base_params)
-    model.fit(dataset)
+    model.fit(wrapped_dataset, **fit_params)
     return model
 
 
@@ -133,23 +186,73 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
     - 使用 Qlib 的 `CatBoostModel` 训练。CatBoost 能更好地处理类别特征，且在金融数据上通常抗过拟合能力较强。
     - GPU 自动检测：有 GPU 时使用 GPU 训练，否则回退 CPU。
     """
-    from qlib.contrib.model.catboost_model import CatBoostModel
+    from catboost import CatBoostRegressor, Pool
+    from qlib.data.dataset.handler import DataHandlerLP
 
     base_params = {
         "loss_function": "RMSE",
         "learning_rate": 0.1,
-        "iterations": 1000,
-        "early_stopping_rounds": 30,
         "depth": 6,
         "thread_count": 4,
     }
-    if _USE_GPU:
-        base_params["task_type"] = "GPU"
+    fit_params = {
+        "num_boost_round": 1000,
+        "early_stopping_rounds": 30,
+    }
+    task_type = "GPU" if _USE_GPU else "CPU"
     if params:
-        base_params.update(params)
-    model = CatBoostModel(**base_params)
-    model.fit(dataset)
-    return model
+        if "iterations" in params and "num_boost_round" not in params:
+            params = dict(params)
+            params["num_boost_round"] = params.pop("iterations")
+        if "task_type" in params:
+            task_type = str(params["task_type"]).upper()
+        base_params.update({k: v for k, v in params.items() if k not in fit_params and k != "task_type"})
+        fit_params.update({k: v for k, v in params.items() if k in fit_params})
+    if task_type not in {"CPU", "GPU"}:
+        raise ValueError(f"CatBoost task_type 仅支持 CPU/GPU，当前为: {task_type}")
+
+    df_train, df_valid = dataset.prepare(
+        ["train", "valid"],
+        col_set=["feature", "label"],
+        data_key=DataHandlerLP.DK_L,
+    )
+    df_train = _filter_finite_feature_label_frame(df_train)
+    df_valid = _filter_finite_feature_label_frame(df_valid)
+    if df_train.empty or df_valid.empty:
+        raise ValueError("Empty data from dataset, please check your dataset config.")
+
+    x_train, y_train = df_train["feature"], df_train["label"]
+    x_valid, y_valid = df_valid["feature"], df_valid["label"]
+
+    if y_train.values.ndim == 2 and y_train.values.shape[1] == 1:
+        y_train_1d, y_valid_1d = np.squeeze(y_train.values), np.squeeze(y_valid.values)
+    else:
+        raise ValueError("CatBoost doesn't support multi-label training")
+
+    train_pool = Pool(data=x_train.values, label=y_train_1d)
+    valid_pool = Pool(data=x_valid.values, label=y_valid_1d)
+
+    model_params = dict(base_params)
+    model_params["task_type"] = task_type
+    model_params["iterations"] = fit_params["num_boost_round"]
+    model_params["early_stopping_rounds"] = fit_params["early_stopping_rounds"]
+    model_params.setdefault("verbose", 20)
+
+    cat_model = CatBoostRegressor(**model_params)
+    cat_model.fit(train_pool, eval_set=valid_pool, use_best_model=True)
+
+    class CatBoostWrapper:
+        def __init__(self, model):
+            self.model = model
+
+        def predict(self, dataset, segment="test"):
+            x_test = dataset.prepare(segment, col_set="feature", data_key=DataHandlerLP.DK_I)
+            return pd.Series(self.model.predict(x_test.values), index=x_test.index)
+
+        def get_feature_importance(self, *args, **kwargs) -> pd.Series:
+            return pd.Series(self.model.get_feature_importance(*args, **kwargs))
+
+    return CatBoostWrapper(cat_model)
 
 
 def train_lstm_model(dataset, params: Dict[str, object] = None):
@@ -313,7 +416,7 @@ def train_linear_baseline(train_frame: pd.DataFrame) -> Tuple[LinearRegression, 
 
 
 if __name__ == "__main__":
-    print("=== models/training.py 独立调用示例 ===")
+    print("=== models/training.py 独立调用示例（非正式训练入口） ===")
     import numpy as np
     
     # 1. 制造一份已经做完特征选择的“瘦身”数据
@@ -324,6 +427,8 @@ if __name__ == "__main__":
         "LABEL0": np.random.rand(100) * 0.1 # 收益率标签
     })
     
+    print("\n[警告] 当前是 training.py 的演示模式，只用于验证模型封装是否可调用。")
+    print("真实训练请运行: e:/Quant/Qlibworks/scripts/training/train_tree.py")
     print(f"\n[1] 输入模型的特征矩阵: {df_train.columns.tolist()} (含 LABEL0)")
     
     # 2. 调用基线线性回归模型 (注意：这里用的是我们手写的基线，它需要手动剥离 LABEL0)
@@ -334,4 +439,5 @@ if __name__ == "__main__":
     for col, coef in zip(x_train.columns, model.coef_):
         print(f"  - {col}: {coef:.4f}")
         
-    print("\n说明: 在真实的 pipeline 中，推荐传入 dataset 对象并调用 train_lgb_model。")
+    print("\n说明: 上述输出只是随机样本上的线性回归示例，不代表真实策略训练结果。")
+    print("真实的 Qlib 训练/打分流程，请运行 scripts/training 下的训练脚本。")

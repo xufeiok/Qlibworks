@@ -1,0 +1,39 @@
+# =====================================================================
+# ICIR 基线训练配置
+# 对应脚本: train_icir.py
+# =====================================================================
+instruments: csi500
+start_time: "2020-01-01"
+end_time: "2025-12-31"
+model_type: linear
+
+label_fields: ["Ref($close, -5) / Ref($open, -1) - 1"]
+label_names: ["LABEL_5D"]
+
+factor_files:
+  - reversal_momentum_factors
+factor_cache_names: []
+
+normalize_features: true
+neutralize_features: false
+renormalize_features_after_neutralize: false
+normalize_labels: true
+neutralize_labels: false
+symmetric_orthogonalization: false
+
+rolling_windows:
+  - name: Test_2023
+    train: ["2020-01-01", "2021-12-20"]
+    valid: ["2022-01-01", "2022-12-20"]
+    test: ["2023-01-01", "2023-12-31"]
+  - name: Test_2024
+    train: ["2021-01-01", "2022-12-20"]
+    valid: ["2023-01-01", "2023-12-20"]
+    test: ["2024-01-01", "2024-12-31"]
+  - name: Test_2025
+    train: ["2022-01-01", "2023-12-20"]
+    valid: ["2024-01-01", "2024-12-20"]
+    test: ["2025-01-01", "2025-12-31"]
+
+top_k_factors: 50
+icir_window: 60

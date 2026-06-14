@@ -1,0 +1,60 @@
+# =====================================================================
+# 树模型训练配置
+# 对应脚本: train_tree.py
+# =====================================================================
+instruments: csi500
+start_time: "2020-01-01"
+end_time: "2025-12-31"
+model_type: tree
+
+label_fields: ["Ref($close, -5) / Ref($open, -1) - 1"]
+label_names: ["LABEL_5D"]
+
+factor_files:
+  - reversal_momentum_factors
+factor_cache_names: []
+
+normalize_features: true
+neutralize_features: false
+renormalize_features_after_neutralize: false
+normalize_labels: true
+neutralize_labels: false
+
+rolling_windows:
+  - name: Test_2023
+    train: ["2020-01-01", "2021-12-20"]
+    valid: ["2022-01-01", "2022-12-20"]
+    test: ["2023-01-01", "2023-12-31"]
+  - name: Test_2024
+    train: ["2021-01-01", "2022-12-20"]
+    valid: ["2023-01-01", "2023-12-20"]
+    test: ["2024-01-01", "2024-12-31"]
+  - name: Test_2025
+    train: ["2022-01-01", "2023-12-20"]
+    valid: ["2024-01-01", "2024-12-20"]
+    test: ["2025-01-01", "2025-12-31"]
+
+top_k_factors: 5
+feature_selection_date_stride: 2
+train_models: ["lgb", "xgb", "cat"]
+model_params:
+  lgb:
+    num_boost_round: 600
+    early_stopping_rounds: 50
+  xgb:
+    num_boost_round: 600
+    early_stopping_rounds: 50
+  cat:
+    num_boost_round: 400
+    early_stopping_rounds: 30
+    task_type: CPU
+
+factor_redundancy_check:
+  enabled: true
+  correlation_threshold: 0.95
+
+feature_selection:
+  method: embedded
+  algo: lightgbm
+  label_col: LABEL_5D
+  remove_collinearity: false

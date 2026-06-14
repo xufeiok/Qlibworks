@@ -1,6 +1,7 @@
 import os
 import sys
 import warnings
+import argparse
 
 # MLflow 新版禁止文件系统存储，设置环境变量启用（Qlib 默认使用文件系统）
 os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
@@ -18,21 +19,30 @@ warnings.filterwarnings("ignore", category=RuntimeWarning, module="numpy")
 import gc
 import pandas as pd
 import numpy as np
+from qlib.data.dataset.handler import DataHandlerLP
 
 # 将项目根目录 src 文件夹加入 sys.path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
-from qlworks.features.builder import build_factor_library_bundle, FeatureBundle
-from qlworks.features.dataset import create_custom_dataset, FACTOR_CACHE_EXPRESSIONS
+from qlworks.features.builder import build_factor_library_bundle
+from qlworks.features.dataset import (
+    create_custom_dataset,
+    build_custom_feature_cache,
+    wrap_dataset_with_cached_train_frame,
+)
 from qlworks.models.training import train_lgb_model, train_xgb_model, train_catboost_model, predict_ensemble_models
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
 import qlib
+from _config import resolve_runtime_config
 
 # ==============================================================================
 # [全局配置区]
+# 默认运行时优先使用这里的 CONFIG。
+# 只有在命令行显式传入 `--config-source yaml` 时，才切换到 YAML 配置文件。
 # ==============================================================================
-CONFIG = {
+DEFAULT_YAML_CONFIG_NAME = "tree_2025"
+LOCAL_CONFIG = {
     # [Renaissance 改进] 摒弃静态的 List 股票池，直接使用 Qlib 内置的动态别名
     # 这样 Qlib 内部会根据每一天的日期，动态过滤出当天真实属于 csi500 且未退市的成分股，彻底杜绝前视偏差与幸存者偏差
     "instruments": "csi500", 
@@ -40,13 +50,33 @@ CONFIG = {
     "end_time": "2025-12-31",
     
     # --- 模型与标签配置 ---
+    # 五个开关的语义必须分开理解，避免把“标准化”和“中性化”混淆：
+    # 1) normalize_features: 因子标准化开关。
+    #    - tree: True 时固定使用 CSQuantileNorm（特征横截面分位数化）
+    #    - linear/nn: True 时固定使用 RobustZScoreNorm（稳健 ZScore 标准化）
+    #    - 当前项目要求各模型都必须开启；若设为 False 会直接报错中断
+    # 2) neutralize_features: 因子中性化开关。
+    #    - 使用 CSNeutralize 剥离行业/市值暴露
+    #    - tree 默认 False，linear 常见为 True
+    # 3) renormalize_features_after_neutralize: 因子中性化后是否再标准化。
+    #    - tree 默认 False，linear/nn 默认 True
+    #    - tree 若开启，表示“残差因子”继续压成截面排序输入
+    # 4) normalize_labels: 标签标准化开关。
+    #    - 当前默认使用 CSQuantileNorm 对标签做横截面分位数化
+    #    - 适合截面选股/排序型训练目标
+    # 5) neutralize_labels: 标签中性化开关。
+    #    - 使用 CSNeutralize 对标签做行业/市值残差化
+    #    - 只有当你明确要学习“残差 alpha”时再开启
     "model_type": "tree", # 机器学习模型类型 (tree / linear 等)
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"], # 预测标签名称
     "factor_files": ["reversal_momentum_factors"], # 待加载的因子文件
     "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
+    "normalize_features": True, # 是否对特征进行标准化；tree=True 时固定采用 CSQuantileNorm
     "neutralize_features": False, # 是否对特征进行横截面中性化
-    "neutralize_labels": True, # 是否对标签进行横截面中性化 (防范日内跳空带来的前视偏差错位)
+    "renormalize_features_after_neutralize": False, # 特征中性化后是否再标准化；tree 默认关闭
+    "normalize_labels": True, # 是否对标签进行横截面分位数化
+    "neutralize_labels": False, # 是否对标签进行横截面中性化（行业/市值残差化）
     
     # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
     # [Point] 引入 Embargo (隔离期)：训练集到验证集、验证集到测试集之间留出约10天安全垫，防止 T+N 标签导致的未来数据泄漏 (Look-ahead Bias)
@@ -70,7 +100,14 @@ CONFIG = {
             "test":  ("2025-01-01", "2025-12-31"),
         }
     ],
-    "top_k_factors": 20, # 我们选取筛选出来的 Top 20 因子来建模
+    "top_k_factors": 5, # 我们选取筛选出来的 Top 5 因子来建模
+    "feature_selection_date_stride": 2, # 特征筛选按日期抽样步长；2=隔天抽样，显著降低筛选耗时
+    "train_models": ["lgb", "xgb", "cat"], # 默认包含 CatBoost；当前默认以 CPU 模式训练，避免 GPU OOM
+    "model_params": {
+        "lgb": {"num_boost_round": 600, "early_stopping_rounds": 50},
+        "xgb": {"num_boost_round": 600, "early_stopping_rounds": 50},
+        "cat": {"num_boost_round": 400, "early_stopping_rounds": 30, "task_type": "CPU"},
+    },
     "factor_redundancy_check": {
         "enabled": True,                  # [AQR 改进] 开启因子冗余检测
         "correlation_threshold": 0.95,    # 相关性超过此阈值视为冗余
@@ -83,7 +120,13 @@ CONFIG = {
     }
 }
 
-def run_ml_pipeline():
+def run_ml_pipeline(config_source: str = "local", config_name: str | None = None):
+    CONFIG = resolve_runtime_config(
+        local_config=LOCAL_CONFIG,
+        default_yaml_name=DEFAULT_YAML_CONFIG_NAME,
+        config_source=config_source,
+        config_name=config_name,
+    )
     print("="*60)
     print("=== 第二阶段：【终极改造】动态因子筛选与多因子机器学习建模 ===")
     print("="*60)
@@ -121,6 +164,16 @@ def run_ml_pipeline():
             "valid": window["valid"],
             "test":  window["test"],
         }
+
+        print(f"\n[3.0 - {window_name}] 构建窗口级底层特征缓存 (供筛因子与训练复用)...")
+        feature_cache = build_custom_feature_cache(
+            instruments=CONFIG["instruments"],
+            feature_bundle=bundle_all,
+            factor_cache_names=CONFIG["factor_cache_names"],
+            start_time=segments["train"][0],
+            end_time=segments["test"][1],
+            freq="day",
+        )
         
         # 3.1 为该窗口构建包含【全量因子】的 DatasetH，用于挑选因子
         print(f"\n[3.1 - {window_name}] 构建全量因子的 DatasetH (用于特征筛选)...")
@@ -129,15 +182,17 @@ def run_ml_pipeline():
         # 改成 segments["train"][1] 后数据量减少 50-75%，大幅加速
         _, dataset_full = create_custom_dataset(
             instruments=CONFIG["instruments"],
-            feature_bundle=bundle_all,
-            factor_cache_names=CONFIG["factor_cache_names"],
+            feature_cache=feature_cache,
             start_time=segments["train"][0],
             end_time=segments["train"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments={"train": segments["train"]},
             model_type=CONFIG["model_type"],
+            normalize_features=CONFIG["normalize_features"],
             neutralize_features=CONFIG["neutralize_features"],
+            renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+            normalize_labels=CONFIG["normalize_labels"],
             neutralize_labels=CONFIG["neutralize_labels"]
         )
         
@@ -145,7 +200,15 @@ def run_ml_pipeline():
         print(f"\n[3.2 - {window_name}] 在当前训练集上执行动态因子筛选 (选取前 {CONFIG['top_k_factors']} 个)...")
         train_frame_full = dataset_full.prepare("train")
         print(f"    >>> 训练集数据: {train_frame_full.shape[0]} 行 × {train_frame_full.shape[1]} 列 (仅训练期)")
-        x_train, y_train, _ = prepare_feature_selection_data(train_frame_full, label_col=fs_conf["label_col"])
+        fs_stride = max(int(CONFIG.get("feature_selection_date_stride", 1)), 1)
+        if fs_stride > 1:
+            sampled_dates = train_frame_full.index.get_level_values("datetime").unique()[::fs_stride]
+            train_frame_fs = train_frame_full.loc[train_frame_full.index.get_level_values("datetime").isin(sampled_dates)]
+            print(f"    >>> 特征筛选抽样: 每 {fs_stride} 个交易日取 1 个，降至 {train_frame_fs.shape[0]} 行")
+        else:
+            train_frame_fs = train_frame_full
+
+        x_train, y_train, _ = prepare_feature_selection_data(train_frame_fs, label_col=fs_conf["label_col"])
         
         valid_idx = y_train.dropna().index
         x_train = x_train.loc[valid_idx]
@@ -206,59 +269,70 @@ def run_ml_pipeline():
             else:
                 print(f"    特征数不足，跳过因子冗余检测")
 
-        # [Bloomberg Data Pipeline 改进] 内存核弹危机解除：因子筛选完成后，全量数百个因子的庞大 DataFrame 必须立即销毁
-        del dataset_full, train_frame_full, x_train, y_train, fs_result
-        gc.collect()
-        
         # 3.3 构建仅包含 Top K 因子的小数据集，防止过多无用特征干扰模型
         # 由于 dataset_full 的底层数据是通用的，我们可以利用它的 _data 结构，或者直接用切片，
         # 为了符合 Qlib 的原生训练模式，这里直接传入全量 dataset_full 也可以，
         # 因为在树模型中，被选出的 max_features=20 已经在算法内做了限制，
         # 但为了更清晰的隔离，我们通过重新生成一个小 dataset 来保证干净：
         
-        # 从 bundle_all 中提取选中的因子公式（含 factor_cache_names）
-        expr_map = dict(zip(bundle_all.names, bundle_all.fields))
-        for name in CONFIG["factor_cache_names"]:
-            if name not in expr_map and name in FACTOR_CACHE_EXPRESSIONS:
-                expr_map[name] = FACTOR_CACHE_EXPRESSIONS[name]
-        selected_exprs = [expr_map[name] for name in selected_factor_names]
-        
-        bundle_sub = FeatureBundle(
-            fields=selected_exprs,
-            names=selected_factor_names,
-            label_fields=bundle_all.label_fields,
-            label_names=bundle_all.label_names
-        )
-        
         print(f"\n[3.3 - {window_name}] 根据选出的因子重构轻量级 DatasetH...")
-        # [重要] 因 bundle_sub 已包含选中因子（含缓存因子），传空列表避免重复注入导致列名冲突
         _, dataset_sub = create_custom_dataset(
             instruments=CONFIG["instruments"],
-            feature_bundle=bundle_sub,
-            factor_cache_names=[],
-            start_time=segments["train"][0],
+            feature_cache=feature_cache,
+            selected_feature_names=selected_factor_names,
+            start_time=segments["valid"][0],
             end_time=segments["test"][1],
             fit_start_time=segments["train"][0],
             fit_end_time=segments["train"][1],
             segments=segments,
             model_type=CONFIG["model_type"],
+            normalize_features=CONFIG["normalize_features"],
             neutralize_features=CONFIG["neutralize_features"],
+            renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+            normalize_labels=CONFIG["normalize_labels"],
             neutralize_labels=CONFIG["neutralize_labels"]
         )
+        valid_frame = None
+        try:
+            valid_frame = dataset_sub.prepare("valid")
+        except Exception:
+            pass
+        dataset_sub = wrap_dataset_with_cached_train_frame(
+            dataset_sub,
+            train_frame=train_frame_full,
+            selected_feature_names=selected_factor_names,
+            label_names=bundle_all.label_names,
+            learn_data_key=DataHandlerLP.DK_L,
+            infer_data_key=DataHandlerLP.DK_I,
+            valid_frame=valid_frame,
+        )
 
-        print(f"\n[3.4 - {window_name}] 开始训练机器学习模型 (LGBM + XGBoost + CatBoost) [GPU加速]...")
-        print("    - 正在训练 LightGBM 模型 (GPU)...")
-        lgb_model = train_lgb_model(dataset_sub)
-        
-        print("    - 正在训练 XGBoost 模型 (GPU)...")
-        xgb_model = train_xgb_model(dataset_sub)
-        
-        print("    - 正在训练 CatBoost 模型 (GPU)...")
-        cat_model = train_catboost_model(dataset_sub)
+        del dataset_full, train_frame_full, train_frame_fs, x_train, y_train, fs_result
+        gc.collect()
+
+        selected_models = list(CONFIG.get("train_models", ["lgb", "xgb", "cat"]))
+        model_params = CONFIG.get("model_params", {})
+        models = []
+        print(f"\n[3.4 - {window_name}] 开始训练机器学习模型 {selected_models} [GPU加速]...")
+
+        if "lgb" in selected_models:
+            print("    - 正在训练 LightGBM 模型 (GPU)...")
+            models.append(train_lgb_model(dataset_sub, params=model_params.get("lgb")))
+
+        if "xgb" in selected_models:
+            print("    - 正在训练 XGBoost 模型 (GPU)...")
+            models.append(train_xgb_model(dataset_sub, params=model_params.get("xgb")))
+
+        if "cat" in selected_models:
+            print("    - 正在训练 CatBoost 模型 (CPU)...")
+            models.append(train_catboost_model(dataset_sub, params=model_params.get("cat")))
+
+        if not models:
+            raise ValueError("CONFIG['train_models'] 不能为空")
         print(f">>> {window_name} 所有模型训练完毕！")
 
         print(f"\n[3.5 - {window_name}] 在测试集上进行模型集成与预测 (生成 Alpha 预测得分)...")
-        predictions = predict_ensemble_models([lgb_model, xgb_model, cat_model], dataset_sub, segment="test")
+        predictions = predict_ensemble_models(models, dataset_sub, segment="test")
         
         # 将原始得分进行横截面百分位排序 (Cross-Sectional Ranking)
         if isinstance(predictions, pd.Series):
@@ -272,7 +346,7 @@ def run_ml_pipeline():
         all_predictions.append(predictions)
         
         # [Bloomberg Data Pipeline 改进] 当前 Window 结束，彻底释放轻量数据集与模型占用的显存/内存
-        del dataset_sub, lgb_model, xgb_model, cat_model
+        del dataset_sub, models, feature_cache
         gc.collect()
     
     # 4. 合并所有滚动窗口的样本外预测结果
@@ -296,5 +370,23 @@ def run_ml_pipeline():
     print("Backtrader 会模拟真实的交易环境：每天买入 Score 最高的 N 只股票，计算扣除印花税、滑点后的真实收益和换手率！")
     print("="*60)
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="树模型训练脚本")
+    parser.add_argument(
+        "--config-source",
+        choices=["local", "yaml"],
+        default="local",
+        help="参数来源：local=脚本内 [全局配置区]，yaml=加载 scripts/training/configs/ 下的 YAML",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help=f"YAML 配置文件名（不含后缀）；为空时默认使用 {DEFAULT_YAML_CONFIG_NAME}",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_ml_pipeline()
+    args = _parse_args()
+    run_ml_pipeline(config_source=args.config_source, config_name=args.config)

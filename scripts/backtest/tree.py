@@ -31,6 +31,8 @@ TOP_K = 20                                # 每日最大持仓数
 SCORE_THRESHOLD = 0.7                     # 选股最低分数
 BUY_PCT = 0.95                            # 资金使用率
 REBALANCE_DAYS = 5                        # 调仓周期（交易日）
+REBALANCE_SIGNAL_WEEKDAY = 1              # 调仓信号日：0=周一 ... 1=周二
+BUY_WEEKDAY = 2                           # 买入执行日：0=周一 ... 2=周三
 
 # — 风控参数 —
 USE_RISK_CTRL = True                      # 启用风控
@@ -57,7 +59,19 @@ def main():
     print("=" * 60)
 
     print("[1] 初始化 Qlib 环境...")
+    # 限制 Qlib 任务并发数为 1，防止触发 MemoryError 和 DLL 虚拟内存不足
+    # 设置 Joblib 单线程执行
+    os.environ['LOKY_MAX_CPU_COUNT'] = '1'
+    os.environ['JOBLIB_MULTIPROCESSING'] = '0'
+    import joblib
+    joblib.parallel_backend('sequential')
+    
     qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn")
+    
+    # 全局强制 joblib 后端为串行
+    from qlib.config import C
+    C.joblib_backend = "sequential"
+    C.maxtasksperchild = 1
 
     print(f"\n[2] 读取预测得分 ({SCORE_FILE})...")
     if not os.path.exists(SCORE_PATH):
@@ -90,6 +104,15 @@ def main():
         df.dropna(subset=["close"], inplace=True)
         if df.empty:
             continue
+        # 过滤 OHLC 任何一个 <= 0.01 或异常巨大的无效行（Qlib 中停牌/缺失可能被表示为 1e-19 或 3.68e19，会导致底层崩溃）
+        df = df[
+            (df["close"] > 0.01) & (df["close"] < 1e6) &
+            (df["open"] > 0.01) & (df["open"] < 1e6) &
+            (df["high"] > 0.01) & (df["high"] < 1e6) &
+            (df["low"] > 0.01) & (df["low"] < 1e6)
+        ]
+        if df.empty:
+            continue
         valid = df[df["volume"] > 0]
         if not valid.empty:
             df = df[df.index <= valid.index[-1]]
@@ -97,14 +120,30 @@ def main():
     print(f"    已拉取 {len(price_dict)} 只股票行情。")
 
     print("    拉取中证 500 基准...")
+    bench_df = None
     try:
         bm = D.features(["SH000905"], ["$open", "$high", "$low", "$close", "$volume"],
                         start_time=start_date, end_time=end_date)
-        bench_df = bm.xs("SH000905", level="instrument").copy() if not bm.empty else None
-        if bench_df is not None:
+        if not bm.empty:
+            bench_df = bm.xs("SH000905", level="instrument").copy()
             bench_df.columns = ["open", "high", "low", "close", "volume"]
     except Exception:
-        bench_df = None
+        pass
+        
+    if bench_df is None or bench_df.empty:
+        # 如果 Qlib 数据集中没有指数数据（通常只有个股），则直接从本地数据库的 index_daily 表拉取
+        try:
+            from qlworks.data.api import QuantDataAPI
+            with QuantDataAPI() as api:
+                query = f"SELECT trade_date as datetime, open, high, low, close, vol as volume FROM index_daily WHERE ts_code = '000905.SH' AND trade_date BETWEEN '{start_date.date()}' AND '{end_date.date()}' ORDER BY trade_date"
+                df_idx = api.query(query)
+                if not df_idx.empty:
+                    df_idx['datetime'] = pd.to_datetime(df_idx['datetime'])
+                    df_idx.set_index('datetime', inplace=True)
+                    bench_df = df_idx
+                    print(f"    成功从数据库拉取基准数据: {len(bench_df)} 行")
+        except Exception as e:
+            print("    从数据库拉取基准失败:", e)
 
     print("\n[4] 启动回测...")
     strategy_params = dict(
@@ -112,6 +151,8 @@ def main():
         score_threshold=SCORE_THRESHOLD,
         buy_pct=BUY_PCT,
         rebalance_days=REBALANCE_DAYS,
+        rebalance_signal_weekday=REBALANCE_SIGNAL_WEEKDAY,
+        buy_weekday=BUY_WEEKDAY,
         use_risk_control=USE_RISK_CTRL,
         stop_type=STOP_TYPE,
         stop_loss_pct=STOP_LOSS_PCT,
