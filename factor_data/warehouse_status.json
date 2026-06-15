@@ -2824,14 +2824,25 @@
     "valid_count": 11410609
   },
   "circ_mv": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2019-12-31",
+    "total_records": 3987970,
     "null_count": 0,
     "zero_count": 0,
-    "valid_count": 0
+    "valid_count": 3987970
   },
   "current_ratio": {
     "status": "ok",
@@ -2888,14 +2899,26 @@
     "valid_count": 7526550
   },
   "dv_ttm": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2020-12-31",
+    "total_records": 4952376,
     "null_count": 0,
-    "zero_count": 0,
-    "valid_count": 0
+    "zero_count": 2192813,
+    "valid_count": 2759563
   },
   "eps_forecast_yoy": {
     "status": "empty",
@@ -3095,26 +3118,49 @@
     "valid_count": 7492725
   },
   "pb_lf": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2020-12-31",
+    "total_records": 4952376,
     "null_count": 0,
-    "zero_count": 0,
-    "valid_count": 0
+    "zero_count": 751066,
+    "valid_count": 4201310
   },
   "pe_ttm": {
     "status": "ok",
     "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
       2024
     ],
-    "start_date": "2024-01-02",
+    "start_date": "2010-01-04",
     "end_date": "2024-12-31",
-    "total_records": 846058,
+    "total_records": 5798434,
     "null_count": 0,
-    "zero_count": 431174,
-    "valid_count": 414884
+    "zero_count": 1647250,
+    "valid_count": 4151184
   },
   "pledge_ratio": {
     "status": "empty",
@@ -3127,14 +3173,26 @@
     "valid_count": 0
   },
   "ps_ttm": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2020-12-31",
+    "total_records": 4952376,
     "null_count": 0,
-    "zero_count": 0,
-    "valid_count": 0
+    "zero_count": 716279,
+    "valid_count": 4236097
   },
   "q_profit_yoy": {
     "status": "empty",
@@ -3147,14 +3205,32 @@
     "valid_count": 0
   },
   "roa_ttm": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-15",
+    "end_date": "2026-06-12",
+    "total_records": 7564485,
     "null_count": 0,
-    "zero_count": 0,
-    "valid_count": 0
+    "zero_count": 195441,
+    "valid_count": 7369044
   },
   "roe_ttm": {
     "status": "ok",
@@ -3220,10 +3296,10 @@
     ],
     "start_date": "2010-01-04",
     "end_date": "2020-04-14",
-    "total_records": 4239798,
+    "total_records": 4240870,
     "null_count": 0,
     "zero_count": 0,
-    "valid_count": 4239798
+    "valid_count": 4240870
   },
   "tr_yoy": {
     "status": "ok",
@@ -3263,14 +3339,32 @@
     "valid_count": 0
   },
   "volatility_1m": {
-    "status": "empty",
-    "years": [],
-    "start_date": "",
-    "end_date": "",
-    "total_records": 0,
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-06",
+    "end_date": "2026-06-12",
+    "total_records": 11445350,
     "null_count": 0,
-    "zero_count": 0,
-    "valid_count": 0
+    "zero_count": 301,
+    "valid_count": 11445049
   },
   "volume_surge": {
     "status": "empty",

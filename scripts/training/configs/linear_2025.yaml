@@ -8,7 +8,7 @@ end_time: "2025-12-31"
 model_type: linear  # 可选: tree, linear, nn
 
 # 标签: T+1开盘买入, T+5收盘卖出
-label_fields: ["Ref($close, -5) / Ref($open, -1) - 1"]
+label_fields: ["Ref($close, -1) / $close - 1"]
 label_names: ["LABEL_5D"]
 
 # 因子库

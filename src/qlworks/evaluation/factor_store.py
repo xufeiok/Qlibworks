@@ -1,4 +1,4 @@
-﻿"""
+"""
 因子数据存储层 — 统一数据仓库 + 增量追加
 
 架构：
@@ -723,7 +723,7 @@ class FactorStore:
         adj = ", ".join(f"CAST(p.{f} * a.adj_factor / latest.adj_factor AS DOUBLE) AS {f}"
                         for f in ["open", "high", "low", "close"])
         indicator_fields = ", ".join(
-            f"CAST(i.{f} AS DOUBLE) AS {f}" if f in ("total_mv", "circ_mv") else f"i.{f} AS {f}"
+            f"CAST(i.{f} AS DOUBLE) AS {f}"
             for f in sorted(DAILY_INDICATOR_FIELDS)
         )
         stock_filter = ""

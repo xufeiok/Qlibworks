@@ -193,6 +193,15 @@ def run_icir_baseline_pipeline(config_source: str = "local", config_name: str | 
         
         predictions = test_score.to_frame("score")
         
+        # [新增] 计算该窗口下预测分数与真实标签的 Rank IC
+        test_label = test_frame[label_col]
+        test_df = pd.concat([predictions["score"], test_label], axis=1)
+        test_daily_ic = test_df.groupby(level='datetime').apply(lambda df: df["score"].corr(df[label_col], method='spearman'))
+        test_ic_mean = test_daily_ic.mean()
+        test_ic_std = test_daily_ic.std()
+        test_icir = test_ic_mean / test_ic_std if test_ic_std != 0 else np.nan
+        print(f">>> [测试集表现] {window_name} 预测得分与标签 {label_col} 的 Rank IC: Mean = {test_ic_mean:.4f}, ICIR = {test_icir:.4f}")
+        
         # 横截面百分位排序 (Cross-Sectional Ranking)
         predictions = predictions.dropna(subset=["score"])
         predictions["score"] = predictions.groupby(level="datetime")["score"].rank(pct=True, na_option="keep")

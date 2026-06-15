@@ -13,7 +13,7 @@ factors:
     category: 波动率
     expression:
       qlib: Std(Abs($close/Ref($close,1)-1), 20)
-      duckdb: stddev(abs(close/lag(close, 1) over (partition by ts_code order by trade_date) - 1)) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+      duckdb: "WITH daily_ret AS (SELECT ts_code, trade_date, close / NULLIF(LAG(close,1) OVER (PARTITION BY ts_code ORDER BY trade_date), 0) - 1 AS stock_ret FROM _raw) SELECT ts_code, trade_date, stddev(abs(stock_ret)) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS value FROM daily_ret WHERE stock_ret IS NOT NULL ORDER BY ts_code, trade_date"
     meaning: 过去20个交易日的日收益率标准差。低波动率异象：A股中历史波动率低的股票，未来收益往往更高且回撤小。
     usage_scenario: 低波动率异象、多因子模型风控端、低波动率增强策略。
     strategy_hint: 负向因子，常用于剔除高波动个股，或构建低波红利策略。

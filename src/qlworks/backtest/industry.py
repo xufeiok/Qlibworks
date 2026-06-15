@@ -100,7 +100,7 @@ def apply_industry_constraint(pred_df, industry_map, top_k=20, max_per_industry=
     return constrained[['score']]
 
 
-def apply_industry_constraint_pit(pred_df, industry_maps, top_k=20, max_per_industry=4):
+def apply_industry_constraint_pit(pred_df, industry_maps, top_k=20, max_per_industry=4, reverse_test=False):
     """
     [Renaissance 改进] Point-in-Time 行业约束。
 
@@ -112,12 +112,13 @@ def apply_industry_constraint_pit(pred_df, industry_maps, top_k=20, max_per_indu
         industry_maps: load_industry_maps_pit() 返回的 {快照日期: {股票: 行业}} 字典
         top_k: 最大持仓数
         max_per_industry: 单行业最大持仓数
+        reverse_test: 是否为反向测试，如果是，则按得分从小到大排序
 
     Returns:
         约束后的 DataFrame，结构与 pred_df 一致
     """
     desc = f"总持仓不超过 {top_k} 只, 单一行业最多 {max_per_industry} 只 (PIT)"
-    print(f"    - [行业约束 PIT] {desc}")
+    print(f"    - [行业约束 PIT] {desc} | {'反向排序' if reverse_test else '正向排序'}")
 
     df = pred_df.reset_index()
     records = []
@@ -125,7 +126,7 @@ def apply_industry_constraint_pit(pred_df, industry_maps, top_k=20, max_per_indu
         industry_map = _get_nearest_map(industry_maps, dt)
         group = group.copy()
         group['industry'] = group['instrument'].map(industry_map).fillna('Unknown')
-        group = group.sort_values('score', ascending=False)
+        group = group.sort_values('score', ascending=reverse_test)
 
         selected = []
         ind_counts = {}
