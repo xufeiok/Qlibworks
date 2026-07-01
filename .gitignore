@@ -46,6 +46,10 @@ drafts/*.json
 bt_output/
 data/cache/*.duckdb
 
+# IDE/Agent 配置（不同环境自动生成）
+.codex/
+.claude/
+
 # 因子仓库与评测数据（可重新计算/生成）
 factor_data/warehouse/
 factor_data/cache/
