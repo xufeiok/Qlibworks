@@ -5,9 +5,7 @@
       QlibWorks
     </div>
     <n-space :style="{ marginLeft: '24px' }" item-style="display:flex">
-      <router-link v-for="item in navItems" :key="item.path" :to="item.path"
-        style="text-decoration:none;font-size:13px;padding:4px 10px;border-radius:4px;color:#8b949e"
-        :style="isActive(item.path) ? 'color:#39d2c0;background:rgba(57,210,192,0.08)' : ''">
+      <router-link v-for="item in navItems" :key="item.path" :to="item.path" :style="linkStyle(item.path)">
         <n-text>{{ item.label }}</n-text>
       </router-link>
     </n-space>
@@ -29,4 +27,12 @@ const navItems = [
   { path: "/market", label: "行情" },
 ]
 const isActive = (p: string) => route.path.startsWith(p)
+const linkStyle = (p: string): Record<string, string> => ({
+  textDecoration: "none",
+  fontSize: "13px",
+  padding: "4px 10px",
+  borderRadius: "4px",
+  color: isActive(p) ? "#39d2c0" : "#8b949e",
+  background: isActive(p) ? "rgba(57,210,192,0.08)" : "transparent",
+})
 </script>

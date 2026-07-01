@@ -149,10 +149,12 @@ class QlibSynchronizer:
         """
         写 Qlib .bin 文件
 
-        Qlib 规范：第一个元素为 start_index (int32), 后续为 float32 数据
-        注意：使用字节拼接而非 np.hstack，避免 int32+float32 被 numpy 升级为 float64
+        Qlib 0.9.7 规范：第一个元素为 start_index (float32), 后续为 float32 数据
+        （Qlib 内部使用 np.frombuffer(..., dtype='<f') 读取，因此必须用 float32 写入，
+          用 int32 写入会导致 start_index>0 的股票 header 被误读为垃圾值，
+          进而导致 fp.seek() 定位到错误位置，读取到 -2.0, 3.689e+19 等垃圾数据）
         """
-        header = np.array([start_index], dtype='<i4').tobytes()
+        header = np.array([start_index], dtype='<f4').tobytes()
         data = values_array.astype('<f4').tobytes()
         with open(str(filepath), 'wb') as f:
             f.write(header + data)
@@ -182,34 +184,154 @@ class QlibSynchronizer:
                 f.write(d + "\n")
         print(f"    已保存 {len(calendar_list)} 个交易日")
     
+    def _load_delist_dates(self) -> Dict[str, str]:
+        """
+        从 ClickHouse 加载真实退市日期（多源交叉验证）。
+
+        数据来源优先级:
+          1. stock_basic.delist_date（明确退市日）
+          2. mces_stock_universe list_status='D' + daily_prices 最后交易日
+
+        Returns:
+            {ts_code: delist_date} 字典，仍在市的股票不在字典中
+        """
+        delist_map: Dict[str, str] = {}
+
+        # 方法1: 从 stock_basic 获取明确退市日期
+        try:
+            df_basic = self.api.query("""
+                SELECT ts_code, delist_date
+                FROM stock_basic
+                WHERE delist_date IS NOT NULL AND delist_date != '1970-01-01'
+                  AND delist_date < '2099-01-01'
+            """)
+            if not df_basic.empty:
+                for _, row in df_basic.iterrows():
+                    delist_map[row['ts_code']] = str(row['delist_date'])[:10]
+                print(f"    [退市日期] stock_basic: {len(delist_map)} 只有明确退市日")
+        except Exception as e:
+            print(f"    [WARN] stock_basic 查询失败: {e}")
+
+        # 方法2: 从 mces_stock_universe 获取 list_status='D'（退市）的股票，
+        #         再查询 daily_prices 获取最后交易日作为退市日
+        try:
+            df_delisted = self.api.query("""
+                SELECT ts_code
+                FROM mces_stock_universe
+                WHERE list_status = 'D'
+            """)
+            if not df_delisted.empty:
+                delisted_codes = df_delisted['ts_code'].tolist()
+                print(f"    [退市日期] mces_stock_universe: {len(delisted_codes)} 只退市标记股")
+                # 批量查询每只退市股的最后交易日（按100只一批）
+                batch_size = 100
+                count = 0
+                for i in range(0, len(delisted_codes), batch_size):
+                    batch = delisted_codes[i:i + batch_size]
+                    ts_list = ", ".join(f"'{c}'" for c in batch)
+                    df_last = self.api.query(f"""
+                        SELECT ts_code, MAX(trade_date) AS last_trade_date
+                        FROM daily_prices
+                        WHERE ts_code IN ({ts_list})
+                        GROUP BY ts_code
+                    """)
+                    if not df_last.empty:
+                        for _, row in df_last.iterrows():
+                            code = row['ts_code']
+                            if code not in delist_map:
+                                delist_map[code] = str(row['last_trade_date'])[:10]
+                                count += 1
+                print(f"    [退市日期] daily_prices 最后交易日: {count} 只")
+        except Exception as e:
+            print(f"    [WARN] mces_stock_universe 查询失败: {e}")
+
+        return delist_map
+
     def _save_instruments(self, stocks: List[str]):
-        """生成 instruments 文件（使用实际上市日期）"""
-        sh = [s for s in stocks if s.endswith('.SH')]
-        sz = [s for s in stocks if s.endswith('.SZ')]
-        
-        # 获取股票实际上市日期
+        """
+        生成 instruments 文件（使用实际上市/退市日期，避免幸存者偏差）。
+
+        除了主板的 stocks 外，还会自动从 ClickHouse 补充退市股 + 非主板有交易数据
+        的股票，确保 all.txt 覆盖全市场且退市日期真实。
+        """
+        # ===== 1. 收集所有股票的上市/退市日期 =====
         df_listed = self.api.get_stock_list()
-        listed_dict = df_listed.set_index('ts_code')['list_date'].to_dict()
-        
+        all_stocks: Dict[str, List[str]] = {}
+        if not df_listed.empty:
+            for _, r in df_listed.iterrows():
+                code = r['ts_code']
+                list_d = str(r['list_date'])[:10]
+                delist_d = str(r['delist_date'])[:10]
+                if delist_d in ('1970-01-01', ''):
+                    delist_d = '9999-12-31'
+                if list_d in ('1970-01-01', ''):
+                    list_d = '2010-01-01'
+                all_stocks[code] = [list_d, delist_d]
+
+        delist_map = self._load_delist_dates()
+        print(f"    [退市日期] 合计 {len(delist_map)} 只股票有真实退市日")
+        for code, d in delist_map.items():
+            code = code.upper()
+            if code in all_stocks:
+                all_stocks[code][1] = d
+            else:
+                all_stocks[code] = ['2010-01-01', d]
+
+        try:
+            df_extra = self.api.query("""
+                SELECT DISTINCT p.ts_code
+                FROM daily_prices p
+                LEFT JOIN stock_basic s ON p.ts_code = s.ts_code
+                WHERE s.ts_code IS NULL OR s.market != '主板'
+            """)
+            if not df_extra.empty:
+                for _, r in df_extra.iterrows():
+                    code = r['ts_code']
+                    if code not in all_stocks:
+                        all_stocks[code] = ['2010-01-01', '9999-12-31']
+        except Exception as e:
+            print(f"    [WARN] 非主板股票查询失败: {e}")
+
+        # ===== 2. 写入文件 =====
+        def _fmt_date(d):
+            ds = str(d)
+            if len(ds) == 8:
+                return f"{ds[:4]}-{ds[4:6]}-{ds[6:8]}"
+            if ' ' in ds:
+                return ds.split(' ')[0]
+            return ds
+
+        sh = sorted(c for c in all_stocks if c.upper().endswith('.SH'))
+        sz = sorted(c for c in all_stocks if c.upper().endswith('.SZ'))
+
         for slist, fname in [(sh + sz, "all.txt"), (sh, "all_sh.txt"), (sz, "all_sz.txt")]:
             file_path = self.instruments_dir / fname
             with open(file_path, 'w') as f:
                 for s in slist:
-                    list_date = listed_dict.get(s, '2010-01-01')
-                    # 确保日期格式正确（兼容 YYYYMMDD 和 datetime 格式）
-                    date_str = str(list_date)
-                    if len(date_str) == 8:  # YYYYMMDD 格式
-                        list_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
-                    elif ' ' in date_str:  # datetime 格式，如 "1999-11-10 00:00:00"
-                        list_date = date_str.split(' ')[0]
-                    f.write(f"{s}\t{list_date}\t9999-12-31\n")
-            print(f"    {fname}: {len(slist)} 只")
+                    list_d, delist_d = all_stocks[s]
+                    list_d = _fmt_date(list_d)
+                    delist_d = _fmt_date(delist_d)
+                    if delist_d in ('1970-01-01', ''):
+                        delist_d = '9999-12-31'
+                    if list_d in ('1970-01-01', ''):
+                        list_d = '2010-01-01'
+                    f.write(f"{s}\t{list_d}\t{delist_d}\n")
+            dcount = sum(1 for c in slist if all_stocks.get(c, ['', '9999-12-31'])[1] not in ('9999-12-31', '1970-01-01'))
+            print(f"    {fname}: {len(slist)} 只（含 {dcount} 只退市股）")
     
     def _get_main_board_stocks(self) -> List[str]:
-        """从 ClickHouse 获取沪深主板股票列表"""
-        df = self.api.get_stock_list(market='主板', status='L')
+        """
+        从 ClickHouse 获取沪深主板股票列表（含退市股）。
+        
+        退市股也需写入 all.txt（带真实退市日期），否则 Qlib 在回测时会因找不到
+        这些股票而跳过它们的整个历史，导致数据缺口和幸存者偏差。
+        """
+        df = self.api.query("""
+            SELECT ts_code FROM stock_basic
+            WHERE market = '主板'
+        """)
         stocks = df["ts_code"].tolist()
-        print(f"    共找到 {len(stocks)} 只主板股票")
+        print(f"    共找到 {len(stocks)} 只主板股票（含退市股）")
         return stocks
     
     def full_sync(self, start_date: str, end_date: str, instruments: Optional[List[str]] = None,
@@ -276,6 +398,20 @@ class QlibSynchronizer:
         print("\n" + "=" * 60)
         print("Qlib 全量同步完成！")
         print("=" * 60)
+
+    def sync_instruments_only(self, stocks: Optional[List[str]] = None):
+        """
+        仅刷新 instruments 文件（all.txt / all_sh.txt / all_sz.txt / csi系列等），
+        从 ClickHouse stock_basic 表拉取最新上市/退市日期，不涉及 feature 数据重写。
+
+        Args:
+            stocks: 股票列表，None 表示全部主板股票
+        """
+        self._ensure_dirs()
+        if stocks is None:
+            stocks = self._get_main_board_stocks()
+        self._save_instruments(stocks)
+        print("instruments 文件刷新完成")
     
     def incremental_sync(self, instruments_dict=None):
         """

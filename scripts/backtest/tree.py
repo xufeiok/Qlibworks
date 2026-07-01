@@ -22,8 +22,9 @@ SCORE_FILE = "score_tree.csv"             # 训练脚本输出的预测文件名
 
 # — 回测引擎参数 —
 INITIAL_CASH = 1000000.0                  # 初始资金
-COMMISSION = 0.0005                       # 佣金费率（外部手续费）
-SLIPPAGE = 0.001                          # 滑点比率
+STAMP_DUTY = 0.0005                       # 印花税（卖出单向），当前 A 股万5
+COMMISSION = 0.0003                       # 券商佣金（双向），当前 A 股万3
+SLIPPAGE = 0.001                          # 滑点比率（0.1%，买卖双向）
 STRATEGY_CLASS = EnhancedQlibStrategy     # 回测策略类（内置风控+选股逻辑）
 
 # — 策略参数 —
@@ -171,6 +172,7 @@ def main():
         strategy_params=strategy_params,
         initial_cash=INITIAL_CASH,
         commission=COMMISSION,
+        stamp_duty=STAMP_DUTY,
         set_slippage_perc=SLIPPAGE,
         output_dir=OUTPUT_DIR,
         start_date=start_date,

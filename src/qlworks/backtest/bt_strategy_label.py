@@ -13,7 +13,8 @@ class LabelConsistencyStrategy(bt.Strategy):
         holding_days=5,
         buy_pct=0.95,
         log_enabled=True,
-        reverse_test=False, # 新增：反向测试开关，True则买入得分最低的股票
+        reverse_test=False,         # 反向测试开关，True则买入得分最低的股票
+        volume_limit_pct=0.10,      # 单笔订单不超过当日成交量的10%
     )
 
     def __init__(self):
@@ -45,8 +46,12 @@ class LabelConsistencyStrategy(bt.Strategy):
         # 计算当前总持仓数
         holding_count = sum(1 for data in self.datas if self.getposition(data).size > 0)
 
-        # 阶段1：判断是否到了卖出时间 (发出买单后的第 holding_days-1 个 bar)
-        if self.last_buy_idx > 0 and curr_idx - self.last_buy_idx == self.p.holding_days - 1 and holding_count > 0:
+        # 阶段1：判断是否到了卖出时间 (发出买单后的第 holding_days 个 bar)
+        # [Renaissance 改进] 经验证：Order.Close 在每日数据中于下一 bar 执行，
+        # 成交价使用当前 bar (发出卖单 bar) 的收盘价 (pannotated)。
+        # 因此卖单在 T+holding_days 发出 → 成交价=Close(T+holding_days)，
+        # 与标签 Ref($close,-5)/Ref($open,-1)-1 完全对齐。
+        if self.last_buy_idx > 0 and curr_idx - self.last_buy_idx == self.p.holding_days and holding_count > 0:
             sell_count = 0
             for data in self.datas:
                 pos = self.getposition(data)
@@ -89,5 +94,17 @@ class LabelConsistencyStrategy(bt.Strategy):
                     if math.isnan(est_price) or est_price <= 0:
                         continue
                     size = int((per_stock_cash / est_price) // 100 * 100)
+
+                    # [Virtu 改进] 成交量限制：单笔订单不超过当日成交量的 volume_limit_pct
+                    daily_volume = data.volume[0]
+                    if daily_volume is not None and math.isfinite(daily_volume) and daily_volume > 0:
+                        max_shares_by_volume = int(daily_volume * self.p.volume_limit_pct // 100 * 100)
+                        if max_shares_by_volume < 100:
+                            self.log(f"  跳过 {data._name}: 当日成交量过小 ({daily_volume})")
+                            continue
+                        if size > max_shares_by_volume:
+                            self.log(f"  缩容 {data._name}: {size} → {max_shares_by_volume} (成交量限制)")
+                            size = max_shares_by_volume
+
                     if size > 0:
                         self.buy(data=data, size=size, exectype=bt.Order.Market)

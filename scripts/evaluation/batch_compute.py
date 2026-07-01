@@ -87,7 +87,7 @@ def _collect_factors(args):
                 expr = str(expr.get("qlib", str(expr)))
             factors.append({"name": name, "expr": str(expr), "duckdb_expr": duckdb_expr})
     elif args.all:
-        for s in [s for s in m.list_strategies() if "dictionary" not in s]:
+        for s in m.list_strategies():
             try:
                 cfg = m.load_strategy_config(s)
                 for fd in cfg.get("factors", []):
@@ -107,8 +107,8 @@ def _collect_factors(args):
 
 
 def _find_factor(m, name):
-    """在因子库中查找单个因子。"""
-    for s in [s for s in m.list_strategies() if "dictionary" not in s]:
+    """在因子库中查找单个因子（包括 dictionary 文件）。"""
+    for s in m.list_strategies():
         try:
             cfg = m.load_strategy_config(s)
             for fd in cfg.get("factors", []):
@@ -129,7 +129,7 @@ def _inject_yaml_meta(store, factors):
     m = FactorLibraryManager()
     for f in factors:
         name = f["name"]
-        for s in [s for s in m.list_strategies() if "dictionary" not in s]:
+        for s in m.list_strategies():
             try:
                 cfg = m.load_strategy_config(s)
                 for fd in cfg.get("factors", []):

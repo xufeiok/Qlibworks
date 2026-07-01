@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700;900&amp;display=swap');
+      .title { font-family: 'Noto Sans SC', sans-serif; font-weight: 900; font-size: 100px; fill: #FFFFFF; }
+      .num { font-family: 'Noto Sans SC', sans-serif; font-weight: 900; font-size: 120px; fill: rgba(255,255,255,0.1); }
+      .h3 { font-family: 'Noto Sans SC', sans-serif; font-weight: 700; font-size: 55px; fill: #F2C94C; }
+      .p { font-family: 'Noto Sans SC', sans-serif; font-weight: 400; font-size: 42px; fill: #E0E0E0; }
+    </style>
+    <linearGradient id="grad_red" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#8E0E00;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1F1C18;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="100%" height="100%" fill="url(#grad_red)"/>
+  
+  <!-- Background Pattern -->
+  <path d="M0,0 L1080,1440" stroke="white" stroke-width="2" opacity="0.05"/>
+  <path d="M1080,0 L0,1440" stroke="white" stroke-width="2" opacity="0.05"/>
+  
+  <text x="100" y="200" class="title">合规的崩塌</text>
+  
+  <!-- Point 1 -->
+  <text x="80" y="400" class="num">01</text>
+  <text x="250" y="380" class="h3">跟投机制变味</text>
+  <text x="100" y="480" class="p">
+    <tspan x="100" dy="0">初衷是“利益共享”，</tspan>
+    <tspan x="100" dy="65">却异化为“投名状”。</tspan>
+    <tspan x="100" dy="65">员工被迫掏空积蓄为项目输血，</tspan>
+    <tspan x="100" dy="65" fill="#FF6B6B" font-weight="700">“不跟投就是不忠诚”。</tspan>
+  </text>
+  
+  <!-- Point 2 -->
+  <text x="80" y="900" class="num">02</text>
+  <text x="250" y="880" class="h3">手段吞噬目的</text>
+  <text x="100" y="980" class="p">
+    <tspan x="100" dy="0">为了维持报表好看，</tspan>
+    <tspan x="100" dy="65">一线不得不突破底线。</tspan>
+    <tspan x="100" dy="65">合规文化在“活下去”的KPI下，</tspan>
+    <tspan x="100" dy="65" fill="#FF6B6B" font-weight="700">被悄无声息地瓦解。</tspan>
+  </text>
+</svg>

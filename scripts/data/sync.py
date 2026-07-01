@@ -25,7 +25,10 @@
 import sys
 import argparse
 
-sys.path.insert(0, str(__import__('pathlib').Path(__file__).resolve().parents[2]))
+_project_root = str(__import__('pathlib').Path(__file__).resolve().parents[2])
+sys.path.insert(0, _project_root)
+# qlworks 包在 src/ 目录下，需要单独加入
+sys.path.insert(0, str(__import__('pathlib').Path(_project_root) / "src"))
 
 from pathlib import Path
 from qlworks.config import QLIB_DATA_DIR
@@ -143,6 +146,7 @@ def main():
 
     subparsers.add_parser("incremental", help="增量同步（每日更新最新数据）")
     subparsers.add_parser("auto", help="智能同步（自动检测模式 + 按上市日期定制，推荐首次使用）")
+    subparsers.add_parser("instruments", help="仅刷新 instruments 文件（all.txt/csi500.txt 等退市日/成分股信息）")
     subparsers.add_parser("industry", help="同步申万行业数据（sw_l1/sw_l2/sw_l3，独立下载，先清后写+验证）")
 
     args = parser.parse_args()
@@ -153,6 +157,8 @@ def main():
         sync_incremental()
     elif args.command == "auto":
         sync_auto()
+    elif args.command == "instruments":
+        sync_instruments()
     elif args.command == "industry":
         sync_industry()
     else:
@@ -167,6 +173,19 @@ def sync_industry():
     with QuantDataAPI() as api:
         syncer = QlibSynchronizer(api)
         syncer.sync_industry(verify=True)
+
+
+def sync_instruments():
+    """仅刷新 instruments 文件，从 stock_basic 拉取最新上市/退市日期"""
+    print("=" * 60)
+    print("instruments 文件刷新（退市日期/成分股 PIT 信息）")
+    print("=" * 60)
+    with QuantDataAPI() as api:
+        syncer = QlibSynchronizer(api)
+        syncer.sync_instruments_only()
+    print("=" * 60)
+    print("instruments 文件刷新完成！")
+    print("=" * 60)
 
 
 if __name__ == "__main__":

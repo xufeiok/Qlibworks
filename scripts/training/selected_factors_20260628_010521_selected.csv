@@ -1,0 +1,20 @@
+﻿category,factor_name,selected,importance,rank,meaning,source_file
+momentum,MOM_6m,True,1.0,1,过去6个月收益率，捕捉中期动量效应,reversal_momentum_factors
+momentum,IND_NEUT_MOM,True,0.7895,2,在申万一级行业内做Z-score标准化的6个月动量,reversal_momentum_factors
+reversal,VOL_REV,True,1.0,1,过去60日收益率标准差取负，捕捉波动率反转效应,reversal_momentum_factors
+reversal,STR_20d,True,0.9779,2,过去20个交易日收益率取负，捕捉短期反转效应,reversal_momentum_factors
+估值,pb_lf,True,1.0,1,市净率（LF）。反映股价相对最新净资产的溢价。,style_factors
+估值,pe_ttm,True,0.9165,2,市盈率（TTM）。反映股价相对盈利的溢价，值越低估值越低。,style_factors
+市值与流动性,illiquidity_amihud,True,1.0,1,Amihud 非流动性指标,style_factors
+情绪,eps_forecast_yoy,True,1.0,1,预期净利润增速（eps_last 缺失，改用 eps 替代）,sentiment_factors
+成长,tr_yoy,True,1.0,1,营业总收入同比增长率。反映公司业务规模的扩张速度。,quality_factors
+成长,netprofit_yoy,True,0.7141,2,归母净利润同比增长率。反映公司业绩的扩张速度。,quality_factors
+波动率,volatility_1m,True,1.0,1,过去20个交易日的日收益率标准差。低波动率异象：A股中历史波动率低的股票，未来收益往往更高且回撤小。,risk_factors
+盈利,netprofit_margin,True,1.0,1,销售净利率（TTM）。反映企业每 1 元营收的净利润，综合体现成本、费用控制能力。,quality_factors
+盈利,grossprofit_margin,True,0.9179,2,销售毛利率（TTM）。反映企业产品的核心盈利空间，值越高产品竞争力越强。,quality_factors
+财务质量,current_ratio,True,1.0,1,流动比率。反映企业短期偿债能力和资金周转状况。,quality_factors
+财务质量,debt_to_assets,True,0.9991,2,资产负债率。反映企业的财务杠杆和长期偿债风险。,quality_factors
+质量,ocf_to_netprofit,True,1.0,1,盈利现金流含量。n_cashflow_act(cashflow_statement) / n_income_attr_p(income_statement),quality_factors
+质量,q_profit_yoy,True,1.0,1,扣非净利润同比。ClickHouse 无此列，Qlib 数据缓存不完整，暂时无法生成。,quality_factors
+风格,total_mv_log,True,1.0,1,总市值对数（负向）,style_factors
+风险,beta,True,1.0,1,Beta系数。DuckDB 滚动60日协方差回归计算。,risk_factors

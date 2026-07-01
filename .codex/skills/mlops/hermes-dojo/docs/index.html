@@ -1,0 +1,632 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hermes Dojo</title>
+<meta name="description" content="Self-improvement feedback loop for Hermes Agent. Reads session logs, finds repeat failures, creates skills to fix them.">
+<meta property="og:title" content="Hermes Dojo — Self-Improving Agent Skills">
+<meta property="og:description" content="Your agent makes the same mistakes every day. Dojo reads session logs, finds repeat failures, creates skills to fix them. 34% → 57% success rate overnight.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://yonkoo11.github.io/hermes-dojo/">
+<meta property="og:image" content="https://yonkoo11.github.io/hermes-dojo/og.png">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Hermes Dojo — Self-Improving Agent Skills">
+<meta name="twitter:description" content="Your agent makes the same mistakes every day. Dojo reads session logs, finds repeat failures, creates skills to fix them. 34% → 57% success rate overnight.">
+<meta name="twitter:image" content="https://yonkoo11.github.io/hermes-dojo/og.png">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🥋</text></svg>">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@400;500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{margin:0;padding:0;box-sizing:border-box}
+:root{
+  --bg:#09090e;
+  --surface:#0f0f16;
+  --elevated:#17171f;
+  --border:rgba(255,255,255,0.06);
+  --border-strong:rgba(255,255,255,0.1);
+  --text-1:#ededed;
+  --text-2:#9a9aaa;
+  --text-3:#5c5c6e;
+  --accent:#c9a227;
+  --accent-soft:rgba(201,162,39,0.12);
+  --green:#34d399;
+  --red:#f87171;
+  --font-display:'Space Grotesk',system-ui,sans-serif;
+  --font-body:'Inter',system-ui,sans-serif;
+  --font-mono:'JetBrains Mono','SF Mono',monospace;
+}
+html{font-size:16px;scroll-behavior:smooth}
+body{background:var(--bg);color:var(--text-1);font-family:var(--font-body);-webkit-font-smoothing:antialiased;overflow-x:hidden}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ── Buttons ── */
+.hero-buttons{display:flex;gap:12px;margin-bottom:48px;flex-wrap:wrap}
+.btn{
+  display:inline-flex;align-items:center;gap:8px;
+  font-family:var(--font-body);font-size:14px;font-weight:500;
+  padding:10px 20px;border-radius:6px;
+  border:1px solid var(--border-strong);
+  background:var(--surface);color:var(--text-1);
+  text-decoration:none;transition:all 0.15s;cursor:pointer;
+}
+.btn:hover{border-color:rgba(255,255,255,0.2);background:var(--elevated);text-decoration:none}
+.btn-primary{background:var(--accent);color:#09090e;border-color:var(--accent)}
+.btn-primary:hover{opacity:0.9;text-decoration:none}
+
+/* ── Layout ── */
+.wrap{max-width:960px;margin:0 auto;padding:0 24px}
+
+/* ── Hero ── */
+.hero{
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  position:relative;
+  padding:64px 0;
+}
+.hero-glow{
+  position:absolute;
+  top:15%;left:50%;
+  width:500px;height:500px;
+  transform:translateX(-50%);
+  background:radial-gradient(ellipse,rgba(201,162,39,0.06) 0%,transparent 70%);
+  pointer-events:none;
+}
+.hero-top{
+  display:flex;
+  align-items:baseline;
+  gap:16px;
+  margin-bottom:48px;
+}
+.hero-name{
+  font-family:var(--font-display);
+  font-size:15px;
+  font-weight:500;
+  letter-spacing:0.06em;
+  text-transform:uppercase;
+  color:var(--accent);
+}
+.hero-tag{
+  font-size:13px;
+  color:var(--text-3);
+}
+.hero h1{
+  font-family:var(--font-display);
+  font-size:clamp(2.4rem,5vw,3.8rem);
+  font-weight:300;
+  line-height:1.08;
+  letter-spacing:-0.03em;
+  margin-bottom:24px;
+  max-width:680px;
+}
+.hero h1 strong{font-weight:600}
+.hero-sub{
+  font-size:17px;
+  color:var(--text-2);
+  line-height:1.6;
+  max-width:480px;
+  margin-bottom:48px;
+}
+
+/* ── Terminal ── */
+.term{
+  background:var(--surface);
+  border:1px solid var(--border-strong);
+  border-radius:10px;
+  overflow:hidden;
+  max-width:720px;
+  box-shadow:0 4px 24px rgba(0,0,0,0.4),0 0 0 1px rgba(255,255,255,0.02);
+}
+.term-bar{
+  display:flex;
+  align-items:center;
+  gap:7px;
+  padding:14px 18px;
+  background:var(--elevated);
+  border-bottom:1px solid var(--border);
+}
+.term-dot{width:10px;height:10px;border-radius:50%}
+.term-dot:nth-child(1){background:#ff5f57}
+.term-dot:nth-child(2){background:#febc2e}
+.term-dot:nth-child(3){background:#28c840}
+.term-title{
+  flex:1;
+  text-align:center;
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--text-3);
+  margin-right:36px;
+}
+.term-body{
+  padding:20px 22px;
+  font-family:var(--font-mono);
+  font-size:13px;
+  line-height:1.75;
+  color:var(--text-2);
+}
+.term-body .prompt{color:var(--green)}
+.term-body .cmd{color:var(--text-1)}
+.term-body .accent{color:var(--accent)}
+.term-body .muted{color:var(--text-3)}
+.term-body .good{color:var(--green)}
+.term-body .bad{color:var(--red)}
+.term-body .line{display:block}
+.cursor{
+  display:inline-block;
+  width:8px;height:16px;
+  background:var(--accent);
+  vertical-align:text-bottom;
+  animation:blink 1s step-end infinite;
+}
+@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+
+/* ── Divider ── */
+.divider{
+  width:1px;height:64px;
+  background:linear-gradient(to bottom,var(--border-strong),transparent);
+  margin:0 auto;
+}
+
+/* ── Section ── */
+.section{padding:64px 0}
+.section-label{
+  font-family:var(--font-mono);
+  font-size:11px;
+  font-weight:500;
+  letter-spacing:0.12em;
+  text-transform:uppercase;
+  color:var(--text-3);
+  margin-bottom:24px;
+}
+
+/* ── The Loop ── */
+.loop-title{
+  font-family:var(--font-display);
+  font-size:clamp(1.6rem,3vw,2.4rem);
+  font-weight:300;
+  line-height:1.15;
+  letter-spacing:-0.02em;
+  margin-bottom:64px;
+  max-width:520px;
+}
+.loop-title strong{font-weight:600;color:var(--accent)}
+.loop-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr 1fr 1fr 1fr;
+  gap:0;
+  position:relative;
+}
+.loop-grid::before{
+  content:'';
+  position:absolute;
+  top:20px;left:10%;right:10%;
+  height:1px;
+  background:linear-gradient(to right,transparent,var(--border-strong) 15%,var(--border-strong) 85%,transparent);
+}
+.loop-step{
+  text-align:center;
+  position:relative;
+  padding:0 8px;
+}
+.loop-dot{
+  width:8px;height:8px;
+  border-radius:50%;
+  background:var(--accent);
+  margin:16px auto 20px;
+  position:relative;
+  z-index:1;
+}
+.loop-step h3{
+  font-family:var(--font-display);
+  font-size:15px;
+  font-weight:600;
+  margin-bottom:8px;
+}
+.loop-step p{
+  font-size:13px;
+  color:var(--text-3);
+  line-height:1.55;
+}
+
+/* ── Before/After ── */
+.compare{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:1px;
+  background:var(--border);
+  border:1px solid var(--border);
+  border-radius:10px;
+  overflow:hidden;
+  margin-top:64px;
+}
+.compare-side{
+  background:var(--bg);
+  padding:32px 28px;
+}
+.compare-label{
+  font-family:var(--font-mono);
+  font-size:11px;
+  font-weight:500;
+  letter-spacing:0.1em;
+  text-transform:uppercase;
+  margin-bottom:20px;
+}
+.compare-side:first-child .compare-label{color:var(--red)}
+.compare-side:last-child .compare-label{color:var(--green)}
+.compare-line{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  margin:6px 0;
+  font-size:13px;
+  color:var(--text-2);
+}
+.compare-line .dot{
+  width:5px;height:5px;
+  border-radius:50%;
+  flex-shrink:0;
+}
+.compare-side:first-child .dot{background:var(--red)}
+.compare-side:last-child .dot{background:var(--green)}
+
+/* ── Results ── */
+.results{margin-top:80px}
+.results-title{
+  font-family:var(--font-display);
+  font-size:clamp(1.4rem,2.5vw,2rem);
+  font-weight:300;
+  letter-spacing:-0.02em;
+  margin-bottom:8px;
+}
+.results-title strong{font-weight:600}
+.results-sub{
+  font-size:15px;
+  color:var(--text-3);
+  margin-bottom:40px;
+}
+.results-bars{max-width:560px}
+.bar-row{
+  display:grid;
+  grid-template-columns:56px 56px 1fr;
+  align-items:center;
+  gap:16px;
+  margin:10px 0;
+}
+.bar-label{
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--text-3);
+}
+.bar-pct{
+  font-family:var(--font-mono);
+  font-size:13px;
+  font-weight:500;
+  text-align:right;
+}
+.bar-track{
+  height:4px;
+  background:var(--elevated);
+  border-radius:2px;
+  overflow:hidden;
+}
+.bar-fill{
+  height:100%;
+  border-radius:2px;
+  transition:width 1.2s cubic-bezier(0.16,1,0.3,1);
+}
+.bar-row:nth-child(-n+2) .bar-pct{color:var(--text-3)}
+.bar-row:nth-child(-n+2) .bar-fill{background:rgba(201,162,39,0.3)}
+.bar-row:nth-child(3) .bar-pct,.bar-row:nth-child(4) .bar-pct{color:var(--accent)}
+.bar-row:nth-child(3) .bar-fill,.bar-row:nth-child(4) .bar-fill{background:var(--accent)}
+.bar-row:nth-child(5) .bar-pct{color:var(--green)}
+.bar-row:nth-child(5) .bar-fill{background:var(--green)}
+
+.trend-line{
+  margin-top:24px;
+  font-family:var(--font-mono);
+  font-size:13px;
+  color:var(--text-3);
+}
+.trend-line strong{color:var(--green);font-weight:500}
+
+/* ── Features ── */
+.feat-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:1px;
+  background:var(--border);
+  border:1px solid var(--border);
+  border-radius:10px;
+  overflow:hidden;
+  margin-top:48px;
+}
+.feat{
+  background:var(--bg);
+  padding:24px;
+}
+.feat-name{
+  font-family:var(--font-mono);
+  font-size:12px;
+  color:var(--accent);
+  margin-bottom:6px;
+}
+.feat-desc{
+  font-size:14px;
+  color:var(--text-3);
+  line-height:1.5;
+}
+
+/* ── Install ── */
+.install{
+  margin-top:48px;
+  padding-top:48px;
+  border-top:1px solid var(--border);
+}
+.install-note{
+  font-size:13px;
+  color:var(--text-3);
+  margin-top:16px;
+}
+.install-title{
+  font-family:var(--font-display);
+  font-size:clamp(1.4rem,2.5vw,2rem);
+  font-weight:300;
+  letter-spacing:-0.02em;
+  margin-bottom:32px;
+}
+.install-title strong{font-weight:600}
+
+/* ── Footer ── */
+footer{
+  margin-top:64px;
+  padding:32px 0;
+  border-top:1px solid var(--border);
+}
+.footer-inner{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+}
+.footer-left{font-size:13px;color:var(--text-3)}
+.footer-right{display:flex;gap:20px}
+.footer-right a{
+  font-size:13px;
+  color:var(--text-3);
+  text-decoration:none;
+}
+.footer-right a:hover{color:var(--text-2)}
+
+/* ── Animate on scroll ── */
+.reveal{opacity:0;transform:translateY(20px);transition:opacity 0.6s,transform 0.6s}
+.reveal.visible{opacity:1;transform:none}
+
+/* ── Responsive ── */
+@media(max-width:768px){
+  .hero h1{font-size:2rem}
+  .loop-grid{grid-template-columns:1fr;gap:24px}
+  .loop-grid::before{display:none}
+  .loop-dot{margin:0 auto 12px}
+  .compare{grid-template-columns:1fr 1fr}
+  .compare-side{padding:20px 16px}
+  .compare-line{font-size:12px;gap:6px}
+  .compare-label{font-size:10px}
+  .feat-grid{grid-template-columns:1fr}
+  .footer-inner{flex-direction:column;gap:12px;text-align:center}
+  .bar-row{grid-template-columns:48px 48px 1fr}
+}
+@media(max-width:480px){
+  .hero{min-height:auto;padding:48px 0}
+  .term-body{font-size:11px;padding:16px}
+}
+</style>
+</head>
+<body>
+
+<section class="hero">
+  <div class="hero-glow"></div>
+  <div class="wrap">
+    <div class="hero-top">
+      <span class="hero-name">Hermes Dojo</span>
+      <span class="hero-tag">Nous Research Hackathon 2026</span>
+    </div>
+    <h1>Your agent makes the same mistakes <strong>every single day.</strong></h1>
+    <p class="hero-sub">Dojo reads session logs, finds the repeat failures, creates skills to fix them, and runs self-evolution overnight. You wake up to a better agent.</p>
+    <div class="hero-buttons">
+      <a href="https://github.com/Yonkoo11/hermes-dojo" class="btn btn-primary">
+        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        View Source
+      </a>
+      <a href="#results" class="btn">See Results</a>
+    </div>
+    <div style="height:32px"></div>
+
+    <div class="term" id="hero-term">
+      <div class="term-bar">
+        <div class="term-dot"></div>
+        <div class="term-dot"></div>
+        <div class="term-dot"></div>
+        <div class="term-title">hermes-dojo</div>
+      </div>
+      <div class="term-body" id="term-output">
+        <span class="line"><span class="prompt">$</span> <span class="cmd">python3 demo.py --reset --multi-day</span></span>
+        <span class="line muted">Seeding 7 days of session data...</span>
+        <span class="line">&nbsp;</span>
+        <span class="line accent">Day 1: Analyzing 12 sessions...</span>
+        <span class="line">  Found <span class="bad">8 failures</span> across 3 tools</span>
+        <span class="line">  Created skill: <span class="good">terminal-run</span> (bash error handling)</span>
+        <span class="line">  Success rate: <span class="bad">34.2%</span></span>
+        <span class="line">&nbsp;</span>
+        <span class="line accent">Day 5: Analyzing 12 sessions...</span>
+        <span class="line">  Found <span class="accent">3 failures</span> across 1 tool</span>
+        <span class="line">  Evolved skill: <span class="good">terminal-run</span> via GEPA</span>
+        <span class="line">  Success rate: <span class="good">57.1%</span> <span class="muted">(+22.9%)</span></span>
+        <span class="line">&nbsp;</span>
+        <span class="line muted">Trend: [▁▂▄▆█]  34.2% -> 57.1%</span>
+        <span class="line"><span class="cursor"></span></span>
+      </div>
+    </div>
+  </div>
+</section>
+
+<div class="divider"></div>
+
+<section class="section">
+  <div class="wrap">
+    <div class="section-label">The feedback loop</div>
+    <div class="loop-title">Measure weakness. <strong>Fix it.</strong> Measure again.</div>
+    <div class="loop-grid reveal">
+      <div class="loop-step">
+        <div class="loop-dot"></div>
+        <h3>Monitor</h3>
+        <p>Read session logs. Track tool errors, retries, user corrections.</p>
+      </div>
+      <div class="loop-step">
+        <div class="loop-dot"></div>
+        <h3>Analyze</h3>
+        <p>Rank failures by frequency and impact. Find root causes.</p>
+      </div>
+      <div class="loop-step">
+        <div class="loop-dot"></div>
+        <h3>Fix</h3>
+        <p>Patch failing skills. Create missing ones. Inject config.</p>
+      </div>
+      <div class="loop-step">
+        <div class="loop-dot"></div>
+        <h3>Evolve</h3>
+        <p>Run GEPA on weak skills. DSPy optimization with real data.</p>
+      </div>
+      <div class="loop-step">
+        <div class="loop-dot"></div>
+        <h3>Report</h3>
+        <p>CLI or Telegram. Deltas, sparklines, what changed.</p>
+      </div>
+    </div>
+
+    <div class="compare reveal">
+      <div class="compare-side">
+        <div class="compare-label">Without Dojo</div>
+        <div class="compare-line"><span class="dot"></span>Same git branch error every session</div>
+        <div class="compare-line"><span class="dot"></span>Timeout loops with no backoff</div>
+        <div class="compare-line"><span class="dot"></span>86 skills, unknown success rates</div>
+        <div class="compare-line"><span class="dot"></span>GEPA sits idle, nothing to evolve</div>
+        <div class="compare-line"><span class="dot"></span>You manually correct, it forgets</div>
+      </div>
+      <div class="compare-side">
+        <div class="compare-label">With Dojo</div>
+        <div class="compare-line"><span class="dot"></span>Skill patched with branch validation</div>
+        <div class="compare-line"><span class="dot"></span>Retry logic auto-injected</div>
+        <div class="compare-line"><span class="dot"></span>Per-skill success rates tracked daily</div>
+        <div class="compare-line"><span class="dot"></span>GEPA targets weakest skills first</div>
+        <div class="compare-line"><span class="dot"></span>Overnight improvement, morning report</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="results reveal" id="results">
+      <div class="section-label">5-day test run</div>
+      <div class="results-title"><strong>+22.9%</strong> success rate, zero human input</div>
+      <div class="results-sub">5-day test run on real failure patterns. Zero human intervention.</div>
+      <div class="results-bars">
+        <div class="bar-row"><span class="bar-label">Day 1</span><span class="bar-pct">34.2%</span><div class="bar-track"><div class="bar-fill" data-width="60"></div></div></div>
+        <div class="bar-row"><span class="bar-label">Day 2</span><span class="bar-pct">38.7%</span><div class="bar-track"><div class="bar-fill" data-width="68"></div></div></div>
+        <div class="bar-row"><span class="bar-label">Day 3</span><span class="bar-pct">45.1%</span><div class="bar-track"><div class="bar-fill" data-width="79"></div></div></div>
+        <div class="bar-row"><span class="bar-label">Day 4</span><span class="bar-pct">51.4%</span><div class="bar-track"><div class="bar-fill" data-width="90"></div></div></div>
+        <div class="bar-row"><span class="bar-label">Day 5</span><span class="bar-pct">57.1%</span><div class="bar-track"><div class="bar-fill" data-width="100"></div></div></div>
+      </div>
+      <div class="trend-line">Trend: 34.2% &rarr; <strong>57.1%</strong> &nbsp; Sparkline: [▁▂▄▆█]</div>
+    </div>
+
+    <div class="feat-grid reveal" style="margin-top:56px">
+      <div class="feat">
+        <div class="feat-name">Skill Creation</div>
+        <div class="feat-desc">Generates new skills from failure patterns. Patches existing ones with targeted fixes.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-name">GEPA Evolution</div>
+        <div class="feat-desc">DSPy-based prompt optimization (ICLR 2026). Uses real failure data as the optimization signal.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-name">Session Analysis</div>
+        <div class="feat-desc">Reads past sessions from state.db. Identifies recurring failures, retry loops, user corrections.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-name">Overnight Autopilot</div>
+        <div class="feat-desc">Cron-scheduled improvement cycle. Runs while you sleep, reports in the morning.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-name">Telegram Reports</div>
+        <div class="feat-desc">Morning digests with deltas, sparklines, and what changed. Know before you open your laptop.</div>
+      </div>
+      <div class="feat">
+        <div class="feat-name">Learning Curve</div>
+        <div class="feat-desc">Tracks success rate over time. Proves the feedback loop is working, not just running.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section">
+  <div class="wrap">
+    <div class="install reveal">
+      <div class="install-title">Get started in <strong>three commands</strong></div>
+      <div class="term">
+        <div class="term-bar">
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <div class="term-dot"></div>
+          <div class="term-title">terminal</div>
+        </div>
+        <div class="term-body">
+          <span class="line"><span class="prompt">$</span> <span class="cmd">git clone https://github.com/Yonkoo11/hermes-dojo.git</span></span>
+          <span class="line"><span class="prompt">$</span> <span class="cmd">cd hermes-dojo && ./install.sh</span></span>
+          <span class="line"><span class="prompt">$</span> <span class="cmd">python3 demo.py --reset --multi-day</span></span>
+        </div>
+      </div>
+      <div class="install-note">Requires Python 3.10+ and <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a> v0.2.0+</div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="footer-inner">
+      <span class="footer-left">Built solo for the <a href="https://github.com/NousResearch/hermes-agent">Nous Research Hermes Agent Hackathon</a></span>
+      <div class="footer-right">
+        <a href="https://github.com/Yonkoo11/hermes-dojo">GitHub</a>
+        <a href="https://github.com/NousResearch/hermes-agent">Hermes Agent</a>
+        <a href="https://nousresearch.com">Nous Research</a>
+      </div>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Scroll reveal
+const obs = new IntersectionObserver((entries) => {
+  entries.forEach(e => { if (e.isIntersecting) { e.target.classList.add('visible'); obs.unobserve(e.target); } });
+}, { threshold: 0.15 });
+document.querySelectorAll('.reveal').forEach(el => obs.observe(el));
+
+// Animate bars on scroll
+const barObs = new IntersectionObserver((entries) => {
+  entries.forEach(e => {
+    if (e.isIntersecting) {
+      e.target.querySelectorAll('.bar-fill').forEach(bar => {
+        bar.style.width = bar.dataset.width + '%';
+      });
+      barObs.unobserve(e.target);
+    }
+  });
+}, { threshold: 0.3 });
+document.querySelectorAll('.results-bars').forEach(el => barObs.observe(el));
+</script>
+
+</body>
+</html>

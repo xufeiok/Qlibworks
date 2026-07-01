@@ -29,11 +29,27 @@ import os
 import re
 from pathlib import Path
 from typing import Optional, List, Dict, Tuple, Set
+import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 
 _CHUNK_YEARS = 1
+_F32_SAFE = 3.0e38  # float32 安全上限（留 10% 余量）
+
+
+def _sanitize_values(df: pd.DataFrame, col: str = "value") -> pd.DataFrame:
+    """
+    因子值消毒：处理 Inf/NaN/float32 溢出。
+    
+    在 astype('float32') 之前调用，确保：
+    1. inf/-inf → NaN
+    2. 超过 ±3e38 的极端值 → NaN
+    3. 所有值可安全转换为 float32
+    """
+    df[col] = df[col].replace([np.inf, -np.inf], np.nan)
+    df.loc[df[col].abs() >= _F32_SAFE, col] = np.nan
+    return df
 
 # daily_indicators 表的日频字段（与 OHLCV 同频，直接 JOIN 可用）
 DAILY_INDICATOR_FIELDS = {
@@ -282,6 +298,7 @@ class FactorStore:
                     part = part.rename(columns={"ts_code": "instrument", "value": name})
                     part = part.set_index(["instrument", "trade_date"])
                     part.index.names = ["instrument", "datetime"]
+                    part = _sanitize_values(part, name)
                     part = part.astype({name: "float32"})
                     part = part.sort_index()
                     stats_all[name] = self._save_single_factor(name, part)
@@ -315,6 +332,7 @@ class FactorStore:
         factor_df = factor_df.rename(columns={"ts_code": "instrument", name: "value"})
         factor_df = factor_df.set_index(["instrument", "trade_date"])
         factor_df.index.names = ["instrument", "datetime"]
+        factor_df = _sanitize_values(factor_df, "value")
         factor_df = factor_df.astype({"value": "float32"})
         factor_df = factor_df.sort_index()
         if factor_df.empty:
@@ -367,6 +385,7 @@ class FactorStore:
         total_new = 0
         for year, grp in df.groupby("_year"):
             year_df = grp.drop(columns=["_year"]).set_index(["instrument", "datetime"])
+            year_df = _sanitize_values(year_df, "value")
             year_df = year_df.sort_index().astype({"value": "float32"})
             existing = self._load_warehouse_year(name, int(year))
             if existing is not None and not existing.empty:
@@ -719,7 +738,7 @@ class FactorStore:
             cur = nxt + pd.Timedelta(days=1)
         return chunks
     def _build_adj_sql(self, start_date, end_date, stocks=None):
-        """????? OHLCV + ???? + ?? + ?????? SQL?"""
+        """构建获取 OHLCV + 财务指标 + 行业 + 静态复权数据的 SQL语句。"""
         adj = ", ".join(f"CAST(p.{f} * a.adj_factor / latest.adj_factor AS DOUBLE) AS {f}"
                         for f in ["open", "high", "low", "close"])
         indicator_fields = ", ".join(
@@ -732,6 +751,7 @@ class FactorStore:
             stock_filter = f" AND p.ts_code IN ({codes})"
         return f"""SELECT p.ts_code AS ts_code, p.trade_date AS trade_date, {adj},
        CAST(p.vol AS DOUBLE) AS volume, CAST(p.amount AS DOUBLE) AS amount,
+       CAST(if(p.vol>0, p.amount*10/p.vol, 0) * a.adj_factor / latest.adj_factor AS DOUBLE) AS vwap,
        CAST(p.pre_close AS DOUBLE) AS pre_close, CAST(p.pct_chg AS DOUBLE) AS change_pct,
        {indicator_fields},
        sw.l1_name AS industry, sw.l1_code AS industry_code
@@ -990,6 +1010,7 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         result["trade_date"] = pd.to_datetime(result["trade_date"])
         result = result.set_index(["ts_code", "trade_date"])
         result.index.names = ["instrument", "datetime"]
+        result = _sanitize_values(result, "value")
         result = result.astype({"value": "float32"})
         result = result.sort_index()
 
@@ -1032,10 +1053,8 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         raise RuntimeError(f"无法计算因子 {name}: {expr}")
 
     @staticmethod
-
-    @staticmethod
     def _detect_suspension(df: pd.DataFrame) -> pd.Series:
-        """?????????? 0 ?????????? bool Series?"""
+        """根据 volume 判断是否停牌（返回 boolean Series）。"""
         if df is None or df.empty:
             return pd.Series(dtype=bool)
         vol = df.get("volume", df.get("vol", None))
@@ -1044,6 +1063,7 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         vol = pd.to_numeric(vol, errors="coerce").fillna(0)
         return vol == 0
 
+    @staticmethod
     def _is_degenerate(df: pd.DataFrame) -> bool:
         """检测因子计算结果是否退化（全零/常数）。
         
@@ -1144,6 +1164,8 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         r["trade_date"] = pd.to_datetime(r["trade_date"])
         r = r.set_index(["ts_code", "trade_date"])
         r.index.names = ["instrument", "datetime"]
+        # [安全网] 处理 Inf/NaN/float32 溢出
+        r = _sanitize_values(r, "value")
         r = r.astype({"value": "float32"})
         r = r.sort_index()
 
@@ -1209,9 +1231,17 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         # 转换 Log($field) → ln(nullif(field, 0)) 防止 log(0) 报错
         e = re.sub(r"Log\((\$\w+)\)", r"ln(nullif(\1, 0))", e)
         e = re.sub(r"\$(\w+)", r"\1", e)
-        # 如果 Mean/Std 还有未匹配的（复杂表达式含窗口函数嵌套），退回 Qlib
-        if 'Mean(' in e or 'Std(' in e or 'Corr(' in e or 'Rank(' in e or 'Ts_Rank(' in e:
-            return None
+        # 如果有 Qlib 特有函数无法翻译为 DuckDB，退回 Qlib
+        qlib_specific = ['Mean(', 'Std(', 'Corr(', 'Rank(', 'Ts_Rank(', 'Ts_Max(', 'Ts_Min(', 'Ts_Sum(',
+                         'IdxMax(', 'IdxMin(', 'Decaylinear(', 'Wma(', 'Sma(',
+                         'Cov(', 'Std(', 'Skew(', 'Kurt(',
+                         'HighDay(', 'LowDay(', 'RegIn(', 'RegBeta(', 'RegResi(',
+                         'COUNT(', 'Count(', 'SumIf(', 'SUMIF(',
+                         'Sequence(', 'SEQUENCE(', 'FILTER(', 'BANCHMARKINDEX',
+                         'Less(', 'Greater(']
+        for kw in qlib_specific:
+            if kw in e:
+                return None
         for kw in ["DROP", "DELETE", "INSERT", "UPDATE", "ALTER", "CREATE"]:
             if kw in e.upper():
                 return None
@@ -1229,11 +1259,14 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         ed = end_date or self.config.end_time
         try:
             if not self._qlib_inited:
-                qlib.init(provider_uri=str(QLIB_DATA_DIR), region=REG_CN)
+                qlib.init(provider_uri=str(QLIB_DATA_DIR), region=REG_CN,
+                          joblib_backend="threading", maxtasksperchild=1)
                 self._qlib_inited = True
             # Windows 单线程加速
             from qlib.config import C as _QC
             _QC.dataloader_workers = 0
+            _QC.joblib_backend = "threading"
+            _QC.maxtasksperchild = 1
         except Exception:
             pass
 
@@ -1310,4 +1343,3 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         r = pd.concat(frames, axis=1)
         r.columns = frames.keys()
         return r
-

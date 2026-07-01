@@ -111,7 +111,7 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
         "learning_rate": 0.1,
         "subsample": 0.8,
         "max_depth": 6,
-        "num_leaves": 64,
+        "num_leaves": 24,
         "min_child_samples": 20,
         "verbose": -1,
         "device": "gpu" if _USE_GPU else "cpu",
@@ -293,16 +293,72 @@ def train_lstm_model(dataset, params: Dict[str, object] = None):
     return model
 
 
-def predict_ensemble_models(models: list, dataset, segment: str = "test") -> pd.DataFrame:
+def compute_ic(predicted: pd.Series, actual: pd.Series) -> float:
     """
     功能概述：
-    - 对多个训练好的模型（如 LGBM + XGB + CatBoost）进行等权重集成预测。
+    - 计算 Spearman Rank IC（信息系数），衡量预测值与实际值的排序一致性。
+    输入：
+    - predicted: 预测得分 Series。
+    - actual: 实际标签 Series。
+    输出：
+    - 浮点数 IC 值（-1~1），数据不足时返回 0.0。
+    边界条件：
+    - 需至少 10 个有效样本，否则返回 0.0。
+    """
+    from scipy.stats import spearmanr
+    combined = pd.DataFrame({"pred": predicted, "actual": actual}).dropna()
+    if len(combined) < 10:
+        return 0.0
+    return float(spearmanr(combined["pred"], combined["actual"])[0])
+
+
+def compute_ic_ewma(model_ic_history: dict, model_key: str, new_ic: float, half_life: int = 4) -> float:
+    """
+    功能概述：
+    - 对模型的 IC 序列计算指数移动加权平均（EWMA），用于平滑跨窗口的性能波动。
+    - 半衰期参数控制历史衰减速度：半衰期越短，旧窗口的 IC 权重衰减越快。
+    输入：
+    - model_ic_history: 历史 IC 字典 {model_key: [ic_values]}。
+    - model_key: 模型标识（如 "lgb", "xgb", "cat"）。
+    - new_ic: 当前窗口的新 IC 值。
+    - half_life: EWMA 半衰期（窗口数），默认 4 个窗口。
+    输出：
+    - 平滑后的 IC 值。
+    """
+    if model_key not in model_ic_history:
+        model_ic_history[model_key] = []
+    model_ic_history[model_key].append(new_ic)
+    
+    history = model_ic_history[model_key]
+    if len(history) == 1:
+        return history[0]
+    
+    # 指数衰减权重：最近窗口权重最高
+    n = len(history)
+    decay = np.log(2) / half_life  # 衰减系数
+    weights = np.exp(-decay * np.arange(n - 1, -1, -1))  # 最近权重最大
+    weights /= weights.sum()
+    smoothed_ic = float(np.sum(np.array(history) * weights))
+    return smoothed_ic
+
+
+def predict_ensemble_models(
+    models: list, dataset, segment: str = "test",
+    model_weights: list[float] | None = None,
+) -> pd.DataFrame:
+    """
+    功能概述：
+    - 对多个训练好的模型（如 LGBM + XGB + CatBoost）进行集成预测。
+    - 支持等权重（默认）或 IC 加权平均。
     输入：
     - models: 模型实例列表。
     - dataset: 待预测的数据集 (Qlib Dataset 对象)。
     - segment: 预测的时间段名称，默认为 "test"。
+    - model_weights: 各模型的权重列表，None 时使用等权重。
     输出：
     - 包含 'score' 列的 DataFrame。
+    边界条件：
+    - model_weights 长度需与 models 一致。
     """
     if not models:
         raise ValueError("模型列表不能为空")
@@ -311,11 +367,23 @@ def predict_ensemble_models(models: list, dataset, segment: str = "test") -> pd.
     for model in models:
         pred = model.predict(dataset, segment=segment)
         predictions.append(pred)
-        
-    # 等权重平均 (也可以在这里拓展为加权平均或 Stacking)
-    ensemble_pred = pd.concat(predictions, axis=1).mean(axis=1)
     
-    # 转换为 Qlib 要求的标准输出格式
+    if model_weights is None:
+        # 等权重平均
+        ensemble_pred = pd.concat(predictions, axis=1).mean(axis=1)
+    else:
+        if len(model_weights) != len(predictions):
+            raise ValueError(f"model_weights 长度 ({len(model_weights)}) 需与 models 长度 ({len(predictions)}) 一致")
+        total_weight = sum(model_weights)
+        if total_weight <= 0:
+            # 所有权重为 0 时回退等权重
+            ensemble_pred = pd.concat(predictions, axis=1).mean(axis=1)
+        else:
+            # 加权平均
+            normalized_weights = np.array(model_weights, dtype=float) / total_weight
+            weighted_pred = sum(pred * w for pred, w in zip(predictions, normalized_weights))
+            ensemble_pred = weighted_pred
+    
     return pd.DataFrame(ensemble_pred, columns=["score"])
 
 
@@ -383,7 +451,8 @@ def train_ridge_model(dataset, params: Dict[str, object] = None):
             self.label_col = label_col
             
         def predict(self, dataset, segment="test"):
-            test_frame = dataset.prepare(segment)
+            from qlib.data.dataset.handler import DataHandlerLP
+            test_frame = dataset.prepare(segment, col_set="feature", data_key=DataHandlerLP.DK_I)
             x_test = test_frame.drop(columns=[self.label_col], errors="ignore").fillna(0.0)
             # 保证特征顺序一致
             x_test = x_test.reindex(columns=self.feature_cols, fill_value=0.0)

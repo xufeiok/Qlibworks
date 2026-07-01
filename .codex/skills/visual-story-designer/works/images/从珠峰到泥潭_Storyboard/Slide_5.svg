@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700;900&amp;display=swap');
+      .cta { font-family: 'Noto Sans SC', sans-serif; font-weight: 900; font-size: 90px; fill: #FFFFFF; }
+      .small { font-family: 'Noto Sans SC', sans-serif; font-weight: 400; font-size: 35px; fill: #AAAAAA; }
+    </style>
+    <linearGradient id="grad_night" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" style="stop-color:#000000;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#434343;stop-opacity:1" />
+    </linearGradient>
+  </defs>
+  
+  <rect width="100%" height="100%" fill="url(#grad_night)"/>
+  
+  <!-- Question Mark Art -->
+  <circle cx="540" cy="500" r="180" fill="none" stroke="#F2C94C" stroke-width="10"/>
+  <text x="540" y="620" text-anchor="middle" font-size="250" font-family="'Noto Sans SC', sans-serif" font-weight="900" fill="#F2C94C">?</text>
+  
+  <text x="540" y="900" text-anchor="middle" class="cta">
+    <tspan x="540" dy="0">我们是否还记得</tspan>
+    <tspan x="540" dy="140">当初为何出发？</tspan>
+  </text>
+  
+  <rect x="340" y="1150" width="400" height="100" rx="50" stroke="white" stroke-width="2" fill="none"/>
+  <text x="540" y="1215" text-anchor="middle" font-size="40" fill="white" font-family="'Noto Sans SC', sans-serif">
+    评论区聊聊你的看法
+  </text>
+  
+  <text x="540" y="1350" text-anchor="middle" class="small">商业 | 深度 | 思考</text>
+</svg>

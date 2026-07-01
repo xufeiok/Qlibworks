@@ -69,6 +69,40 @@ def _print_backtest_report(strat, initial_cash: float, final_value: float) -> No
         days = len(returns_analysis)
         annual_ret = ((1 + total_ret / 100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
 
+        # 基准表现提取
+        bench_ret = 0.0
+        bench_annual_ret = 0.0
+        bench_max_dd = 0.0
+        bench_final = initial_cash
+        has_bench = False
+
+        try:
+            for d in strat.datas:
+                if d._name == 'benchmark' and hasattr(d.p, 'dataname') and isinstance(d.p.dataname, pd.DataFrame):
+                    df_bench = d.p.dataname
+                    if not df_bench.empty and 'close' in df_bench.columns:
+                        closes = df_bench['close'].replace(1.0, np.nan).dropna() # 排除填充的1.0脏数据
+                        if len(closes) > 0:
+                            has_bench = True
+                            bench_start_price = closes.iloc[0]
+                            bench_end_price = closes.iloc[-1]
+                            
+                            # 假设全仓买入基准（无交易费用的纯基准对比）
+                            shares = initial_cash / bench_start_price
+                            bench_final = shares * bench_end_price
+                            bench_ret = ((bench_final - initial_cash) / initial_cash) * 100
+                            
+                            # 计算基准最大回撤
+                            roll_max = closes.cummax()
+                            drawdowns = (closes - roll_max) / roll_max * 100
+                            bench_max_dd = drawdowns.min() * -1
+                            
+                            # 年化
+                            bench_annual_ret = ((1 + bench_ret / 100) ** (252 / days) - 1) * 100 if days > 0 else 0.0
+                    break
+        except Exception as e:
+            print(f"解析基准数据时出错: {e}")
+
         print("\n" + "=" * 40)
         print("【量化回测核心绩效报告 (Institutional Metrics)】")
         print("=" * 40)
@@ -81,6 +115,18 @@ def _print_backtest_report(strat, initial_cash: float, final_value: float) -> No
         print(f"交易胜率:   {win_rate:.2f}% ({won_trades}/{total_trades})")
         calmar = annual_ret / max_dd if max_dd > 0 else float('inf')
         print(f"收益回撤比: {calmar:.2f} (Calmar Ratio Proxy)")
+        
+        if has_bench:
+            print("-" * 40)
+            print("【基准表现对比 (Benchmark Metrics)】")
+            print(f"基准期末资金: {bench_final:.2f}")
+            print(f"基准总收益率: {bench_ret:.2f}%")
+            print(f"基准年化收益: {bench_annual_ret:.2f}%")
+            print(f"基准最大回撤: {bench_max_dd:.2f}%")
+            alpha_ret = total_ret - bench_ret
+            alpha_annual = annual_ret - bench_annual_ret
+            print(f"策略超额收益: {alpha_ret:.2f}% (总) / {alpha_annual:.2f}% (年化)")
+
         print("=" * 40 + "\n")
     except Exception as e:
         print(f"解析基础分析器结果时出错: {e}")
@@ -93,6 +139,7 @@ def run_qlib_backtrader(
     strategy_params=None,
     initial_cash=100000.0,
     commission=CFG_COMMISSION,
+    stamp_duty=STAMP_DUTY,
     set_slippage_perc=0.0,
     server_url='http://localhost:5888/api/backtest/upload',
     timeframe_label='1d',
@@ -126,7 +173,7 @@ def run_qlib_backtrader(
     cerebro.broker.setcash(initial_cash)
     
     # [Virtu 改进] 注入 A 股真实手续费模型（区分买卖、印花税）
-    comminfo = AShareCommission(stamp_duty=STAMP_DUTY, commission=commission)
+    comminfo = AShareCommission(stamp_duty=stamp_duty, commission=commission)
     cerebro.broker.addcommissioninfo(comminfo)
     
     if set_slippage_perc > 0:

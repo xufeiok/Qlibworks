@@ -148,6 +148,7 @@
 
 <script setup lang="ts">
 import { h, ref, computed } from "vue"
+import { NProgress } from "naive-ui"
 import { useDataStore, type Frequency, type FreqSummary, type QlibIndicatorStat } from "@/stores/dataStore"
 
 const props = defineProps<{ source: "clickhouse" | "qlib" }>()
@@ -189,7 +190,7 @@ function selectFreq(f: Frequency) {
 function renderProgress(pct: number) {
   const color = pct >= 95 ? "#39d2c0" : pct >= 85 ? "#eab308" : "#ef4444"
   return h("div", { style: "display:flex;align-items:center;gap:8px" }, [
-    h("div", { style: "flex:1" }, h("n-progress", { type: "line", percentage: pct, height: 4, "border-radius": 2, indicatorPlacement: "inside", color })),
+    h("div", { style: "flex:1" }, h(NProgress, { type: "line", percentage: pct, height: 4, "border-radius": 2, indicatorPlacement: "inside", color })),
     h("span", { style: "font-size:12px;color:#8b949e;min-width:42px;text-align:right" }, pct.toFixed(1) + "%"),
   ])
 }

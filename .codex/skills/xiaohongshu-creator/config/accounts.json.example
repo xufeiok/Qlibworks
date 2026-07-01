@@ -1,0 +1,14 @@
+# 小红书账号配置示例
+# 复制此文件为 accounts.json 使用
+# 可通过 xhs-cli 命令管理，无需手动编辑
+
+{
+  "accounts": {
+    "main_account": {
+      "name": "main_account",
+      "alias": "主账号",
+      "created_at": "2026-01-01T00:00:00+08:00"
+    }
+  },
+  "currentAccount": "main_account"
+}

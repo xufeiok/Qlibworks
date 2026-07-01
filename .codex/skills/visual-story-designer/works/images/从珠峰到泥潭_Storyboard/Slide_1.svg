@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 1440">
+  <defs>
+    <style>
+      @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;700;900&amp;display=swap');
+      .title { font-family: 'Noto Sans SC', sans-serif; font-weight: 900; font-size: 130px; fill: #FFFFFF; }
+      .sub { font-family: 'Noto Sans SC', sans-serif; font-weight: 400; font-size: 50px; fill: #CCCCCC; }
+      .tag { font-family: 'Noto Sans SC', sans-serif; font-weight: 700; font-size: 40px; fill: #1D1D1F; }
+    </style>
+    <linearGradient id="grad_dark" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#141E30;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#243B55;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="grad_gold" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#F2994A;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#F2C94C;stop-opacity:1" />
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-opacity="0.5"/>
+    </filter>
+  </defs>
+  
+  <rect width="100%" height="100%" fill="url(#grad_dark)"/>
+  
+  <!-- Decorative Circle -->
+  <circle cx="900" cy="200" r="300" fill="url(#grad_gold)" opacity="0.1"/>
+  <circle cx="100" cy="1200" r="400" fill="#CC0000" opacity="0.1"/>
+  
+  <!-- Tag -->
+  <rect x="100" y="150" width="300" height="80" rx="40" fill="url(#grad_gold)"/>
+  <text x="250" y="205" text-anchor="middle" class="tag">深度商业解析</text>
+  
+  <text x="100" y="500" class="title" filter="url(#shadow)">
+    <tspan x="100" dy="0">从珠峰</tspan>
+    <tspan x="100" dy="160" fill="url(#grad_gold)">到泥潭</tspan>
+  </text>
+  
+  <line x1="100" y1="700" x2="300" y2="700" stroke="white" stroke-width="10" opacity="0.5"/>
+  
+  <text x="100" y="850" class="sub">
+    <tspan x="100" dy="0">万科“实用主义”的致命异化</tspan>
+    <tspan x="100" dy="80">——当生存成为唯一的信仰，</tspan>
+    <tspan x="100" dy="80">企业将付出怎样的代价？</tspan>
+  </text>
+</svg>

@@ -1,0 +1,13 @@
+/* Prose Style - Elegant Serif */
+body { font-family: "Georgia", "Songti SC", "SimSun", serif; line-height: 1.8; color: #2c3e50; background-color: #fff; }
+h1 { font-size: 26px; font-weight: normal; text-align: center; margin: 30px 0 20px; color: #000; }
+h2 { font-size: 22px; font-weight: bold; margin: 25px 0 15px; text-align: center; color: #34495e; border-bottom: 2px solid #eec; display: inline-block; padding-bottom: 5px; }
+h3 { font-size: 18px; font-weight: bold; margin: 20px 0 10px; color: #34495e; }
+p { margin-bottom: 20px; font-size: 17px; text-align: justify; text-indent: 2em; }
+code { font-family: Consolas, monospace; background-color: #f0f0f0; padding: 2px 4px; border-radius: 2px; }
+pre { background-color: #f9f9f9; padding: 15px; border-left: 3px solid #ccc; margin-bottom: 20px; overflow-x: auto; }
+blockquote { font-style: italic; border-left: 3px solid #e74c3c; background-color: #fdfdfd; margin: 0 0 20px; padding: 15px 20px; color: #555; }
+ul, ol { padding-left: 20px; margin-bottom: 20px; }
+li { margin-bottom: 8px; }
+a { color: #c0392b; text-decoration: none; border-bottom: 1px dashed #c0392b; }
+img { max-width: 100%; height: auto; display: block; margin: 20px auto; border: 5px solid #fff; box-shadow: 0 0 10px rgba(0,0,0,0.1); }

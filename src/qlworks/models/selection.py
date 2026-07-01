@@ -107,7 +107,15 @@ def prepare_feature_selection_data(
     性能/安全注意事项：
     - 测试集缺失值必须使用训练集的均值填充，避免前视偏差（Data Leakage）。
     """
-    if label_col not in train_frame.columns:
+    # [Renaissance 修复] 支持 MultiIndex 列结构（如 ("label", "LABEL_5D")）
+    if isinstance(train_frame.columns, pd.MultiIndex):
+        if label_col not in train_frame.columns:
+            _tuple_col = ("label", label_col)
+            if _tuple_col in train_frame.columns:
+                label_col = _tuple_col
+            else:
+                raise ValueError(f"训练数据缺少标签列 {label_col}（MultiIndex 列中未找到 {label_col} 或 {_tuple_col}）")
+    elif label_col not in train_frame.columns:
         raise ValueError(f"训练数据缺少标签列 {label_col}")
 
     x_train = train_frame.drop(columns=[label_col]).copy()

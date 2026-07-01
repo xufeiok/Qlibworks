@@ -1,0 +1,38 @@
+# 小红书封面风格模板配置
+# 用于 image_generator.py 生图时增强提示词
+
+default:
+  aspect_ratio: "portrait"   # 3:4 竖版
+  style: "clean minimal"
+  colors: ["warm", "natural"]
+  tone: "light and airy"
+
+lifestyle:
+  aspect_ratio: "portrait"
+  style: "lifestyle photography, natural lighting"
+  colors: ["warm beige", "soft pink", "cream"]
+  tone: "cozy, inviting"
+
+realestate:
+  aspect_ratio: "portrait"
+  style: "real estate photography, modern luxury"
+  colors: ["slate gray", "warm gold", "deep blue"]
+  tone: "sophisticated, premium"
+
+knowledge:
+  aspect_ratio: "portrait"
+  style: "infographic style card, clean typography"
+  colors: ["dark navy", "white", "accent orange"]
+  tone: "professional, educational"
+
+fashion:
+  aspect_ratio: "portrait"
+  style: "fashion editorial, high contrast"
+  colors: ["black", "white", "red accent"]
+  tone: "bold, stylish"
+
+food:
+  aspect_ratio: "portrait"
+  style: "food photography, macro details"
+  colors: ["warm amber", "fresh green", "cream"]
+  tone: "appetizing, warm"

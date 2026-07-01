@@ -1,0 +1,2 @@
+default_schedule: "09:00"
+log_level: "INFO"

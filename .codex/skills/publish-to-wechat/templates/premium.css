@@ -1,0 +1,115 @@
+/* Premium Style - High Readability & Contrast */
+/* Based on WeChat best practices: 1.75 line-height, clear hierarchy */
+
+body { 
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", Arial, sans-serif; 
+    line-height: 1.75; 
+    color: #3f3f3f; 
+    font-size: 16px; 
+    letter-spacing: 0.05em;
+    padding: 10px;
+}
+
+/* Title Styling */
+h1 { 
+    font-size: 22px; 
+    font-weight: bold; 
+    color: #ffffff; 
+    background-color: #07c160; /* WeChat Green */
+    padding: 15px 20px; 
+    border-radius: 8px; 
+    text-align: center; 
+    margin: 30px 0 30px; 
+    box-shadow: 0 4px 10px rgba(7, 193, 96, 0.2);
+    line-height: 1.4;
+}
+
+/* Subtitle Styling */
+h2 { 
+    font-size: 18px; 
+    font-weight: bold; 
+    color: #07c160; 
+    border-bottom: 2px solid #07c160; 
+    padding-bottom: 8px; 
+    margin: 40px 0 20px; 
+    display: inline-block; 
+}
+
+h3 { 
+    font-size: 17px; 
+    font-weight: bold; 
+    color: #333; 
+    margin: 30px 0 15px; 
+    border-left: 4px solid #07c160; 
+    padding-left: 12px;
+}
+
+/* Paragraphs */
+p { 
+    margin-bottom: 25px; 
+    text-align: justify; 
+    margin-top: 0;
+}
+
+/* Emphasis for important words */
+strong { 
+    color: #d9534f; /* Highlight color (Red/Orange) */
+    font-weight: bold;
+    background: linear-gradient(180deg, transparent 60%, rgba(217, 83, 79, 0.15) 0); /* Subtle highlight effect */
+    padding: 0 2px;
+}
+
+/* Blockquotes */
+blockquote { 
+    font-style: normal; 
+    border-left: 4px solid #ddd; 
+    background-color: #f8f9fa; 
+    margin: 20px 0; 
+    padding: 16px; 
+    color: #666; 
+    border-radius: 0 4px 4px 0;
+}
+
+/* Lists */
+ul, ol { 
+    padding-left: 20px; 
+    margin-bottom: 25px; 
+    color: #3f3f3f;
+}
+li { 
+    margin-bottom: 10px; 
+}
+
+/* Links */
+a { 
+    color: #576b95; 
+    text-decoration: none; 
+    border-bottom: 1px solid rgba(87, 107, 149, 0.3); 
+}
+
+/* Images */
+img { 
+    max-width: 100%; 
+    height: auto; 
+    display: block; 
+    margin: 30px auto; 
+    border-radius: 6px; 
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08); 
+}
+
+/* Code */
+code { 
+    font-family: Consolas, monospace; 
+    background-color: #f0f0f0; 
+    color: #e96900; 
+    padding: 2px 5px; 
+    border-radius: 3px; 
+    font-size: 0.9em; 
+}
+pre { 
+    background-color: #f6f8fa; 
+    padding: 16px; 
+    border-radius: 8px; 
+    overflow-x: auto; 
+    margin-bottom: 25px; 
+}

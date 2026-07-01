@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 from dataclasses import dataclass
 import pandas as pd
 
@@ -77,12 +78,20 @@ def wrap_dataset_with_cached_train_frame(
 ):
     """复用已准备好的训练段结果，避免同窗口二次训练 prepare 再跑一遍 processor。"""
     def _build_cached_results(frame: pd.DataFrame):
-        feature_cols = [name for name in selected_feature_names if name in frame.columns]
-        label_cols = [name for name in label_names if name in frame.columns]
+        # [Renaissance 修复] 支持 MultiIndex 列：frame.columns 为 [("feature","STR_20d"), ...]
+        # 但 selected_feature_names / label_names 是简单字符串 ["STR_20d", ...]，
+        # 简单字符串 in MultiIndex 永远不会 True，导致 feature_cols/label_cols 恒为空。
+        if isinstance(frame.columns, pd.MultiIndex):
+            _col_map = {c[1]: c for c in frame.columns}
+        else:
+            _col_map = {c: c for c in frame.columns}
+        feature_cols = [_col_map.get(name) for name in selected_feature_names if _col_map.get(name) is not None]
+        label_cols = [_col_map.get(name) for name in label_names if _col_map.get(name) is not None]
         selected_cols = feature_cols + label_cols
         cached_frame = frame.loc[:, selected_cols].copy()
         grouped_parts = {}
         if feature_cols:
+            # 用 tuple 获取时保持 MultiIndex 列结构
             grouped_parts["feature"] = cached_frame.loc[:, feature_cols].copy()
         if label_cols:
             grouped_parts["label"] = cached_frame.loc[:, label_cols].copy()
@@ -201,10 +210,44 @@ def _load_factors_from_warehouse(feature_bundle, start_time, end_time):
 
 def _resolve_static_instruments(instruments, start_time=None, end_time=None, verbose=True):
     from qlib.data import D
+    from qlworks.config import QLIB_DATA_DIR
 
     if instruments is None:
         return None
     if isinstance(instruments, str):
+        # [Renaissance 改进] 直接读取 instruments/*.txt 文件，绕过 Qlib 有 Bug 的内置解析器。
+        # Qlib 的 D.instruments("csi500") 无法正确解析 PIT 格式（code\tentry_date\texit_date），
+        # 返回仅 ~2 只股票。直接读取文件。
+        # 注意：这里只做窗口级粗过滤（窗口期内任一时刻是成分股就保留该股票），
+        # 逐日精确过滤由 _build_static_warehouse_frame + _filter_by_pit_date 负责。
+        _inst_path = Path(QLIB_DATA_DIR) / "instruments" / f"{instruments}.txt"
+        if _inst_path.exists():
+            _pit_map = {}  # {code: [(entry, exit), ...]}
+            with open(_inst_path) as _f:
+                for _l in _f:
+                    _l = _l.strip()
+                    if not _l:
+                        continue
+                    _parts = _l.split("\t")
+                    if len(_parts) >= 3:
+                        _code, _s, _e = _parts[0].lower(), _parts[1], _parts[2]
+                        _pit_map.setdefault(_code, []).append((_s, _e))
+            resolved = []
+            _st = str(start_time)[:10] if start_time else None
+            _et = str(end_time)[:10] if end_time else None
+            for _code, _ranges in _pit_map.items():
+                for _s, _e in _ranges:
+                    if _st and _e < _st:
+                        continue
+                    if _et and _s > _et:
+                        continue
+                    resolved.append(_code)
+                    break
+            if verbose:
+                print(f"    [静态池过滤-文件直读] {instruments}.txt: {len(resolved):,} 只股票 (PIT格式)")
+            return resolved
+
+        # 回退：使用 Qlib 内置解析器
         inst_conf = D.instruments(instruments)
         resolved = D.list_instruments(inst_conf, start_time=start_time, end_time=end_time, as_list=True)
         if verbose:
@@ -219,7 +262,60 @@ def _resolve_static_instruments(instruments, start_time=None, end_time=None, ver
     return instruments
 
 
-def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None, instruments=None):
+def _load_pit_map(instruments_str: str) -> Optional[dict]:
+    """从 instruments/*.txt 文件加载 PIT 映射表。
+
+    返回 {code: [(entry_date, exit_date), ...]} 或 None。
+    """
+    from qlworks.config import QLIB_DATA_DIR
+
+    _inst_path = Path(QLIB_DATA_DIR) / "instruments" / f"{instruments_str}.txt"
+    if not _inst_path.exists():
+        return None
+    _pit_map = {}
+    with open(_inst_path) as _f:
+        for _l in _f:
+            _l = _l.strip()
+            if not _l:
+                continue
+            _parts = _l.split("\t")
+            if len(_parts) >= 3:
+                _code, _s, _e = _parts[0].lower(), _parts[1], _parts[2]
+                _pit_map.setdefault(_code, []).append((_s, _e))
+    return _pit_map
+
+
+def _filter_by_pit_date(warehouse_df: pd.DataFrame, pit_map: dict) -> pd.DataFrame:
+    """逐日 PIT 过滤：仅保留 stock 在当天真实属于该指数成分股的记录。
+
+    _resolve_static_instruments 只做窗口级粗过滤（stock 在窗口期内任一时刻
+    是成分股即保留整个窗口期），这会导致前视偏差。
+    例如：某股票 2020-06-01 才入 csi500，但 2020-01~05 的训练数据也被包含进来。
+
+    性能：将 pit_map 展开为 DataFrame 后 merge + 向量化时间范围过滤，
+    替代逐行遍历 O(N_stocks × N_rows) 为 O(N_rows × log N_stocks) merge 开销。
+    """
+    if warehouse_df.empty or not pit_map:
+        return warehouse_df
+
+    # 将 pit_map（dict）展开为 DataFrame
+    _records = []
+    for _inst, _ranges in pit_map.items():
+        for _entry, _exit in _ranges:
+            _records.append({"instrument": _inst, "entry": pd.Timestamp(_entry), "exit": pd.Timestamp(_exit)})
+    _pit_df = pd.DataFrame(_records)
+
+    # 将 warehouse 的 MultiIndex 展开为列
+    _idx_df = warehouse_df.index.to_frame(index=False)
+    # merge 匹配 instrument，inner 自动排除不在 pit_map 中的股票
+    _merged = _idx_df.merge(_pit_df, on="instrument", how="inner")
+    # 向量化时间范围过滤
+    _date_ok = (_merged["datetime"] >= _merged["entry"]) & (_merged["datetime"] <= _merged["exit"])
+    _filtered_idx = pd.MultiIndex.from_frame(_merged.loc[_date_ok, ["datetime", "instrument"]])
+    return warehouse_df.loc[warehouse_df.index.isin(_filtered_idx)]
+
+
+def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None, instruments=None, pit_map=None):
     """在拼接前先裁剪 warehouse 静态表，减少不必要的索引对齐与内存占用。"""
     if not loaded_factors:
         return pd.DataFrame()
@@ -234,6 +330,8 @@ def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None
 
     for name, series in loaded_factors.items():
         frame = series.rename(name).reset_index()
+        # [Renaissance 修复] 统一小写，匹配 csi500 PIT 返回的 .sz 格式
+        frame["instrument"] = frame["instrument"].str.lower()
         if start_ts is not None:
             frame = frame[frame["datetime"] >= start_ts]
         if end_ts is not None:
@@ -252,6 +350,16 @@ def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None
     warehouse_df = warehouse_df.swaplevel("instrument", "datetime").sort_index()
     warehouse_df.index.names = ["datetime", "instrument"]
     warehouse_df.columns = pd.MultiIndex.from_product([["feature"], warehouse_df.columns])
+
+    # [Renaissance 改进] 逐日 PIT 过滤：利用 csi500.txt 的 entry/exit 日期，
+    # 精确移除 stock 在非成分股时期的行，消除窗口级粗过滤带来的前视偏差。
+    if pit_map is not None and not warehouse_df.empty:
+        _before = len(warehouse_df)
+        warehouse_df = _filter_by_pit_date(warehouse_df, pit_map)
+        _removed = _before - len(warehouse_df)
+        if _removed > 0:
+            print(f"    [逐日 PIT 过滤] 移除 {_removed:,} 行非成分股时期数据 ({100*_removed/_before:.1f}%)")
+
     return warehouse_df
 
 
@@ -274,11 +382,19 @@ def _slice_feature_cache(
             end_ts = pd.Timestamp(end_time) if end_time else None
             warehouse_df = warehouse_df.loc[start_ts:end_ts]
 
-        warehouse_names = [name for name in selected_names if ("feature", name) in warehouse_df.columns]
-        if warehouse_names:
-            warehouse_df = warehouse_df.loc[:, pd.IndexSlice["feature", warehouse_names]]
+        if isinstance(warehouse_df.columns, pd.MultiIndex):
+            warehouse_names = [name for name in selected_names if ("feature", name) in warehouse_df.columns]
+            if warehouse_names:
+                warehouse_df = warehouse_df.loc[:, pd.IndexSlice["feature", warehouse_names]]
+            else:
+                warehouse_df = warehouse_df.iloc[0:0, 0:0]
         else:
-            warehouse_df = warehouse_df.iloc[0:0, 0:0]
+            # 单级列索引：warehouse 直接以因子名作为列名（如 "STR_20d"）
+            warehouse_names = [name for name in selected_names if name in warehouse_df.columns]
+            if warehouse_names:
+                warehouse_df = warehouse_df[warehouse_names]
+            else:
+                warehouse_df = warehouse_df.iloc[0:0, 0:0]
 
     qlib_feature_names = [name for name in selected_names if name in feature_cache.qlib_feature_expr_map]
     qlib_feature_exprs = [feature_cache.qlib_feature_expr_map[name] for name in qlib_feature_names]
@@ -349,11 +465,14 @@ def build_custom_feature_cache(
         end_time=end_time,
         verbose=True,
     )
+    # [Renaissance 改进] 加载 PIT 映射表用于逐日过滤，仅对字符串索引名有效（如 "csi500"）
+    _pit_map = _load_pit_map(instruments) if isinstance(instruments, str) else None
     warehouse_df = _build_static_warehouse_frame(
         loaded_factors,
         start_time=start_time,
         end_time=end_time,
         instruments=resolved_instruments,
+        pit_map=_pit_map,
     )
 
     return CustomFeatureCache(
@@ -433,17 +552,55 @@ def _build_mixed_loader_config(
     qlib_config = {}
     if feature_exprs:
         qlib_config["feature"] = (feature_exprs, feature_names)
-    qlib_config["label"] = (label_exprs, label_names)
-    loaders.append({
-        "class": "QlibDataLoader",
-        "module_path": "qlib.data.dataset.loader",
-        "kwargs": {"config": qlib_config, "freq": freq},
-    })
-    return {
-        "class": "NestedDataLoader",
-        "module_path": "qlib.data.dataset.loader",
-        "kwargs": {"dataloader_l": loaders},
-    }
+        qlib_config["label"] = (label_exprs, label_names)
+        loaders.append({
+            "class": "QlibDataLoader",
+            "module_path": "qlib.data.dataset.loader",
+            "kwargs": {"config": qlib_config, "freq": freq},
+        })
+        return {
+            "class": "NestedDataLoader",
+            "module_path": "qlib.data.dataset.loader",
+            "kwargs": {"dataloader_l": loaders},
+        }
+    else:
+        # [Renaissance 修复] 所有特征已从 warehouse 加载，只有标签需 Qlib 求值。
+        # QlibDataLoader 不允许空特征列表，因此预计算标签并注入 warehouse_df。
+        from qlib.data import D
+        _insts = feature_cache.resolved_instruments
+        if not _insts:
+            _insts = D.instruments("all")
+        _label_raw = D.features(_insts, label_exprs, start_time, end_time)
+        if not _label_raw.empty:
+            if isinstance(_label_raw.columns, pd.MultiIndex):
+                _label_raw.columns = _label_raw.columns.droplevel(1)
+            _label_raw = _label_raw.rename(columns=dict(zip(_label_raw.columns, label_names)))
+            # [Renaissance 修复] D.features 返回的 index 结构与 warehouse_df 不一致：
+            #   _label_raw.index  : ['instrument', 'datetime']  (instrument 在前)
+            #   warehouse_df.index: ['datetime', 'instrument']  (datetime 在前)
+            # 此外 D.features 返回的 instrument 可能为大写（000001.SZ），
+            # 而 warehouse_df 统一使用小写（000001.sz）。
+            # 直接 index 对齐（pandas 按 tuple 匹配）因顺序/大小写不同会导致全量 label NaN  →
+            # DropnaLabel 删除所有行 → 0 samples 训练失败。
+            # 修复方式：将 _label_raw 展开为扁平 DataFrame，统一 index 格式后再赋值。
+            if isinstance(_label_raw.index, pd.MultiIndex) and 'instrument' in _label_raw.index.names:
+                _label_flat = _label_raw.reset_index()
+                _label_flat['instrument'] = _label_flat['instrument'].str.lower()
+                _label_flat = _label_flat.set_index(['datetime', 'instrument'])
+                if isinstance(_label_flat.index, pd.MultiIndex):
+                    _label_flat = _label_flat.sort_index()
+            else:
+                _label_flat = _label_raw
+            # 添加标签列到 warehouse_df，使用 ("label", col) MultiIndex 格式
+            for _col in label_names:
+                warehouse_df[("label", _col)] = _label_flat[_col]
+        else:
+            raise ValueError(f"标签 {label_exprs} 在 Qlib 中计算为空，无法进行训练！")
+        return {
+            "class": "InstrumentAwareStaticDataLoader",
+            "module_path": "qlworks.features.dataset",
+            "kwargs": {"config": warehouse_df, "default_instruments": feature_cache.resolved_instruments},
+        }
 
 
 def _build_processors(
@@ -739,8 +896,11 @@ def create_custom_dataset(
     infer_processors = check_transform_proc(infer_processors, fit_start_time, fit_end_time)
     learn_processors = check_transform_proc(learn_processors, fit_start_time, fit_end_time)
 
+    # 使用已解析的股票列表替代字符串别名（如 "csi500"），
+    # 防止 Qlib 内置 instrument provider 解析 PIT 格式失败的问题
+    _resolved_instruments = feature_cache.resolved_instruments
     handler = DataHandlerLP(
-        instruments=instruments,
+        instruments=_resolved_instruments or instruments,
         start_time=start_time,
         end_time=end_time,
         data_loader=data_loader_config,

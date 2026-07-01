@@ -513,7 +513,7 @@ class QuantDataAPI:
         Returns:
             股票列表 DataFrame
         """
-        sql = "SELECT ts_code, symbol, name, industry, area, market, list_date, list_status FROM stock_universe WHERE 1=1"
+        sql = "SELECT ts_code, symbol, name, industry, area, market, list_date, delist_date, list_status FROM stock_basic WHERE 1=1"
 
         if market:
             sql += f" AND market = '{market}'"

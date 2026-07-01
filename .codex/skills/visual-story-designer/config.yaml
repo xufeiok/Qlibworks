@@ -1,0 +1,34 @@
+# ComfyUI Configuration
+comfyui:
+  base_url: "http://127.0.0.1:8188"
+  # Default workflow file (must be in API format)
+  workflow_file: "workflow_api.json"
+  
+  # Node Mapping (IDs from your specific workflow)
+  # Open your workflow_api.json to find these IDs
+  nodes:
+    positive_prompt: "6"      # The CLIP Text Encode node for positive prompt
+    negative_prompt: "7"      # The CLIP Text Encode node for negative prompt (optional)
+    seed: "3"                 # The KSampler node (to randomize seed)
+    empty_latent: "5"         # The Empty Latent Image node (to set size)
+
+# Online API Configuration (Alternative)
+online_api:
+  provider: "openai" # or "midjourney_proxy"
+  api_key: "${OPENAI_API_KEY}" # Will read from environment variable
+  model: "dall-e-3"
+
+# Jimeng AI Configuration (Volcengine)
+jimeng:
+  access_key: "YOUR_ACCESS_KEY"
+  secret_key: "YOUR_SECRET_KEY"
+  # Default endpoint for visual service
+  host: "visual.volcengineapi.com"
+  region: "cn-north-1"
+  # Common req_keys: 
+  # - jimeng_high_aes_gene (Jimeng 2.1 - Legacy?)
+  # - high_aes_general_v2_1 (Standard 2.1)
+  # - jimeng_high_aes_general_v21_L (Jimeng 2.1 Large)
+  # - high_aes_general_v1_4 (Standard 1.4)
+  # See: https://www.volcengine.com/docs/85621/1616429?lang=zh
+  req_key: "jimeng_t2i_v30"

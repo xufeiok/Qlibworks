@@ -266,6 +266,17 @@ class EnhancedQlibStrategy(bt.Strategy):
                 self.log(f"  [跳过补仓] {d._name} 计算股数失败 - {e}")
                 continue
 
+            # [Virtu 改进] 成交量限制：确保订单量不超过当日成交量的 volume_limit_pct
+            daily_volume = d.volume[0]
+            if daily_volume is not None and math.isfinite(daily_volume) and daily_volume > 0:
+                max_shares_by_volume = int(daily_volume * self.p.volume_limit_pct // 100 * 100)
+                if max_shares_by_volume < 100:
+                    self.log(f"  [跳过补仓] {d._name} 当日成交量过小 ({daily_volume})，无法满足 100 股最小单位")
+                    continue
+                if target_shares > max_shares_by_volume:
+                    self.log(f"  [缩容买入] {d._name} 订单量 {target_shares} 超过成交量限制 {max_shares_by_volume}，缩容至 {max_shares_by_volume}")
+                    target_shares = max_shares_by_volume
+
             if target_shares >= 100:
                 self.order_target_size(d, target=target_shares)
                 buy_names.append(d._name)
