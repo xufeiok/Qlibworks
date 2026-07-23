@@ -2,7 +2,10 @@
 精选因子筛选脚本：按因子类别分组，在每个类别内独立运行特征选择，
 筛选出各类别中预测能力最强的因子。
 
-[AQR/Citadel 改进] 全局缓存 + 一次性数据准备 + 向量化 ICIR + Label Neutralization
+[AQR/Citadel/Renaissance 改进]
+  - 滚动窗口因子筛选，消除前瞻偏差
+  - 与 train_from_selected.py 统一的股票池、动态过滤、ST/次新过滤
+  - 截面排名标准化 (CSRankNorm)，与训练阶段数据处理一致
 
 用法：
   修改文件顶部 CONFIG 字典中的参数，然后直接运行：
@@ -40,6 +43,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from qlworks.features.builder import FeatureBundle
 from qlworks.features.dataset import build_custom_feature_cache
+from qlworks.factors.filter_utils import filter_codes_post
 from qlworks.models import cached_select_features
 from qlworks.config import QLIB_DATA_DIR
 import qlib
@@ -65,15 +69,8 @@ ACTIVE_FACTOR_FILES = [
 # [全局配置区] - 在此修改运行参数
 # ==============================================================================
 CONFIG = {
-    # 因子文件列表（不含 .yaml 后缀），排除 price_volume_factors
-    "factor_files": [
-        "reversal_momentum_factors",
-        "quality_factors",
-        "style_factors",
-        "risk_factors",
-        "sentiment_factors",
-        "other_factors",
-    ],
+    # 因子文件列表（从 ACTIVE_FACTOR_FILES 派生，排除 price_volume_factors）
+    "factor_files": [f for f in ACTIVE_FACTOR_FILES if f != "price_volume_factors"],
 
     # 特征选择参数
     "top_k": 2,
@@ -81,12 +78,30 @@ CONFIG = {
     "algo": "lightgbm",
     "min_factors": 3,
 
-    # 数据范围
-    "instruments": "csi500",
-    "start_time": "2020-01-01",
-    "end_time": "2024-12-31",
+    # --- 股票池与过滤（与 train_from_selected.py 对齐）---
+    "instruments": "main_board",
+    "use_dynamic_filter": True,
+    "filter_new_stocks": True,
+    "filter_st": True,
 
-    # 标签
+    # --- 滚动窗口因子筛选（训练期窗口与 train_from_selected.py 完全对齐）---
+    # 每个窗口仅使用其 train 期数据做因子筛选，消除前瞻偏差。
+    "rolling_windows": [
+        {
+            "name": "Window_2023",
+            "train": ("2020-01-01", "2021-12-20"),
+        },
+        {
+            "name": "Window_2024",
+            "train": ("2021-01-01", "2022-12-20"),
+        },
+        {
+            "name": "Window_2025",
+            "train": ("2022-01-01", "2023-12-20"),
+        }
+    ],
+
+    # 标签（与 train_from_selected.py 对齐）
     "label_expr": "Ref($close, -5) / Ref($open, -1) - 1",
     "label_name": "LABEL_5D",
 
@@ -98,6 +113,9 @@ CONFIG = {
     "icir_stability": True,
     "icir_window": 60,
     "icir_keep_ratio": 0.9,
+
+    # 跨窗口聚合：因子在 >= min_window_ratio 比例的窗口中入选才最终选中
+    "min_window_ratio": 0.5,
 
     # 输出：None 自动生成时间戳文件名
     "output": None,
@@ -170,7 +188,7 @@ def load_factors_by_category(factor_files: List[str]) -> Dict[str, List[Dict]]:
     return categories
 
 
-def build_global_bundle(factors_by_cat: Dict[str, List[Dict]]) -> FeatureBundle:
+def build_global_bundle(factors_by_cat: Dict[str, List[Dict]], label_expr: str, label_name: str) -> FeatureBundle:
     """将所有类别的因子合并为全局 FeatureBundle。"""
     all_fields = []
     all_names = []
@@ -181,8 +199,8 @@ def build_global_bundle(factors_by_cat: Dict[str, List[Dict]]) -> FeatureBundle:
     return FeatureBundle(
         fields=all_fields,
         names=all_names,
-        label_fields=[CONFIG["label_expr"]],
-        label_names=[CONFIG["label_name"]],
+        label_fields=[label_expr],
+        label_names=[label_name],
     )
 
 
@@ -194,6 +212,89 @@ def _vectorized_daily_ic(train_frame: pd.DataFrame, factor_cols: List[str], labe
     return daily_ic
 
 
+def _apply_cs_rank_norm(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    截面排名标准化 (CSRankNorm)：对每个交易日截面，特征值转为 [0,1] 分位数，
+    缺失值填充为 0.5（中位数）。等价于树模型场景下的 CSQuantileNorm。
+
+    输入:
+    - df: MultiIndex (datetime, instrument) × 因子列
+
+    输出:
+    - 标准化后的 DataFrame，同 shape
+    """
+    result = df.groupby(level="datetime").rank(pct=True, na_option="keep")
+    result = result.fillna(0.5)
+    return result
+
+
+def _filter_stocks_post(
+    df: pd.DataFrame,
+    filter_new_stocks: bool = True,
+    filter_st: bool = True,
+) -> pd.DataFrame:
+    """
+    对已加载的特征+标签 DataFrame 执行后置 ST/次新股过滤。
+
+    逐日遍历，调用 filter_codes_post 过滤每只股票，
+    移除不满足条件的行。
+
+    输入:
+    - df: MultiIndex (datetime, instrument) × 列
+    - filter_new_stocks: 过滤上市不足 250 日次新股
+    - filter_st: 过滤 ST 股票
+
+    输出:
+    - 过滤后的 DataFrame
+    """
+    if df.empty:
+        return df
+    if not filter_new_stocks and not filter_st:
+        return df
+
+    all_dates = sorted(df.index.get_level_values("datetime").unique())
+    kept_parts = []
+    total_removed = 0
+
+    for date in all_dates:
+        date_str = str(date.date()) if hasattr(date, "date") else str(date)[:10]
+        day_slice = df.xs(date, level="datetime", drop_level=False)
+        if day_slice.empty:
+            continue
+        codes = day_slice.index.get_level_values("instrument").unique().tolist()
+        filtered_codes = filter_codes_post(
+            codes, date_str,
+            filter_new_stocks=filter_new_stocks,
+            filter_st=filter_st,
+        )
+        removed = len(codes) - len(filtered_codes)
+        total_removed += removed
+        if filtered_codes:
+            kept = day_slice[day_slice.index.get_level_values("instrument").isin(filtered_codes)]
+            kept_parts.append(kept)
+
+    if kept_parts:
+        result = pd.concat(kept_parts)
+        result = result.sort_index()
+    else:
+        result = df.iloc[0:0]
+
+    if total_removed > 0:
+        print(f"    [后置过滤] ST/次新股过滤累计移除 {total_removed:,} 行 (stock×day)")
+
+    return result
+
+
+def _compute_window_full_period(rolling_windows: List[Dict]) -> Tuple[str, str]:
+    """根据滚动窗口列表计算全局缓存所需的完整时间范围。"""
+    all_starts = []
+    all_ends = []
+    for w in rolling_windows:
+        all_starts.append(w["train"][0])
+        all_ends.append(w["train"][1])
+    return min(all_starts), max(all_ends)
+
+
 def run_single_category_selection(
     cat_name: str,
     factors: List[Dict],
@@ -202,6 +303,7 @@ def run_single_category_selection(
     fs_method: str,
     fs_algo: str,
     top_k: int,
+    label_name: str,
     redundancy_check: bool = True,
     redundancy_threshold: float = 0.95,
     icir_stability: bool = True,
@@ -212,7 +314,20 @@ def run_single_category_selection(
     在单个类别上运行特征选择。
 
     [性能优化] 不再创建 Qlib dataset，直接从预准备的 x_train/y_train 中按因子名切片。
-    CSQuantileNorm 只在主流程中运行一次，此处直接复用结果。
+    CSRankNorm 已在主流程中运行一次，此处直接复用结果。
+
+    输入:
+    - cat_name: 类别名称
+    - factors: 该类别因子列表 [{name, expression, meaning, source_file}, ...]
+    - x_train: 已标准化 (CSRankNorm) 的特征矩阵
+    - y_train: 标签 Series
+    - fs_method, fs_algo, top_k: 特征选择参数
+    - label_name: 标签列名（用于 ICIR 校验）
+    - redundancy_check: 是否做冗余检测
+    - redundancy_threshold: Spearman 相关系数阈值
+    - icir_stability: 是否做 ICIR 稳定性校验
+    - icir_rolling_window: ICIR 滚动窗口天数
+    - icir_keep_ratio: ICIR 保留比例
     """
     cat_factor_names = [f["name"] for f in factors]
     print(f"    [筛选] {len(factors)} 个因子, top_k={top_k}...")
@@ -305,13 +420,12 @@ def run_single_category_selection(
     if icir_stability and len(selected_factor_names) > 5:
         print(f"    [ICIR 稳定校验] 窗口={icir_rolling_window}d, keep_ratio={icir_keep_ratio}...")
         try:
-            label_col = CONFIG["label_name"]
             icir_feat = [c for c in selected_factor_names if c in x_train.columns]
             if len(icir_feat) > 5:
                 # 构建含标签的综合面板
                 combined_frame = x_train[icir_feat].copy()
-                combined_frame[label_col] = y_train
-                daily_ic = _vectorized_daily_ic(combined_frame, icir_feat, label_col)
+                combined_frame[label_name] = y_train
+                daily_ic = _vectorized_daily_ic(combined_frame, icir_feat, label_name)
                 if not daily_ic.empty and len(daily_ic) > icir_rolling_window // 2:
                     rolling_mean = daily_ic.rolling(window=icir_rolling_window, min_periods=icir_rolling_window // 2).mean()
                     rolling_std = daily_ic.rolling(window=icir_rolling_window, min_periods=icir_rolling_window // 2).std()
@@ -372,14 +486,87 @@ def print_category_results(cat_name: str, results_df: pd.DataFrame):
             print(f"  │   [{row['rank']:2d}] {row['factor_name']:<25s} 得分={row['importance']:.3f}")
 
 
+def _prepare_window_data(
+    global_feature_cache,
+    all_factor_names: List[str],
+    train_start: str,
+    train_end: str,
+    label_expr: str,
+    label_name: str,
+    filter_new_stocks: bool = True,
+    filter_st: bool = True,
+) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    为单个滚动窗口准备训练数据：切片时间范围 → 合并标签 → 标准化 → 过滤。
+
+    返回: (x_train, y_train)
+    """
+    # 1. 从缓存切片特征数据
+    warehouse_df = global_feature_cache.warehouse_df.copy()
+    warehouse_df.columns = warehouse_df.columns.droplevel(0)
+    if isinstance(warehouse_df.index, pd.MultiIndex):
+        warehouse_df.index = warehouse_df.index.set_levels(
+            warehouse_df.index.levels[1].str.lower(), level=1
+        )
+
+    # 时间切片
+    start_ts = pd.Timestamp(train_start)
+    end_ts = pd.Timestamp(train_end)
+    warehouse_df = warehouse_df.loc[start_ts:end_ts]
+
+    # 2. 获取标签数据
+    label_raw = D.features(
+        global_feature_cache.resolved_instruments,
+        [label_expr],
+        train_start, train_end,
+    )
+    if label_raw.empty:
+        raise ValueError(f"标签 {label_expr} 在 {train_start}~{train_end} 为空")
+    if isinstance(label_raw.columns, pd.MultiIndex):
+        label_raw.columns = label_raw.columns.droplevel(1)
+    label_raw = label_raw.rename(columns={label_raw.columns[0]: label_name})
+    label_flat = label_raw.reset_index()
+    label_flat['instrument'] = label_flat['instrument'].str.lower()
+    label_flat = label_flat.set_index(['datetime', 'instrument']).sort_index()
+
+    # 3. 合并特征与标签
+    full_train_frame = warehouse_df.join(label_flat, how='inner')
+    before = len(full_train_frame)
+    full_train_frame = full_train_frame.dropna(subset=[label_name])
+
+    # 4. 后置过滤：ST / 次新股
+    if filter_new_stocks or filter_st:
+        full_train_frame = _filter_stocks_post(
+            full_train_frame,
+            filter_new_stocks=filter_new_stocks,
+            filter_st=filter_st,
+        )
+
+    # 5. 截面排名标准化 (CSRankNorm，等价于树模型的 CSQuantileNorm)
+    feature_cols = [c for c in full_train_frame.columns if c in all_factor_names]
+    x_raw = full_train_frame[feature_cols].copy()
+    x_norm = _apply_cs_rank_norm(x_raw)
+    y = full_train_frame[label_name].copy()
+
+    del warehouse_df, label_raw, label_flat, full_train_frame, x_raw
+    gc.collect()
+
+    return x_norm, y
+
+
 def main():
     factor_files = resolve_factor_files(CONFIG["factor_files"])
+    rolling_windows = CONFIG["rolling_windows"]
 
     print("=" * 60)
-    print("  精选因子筛选脚本 (性能优化版)")
-    print("  功能：按因子类别分组 → 独立特征选择 → 输出有效因子")
-    print("  优化：一次性数据准备，CSQuantileNorm 仅运行 1 次")
+    print("  精选因子筛选脚本 (滚动窗口版)")
+    print("  功能：按因子类别分组 → 滚动窗口独立特征选择 → 跨窗口聚合")
+    print("  改进：股票池与训练脚本对齐、动态过滤、ST/次新过滤、CSRankNorm")
     print("=" * 60)
+    print(f"  股票池: {CONFIG['instruments']}")
+    print(f"  动态过滤: {CONFIG['use_dynamic_filter']}")
+    print(f"  ST 过滤: {CONFIG['filter_st']}, 次新过滤: {CONFIG['filter_new_stocks']}")
+    print(f"  窗口数: {len(rolling_windows)}, 聚合阈值: {CONFIG['min_window_ratio']}")
 
     # 1. 初始化 Qlib
     print("\n[1] 初始化 Qlib 环境...")
@@ -398,132 +585,182 @@ def main():
         print(f"    {cat_name:<20s}: {len(factors):3d} 个因子")
     print(f"    {'总计':-<20s}: {sum(len(v) for v in categories.values()):3d} 个因子")
 
+    all_factor_names = [f["name"] for factors in categories.values() for f in factors]
+
     # ─────────────────────────────────────────────────────────────────────────
-    # 一次性构建全局因子包和特征缓存
+    # 一次性构建全局因子包和特征缓存（全时段覆盖所有窗口）
     # ─────────────────────────────────────────────────────────────────────────
     print(f"\n[4a] 构建全局因子包 (Global FeatureBundle)...")
-    global_bundle = build_global_bundle(categories)
+    global_bundle = build_global_bundle(categories, CONFIG["label_expr"], CONFIG["label_name"])
     print(f"    >>> 合并后共 {len(global_bundle.fields)} 个因子表达式")
 
-    print(f"\n[4b] 构建全局特征缓存 (Global Feature Cache)...")
+    full_start, full_end = _compute_window_full_period(rolling_windows)
+    print(f"\n[4b] 构建全局特征缓存 (覆盖 {full_start} ~ {full_end})...")
     global_feature_cache = build_custom_feature_cache(
         instruments=CONFIG["instruments"],
         feature_bundle=global_bundle,
         factor_cache_names=[],
-        start_time=CONFIG["start_time"],
-        end_time=CONFIG["end_time"],
+        start_time=full_start,
+        end_time=full_end,
+        use_dynamic_filter=CONFIG["use_dynamic_filter"],
     )
-    print(f"    >>> 全局缓存构建完成")
+    print(f"    >>> 全局缓存构建完成（动态过滤={'是' if CONFIG['use_dynamic_filter'] else '否'}）")
 
     # ─────────────────────────────────────────────────────────────────────────
-    # [Point72 核心优化] 从缓存读取原始数据，完全跳过 Qlib Processor 流水线
-    # 树模型不需要 CSQuantileNorm/ZScoreNorm，原始值直接输入 LightGBM
+    # 逐窗口运行因子筛选
     # ─────────────────────────────────────────────────────────────────────────
-    all_factor_names = [f["name"] for factors in categories.values() for f in factors]
-    print(f"\n[4c] 从全局缓存读取原始因子数据 ({len(all_factor_names)} 个因子)...")
-    print(f"    [注意] 跳过 CSQuantileNorm 处理（树模型无需特征归一化）")
+    # window_selections[category][factor_name] = [selected_in_w0, selected_in_w1, ...]
+    window_selections: Dict[str, Dict[str, List[bool]]] = {}
+    window_importances: Dict[str, Dict[str, List[float]]] = {}
+    window_details: List[pd.DataFrame] = []
 
-    # 获取原始特征数据（warehouse_df 列名为 ("feature", name) MultiIndex）
-    warehouse_df = global_feature_cache.warehouse_df.copy()
-    warehouse_df.columns = warehouse_df.columns.droplevel(0)  # 扁平化为列名
-    # 确保 index 标准化
-    if isinstance(warehouse_df.index, pd.MultiIndex):
-        warehouse_df.index = warehouse_df.index.set_levels(
-            warehouse_df.index.levels[1].str.lower(), level=1
-        )
+    for win_idx, window in enumerate(rolling_windows):
+        win_name = window["name"]
+        train_start, train_end = window["train"]
 
-    # 获取标签数据
-    print(f"    [标签] 表达式: {CONFIG['label_expr']}")
-    label_raw = D.features(
-        global_feature_cache.resolved_instruments,
-        [CONFIG["label_expr"]],
-        CONFIG["start_time"], CONFIG["end_time"],
-    )
-    if not label_raw.empty:
-        if isinstance(label_raw.columns, pd.MultiIndex):
-            label_raw.columns = label_raw.columns.droplevel(1)
-        label_raw = label_raw.rename(columns={label_raw.columns[0]: CONFIG["label_name"]})
-        # 对齐 index 格式
-        label_flat = label_raw.reset_index()
-        label_flat['instrument'] = label_flat['instrument'].str.lower()
-        label_flat = label_flat.set_index(['datetime', 'instrument']).sort_index()
-    else:
-        raise ValueError(f"标签 {CONFIG['label_expr']} 在 Qlib 中为空")
+        print(f"\n{'=' * 60}")
+        print(f"=== 窗口 {win_idx+1}/{len(rolling_windows)}: {win_name} ===")
+        print(f"    训练期: {train_start} ~ {train_end}")
+        print(f"{'=' * 60}")
 
-    # 合并特征与标签
-    print(f"    [合并] 特征和标签数据...")
-    full_train_frame = warehouse_df.join(label_flat, how='inner')
-    before = len(full_train_frame)
-    full_train_frame = full_train_frame.dropna(subset=[CONFIG["label_name"]])
-    print(f"    >>> 原始数据: {full_train_frame.shape[0]} 行 × {full_train_frame.shape[1]} 列（移除了 {before - len(full_train_frame)} 行无标签数据）")
-
-    # 拆分为 X, y
-    feature_cols = [c for c in full_train_frame.columns if c in all_factor_names]
-    x_train_all = full_train_frame[feature_cols].copy()
-    y_train_all = full_train_frame[CONFIG["label_name"]].copy()
-
-    print(f"    >>> 准备就绪: {x_train_all.shape[0]} 行, {x_train_all.shape[1]} 个特征")
-
-    # 释放内存
-    del warehouse_df, label_raw, label_flat, full_train_frame
-    gc.collect()
-
-    # 3. 逐类别进行特征选择
-    print(f"\n[5] 逐类别特征选择 (方法={CONFIG['method']}, 算法={CONFIG['algo']}, top_k={CONFIG['top_k']})...")
-    all_results = []
-    cat_index = 0
-
-    for cat_name, factors in sorted(categories.items()):
-        cat_index += 1
-        if len(factors) < CONFIG["min_factors"]:
-            print(f"\n  [{cat_index}/{len(categories)}] 类别 '{cat_name}' ({len(factors)} 个因子) — 跳过（因子数 < {CONFIG['min_factors']})")
-            rows = []
-            for f in factors:
-                rows.append({
-                    "category": cat_name, "factor_name": f["name"],
-                    "selected": True, "importance": 1.0, "rank": 1,
-                    "meaning": f["meaning"], "source_file": f["source_file"],
-                })
-            all_results.append(pd.DataFrame(rows))
+        # 准备该窗口的训练数据
+        print(f"\n[5.{win_idx+1}a - {win_name}] 准备训练数据...")
+        try:
+            x_train, y_train = _prepare_window_data(
+                global_feature_cache=global_feature_cache,
+                all_factor_names=all_factor_names,
+                train_start=train_start,
+                train_end=train_end,
+                label_expr=CONFIG["label_expr"],
+                label_name=CONFIG["label_name"],
+                filter_new_stocks=CONFIG["filter_new_stocks"],
+                filter_st=CONFIG["filter_st"],
+            )
+        except ValueError as e:
+            print(f"    [跳过] 窗口数据准备失败: {e}")
             continue
 
-        print(f"\n  >>> [{cat_index}/{len(categories)}] 类别: '{cat_name}' ({len(factors)} 个因子) <<<")
-        df = run_single_category_selection(
-            cat_name=cat_name,
-            factors=factors,
-            x_train=x_train_all,
-            y_train=y_train_all,
-            fs_method=CONFIG["method"],
-            fs_algo=CONFIG["algo"],
-            top_k=CONFIG["top_k"],
-            redundancy_check=CONFIG["redundancy_check"],
-            redundancy_threshold=CONFIG["redundancy_threshold"],
-            icir_stability=CONFIG["icir_stability"],
-            icir_rolling_window=CONFIG["icir_window"],
-            icir_keep_ratio=CONFIG["icir_keep_ratio"],
-        )
+        print(f"    >>> 准备就绪: {x_train.shape[0]} 行, {x_train.shape[1]} 个特征")
+        n_stocks = len(x_train.index.get_level_values("instrument").unique())
+        n_days = len(x_train.index.get_level_values("datetime").unique())
+        print(f"    >>> 股票数: {n_stocks}, 交易日: {n_days}")
 
-        if df is not None:
-            print_category_results(cat_name, df)
-            all_results.append(df)
-        else:
-            print(f"    [失败] 类别 '{cat_name}' 特征选择未完成")
+        # 逐类别进行特征选择
+        print(f"\n[5.{win_idx+1}b - {win_name}] 逐类别特征选择 (方法={CONFIG['method']}, 算法={CONFIG['algo']}, top_k={CONFIG['top_k']})...")
+        cat_index = 0
+        window_results = []
 
-    # 4. 汇总输出
+        for cat_name, factors in sorted(categories.items()):
+            cat_index += 1
+            if len(factors) < CONFIG["min_factors"]:
+                print(f"\n  [{cat_index}/{len(categories)}] 类别 '{cat_name}' ({len(factors)} 个因子) — 跳过（因子数 < {CONFIG['min_factors']})")
+                rows = []
+                for f in factors:
+                    rows.append({
+                        "category": cat_name, "factor_name": f["name"],
+                        "selected": True, "importance": 1.0, "rank": 1,
+                        "meaning": f["meaning"], "source_file": f["source_file"],
+                        "window": win_name,
+                    })
+                window_results.append(pd.DataFrame(rows))
+                continue
+
+            print(f"\n  >>> [{cat_index}/{len(categories)}] 类别: '{cat_name}' ({len(factors)} 个因子) <<<")
+            df = run_single_category_selection(
+                cat_name=cat_name,
+                factors=factors,
+                x_train=x_train,
+                y_train=y_train,
+                fs_method=CONFIG["method"],
+                fs_algo=CONFIG["algo"],
+                top_k=CONFIG["top_k"],
+                label_name=CONFIG["label_name"],
+                redundancy_check=CONFIG["redundancy_check"],
+                redundancy_threshold=CONFIG["redundancy_threshold"],
+                icir_stability=CONFIG["icir_stability"],
+                icir_rolling_window=CONFIG["icir_window"],
+                icir_keep_ratio=CONFIG["icir_keep_ratio"],
+            )
+
+            if df is not None:
+                df["window"] = win_name
+                print_category_results(cat_name, df)
+                window_results.append(df)
+            else:
+                print(f"    [失败] 类别 '{cat_name}' 特征选择未完成")
+
+        if window_results:
+            win_df = pd.concat(window_results, ignore_index=True)
+            window_details.append(win_df)
+
+            # 记录窗口选择结果
+            for _, row in win_df.iterrows():
+                cat = row["category"]
+                fname = row["factor_name"]
+                sel = row["selected"]
+                imp = row["importance"]
+
+                if cat not in window_selections:
+                    window_selections[cat] = {}
+                    window_importances[cat] = {}
+                if fname not in window_selections[cat]:
+                    window_selections[cat][fname] = []
+                    window_importances[cat][fname] = []
+                window_selections[cat][fname].append(sel)
+                window_importances[cat][fname].append(imp)
+
+        # 释放当前窗口内存
+        del x_train, y_train
+        gc.collect()
+
+    # 释放全局缓存
+    del global_feature_cache
+    gc.collect()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # 跨窗口聚合：因子在 >= min_window_ratio 的窗口中入选则最终选中
+    # ─────────────────────────────────────────────────────────────────────────
+    n_windows = len(window_details)
+    if n_windows == 0:
+        print("\n[错误] 没有任何窗口完成因子筛选")
+        sys.exit(1)
+
+    min_wins = max(1, int(n_windows * CONFIG["min_window_ratio"]))
     print(f"\n{'=' * 60}")
-    print("  筛选完成！汇总结果")
+    print(f"  跨窗口聚合（需要 >= {min_wins}/{n_windows} 窗口入选）")
     print(f"{'=' * 60}")
 
-    if not all_results:
-        print("[警告] 没有任何类别完成筛选")
-        sys.exit(0)
+    final_rows = []
+    for cat_name in sorted(categories.keys()):
+        cat_factors = categories[cat_name]
+        for f in cat_factors:
+            fname = f["name"]
+            sel_history = window_selections.get(cat_name, {}).get(fname, [])
+            imp_history = window_importances.get(cat_name, {}).get(fname, [])
 
-    final_df = pd.concat(all_results, ignore_index=True)
-    final_df = final_df.sort_values(["category", "rank"]).reset_index(drop=True)
+            n_selected = sum(sel_history) if sel_history else 0
+            avg_importance = float(np.mean(imp_history)) if imp_history else 0.0
+            final_selected = n_selected >= min_wins
+
+            final_rows.append({
+                "category": cat_name,
+                "factor_name": fname,
+                "selected": final_selected,
+                "importance": round(avg_importance, 4),
+                "n_windows_selected": n_selected,
+                "total_windows": n_windows,
+                "meaning": f.get("meaning", ""),
+                "source_file": f.get("source_file", ""),
+            })
+
+    final_df = pd.DataFrame(final_rows)
+    final_df = final_df.sort_values(["category", "selected", "importance"],
+                                     ascending=[True, False, False]).reset_index(drop=True)
 
     selected_total = final_df["selected"].sum()
     total = len(final_df)
     print(f"\n  总览: 共 {total} 个因子，选中 {selected_total} 个 ({selected_total/total*100:.1f}%)")
+    print(f"  聚合标准: 在 {min_wins}/{n_windows} 个窗口中入选")
 
     print(f"\n  {'类别':<20s} {'选中/总计':<12s} {'选中率':<8s}")
     print(f"  {'-'*40}")
@@ -531,7 +768,7 @@ def main():
         sub = final_df[final_df["category"] == cat_name]
         s = sub["selected"].sum()
         t = len(sub)
-        print(f"  {cat_name:<20s} {s}/{t:<8d} {s/t*100:>6.1f}%")
+        print(f"  {cat_name:<20s} {int(s)}/{t:<8d} {s/t*100:>6.1f}%")
 
     print(f"\n  各类别精选因子列表:")
     for cat_name in sorted(final_df["category"].unique()):
@@ -540,7 +777,10 @@ def main():
             continue
         print(f"\n  【{cat_name}】({len(sub)} 个)")
         for _, row in sub.iterrows():
-            print(f"    [x] {row['factor_name']:<30s} (重要性: {row['importance']:.3f}, 来源: {row['source_file']})")
+            print(f"    [x] {row['factor_name']:<30s} "
+                  f"(平均重要性: {row['importance']:.3f}, "
+                  f"入选窗口: {int(row['n_windows_selected'])}/{int(row['total_windows'])}, "
+                  f"来源: {row['source_file']})")
 
     # 保存 CSV
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -553,9 +793,17 @@ def main():
     selected_df.to_csv(selected_output, index=False, encoding="utf-8-sig")
     print(f"  精选因子列表已保存至: {selected_output}")
 
+    # 保存逐窗口明细
+    if window_details:
+        detail_df = pd.concat(window_details, ignore_index=True)
+        detail_output = output_path.replace(".csv", "_by_window.csv")
+        detail_df.to_csv(detail_output, index=False, encoding="utf-8-sig")
+        print(f"  逐窗口明细已保存至: {detail_output}")
+
     print("=" * 60)
-    print(f"  精选因子数: {selected_total}")
+    print(f"  精选因子数: {selected_total} (跨 {n_windows} 窗口聚合)")
     print(f"  训练模型: {CONFIG['algo']}")
+    print(f"  股票池: {CONFIG['instruments']}")
     print("=" * 60)
 
 

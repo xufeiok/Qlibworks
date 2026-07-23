@@ -66,7 +66,7 @@ class EnhancedQlibStrategy(bt.Strategy):
         take_profit_pct=1.0,        # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)
         
         # --- 市场冲击与容量限制 ---
-        volume_limit_pct=0.10,      # [Virtu 改进] 单笔订单不能超过当日成交量的10%，防止吃不掉流动性
+        volume_limit_pct=0.10,      # [Virtu 改进] 单笔订单不能超过20日均量的10%，防止吃不掉流动性
         rebalance_signal_weekday=1, # 调仓信号日，0=周一 ... 1=周二
         buy_weekday=2               # 买入执行日，0=周一 ... 2=周三
     )
@@ -79,6 +79,10 @@ class EnhancedQlibStrategy(bt.Strategy):
         # 记录每只股票的交易状态
         self.trade_states = {}
         
+        # 显式标记"正在平仓中"的股票（check_risk_control 下单后标记，订单完成/取消/拒绝后清除）
+        # 防止同一 bar 内 check_risk_control 和 rebalance 对同一只股重复下单
+        self._closing_stocks = set()
+
         # 为每个数据源计算 ATR
         self.atrs = {}
         if self.p.use_risk_control and self.p.stop_type == 'ATR':
@@ -93,6 +97,19 @@ class EnhancedQlibStrategy(bt.Strategy):
         # 两阶段调仓：周二仅记录需要补位的数量，周三再按当日分数实时选股买入。
         self.pending_buy_count = 0
         self.pending_buy_names = []
+        self._pending_orders = {}
+        self._pending_stop_adjustments = {}  # 止损价差调整队列
+
+    def _has_open_order(self, d):
+        target_name = getattr(d, '_name', None)
+        try:
+            for o in self.getorders_open():
+                odata = getattr(o, 'data', None)
+                if odata is not None and getattr(odata, '_name', None) == target_name:
+                    return True
+        except Exception:
+            return False
+        return False
 
     def _format_abnormal_order_log(self, order):
         """
@@ -239,58 +256,106 @@ class EnhancedQlibStrategy(bt.Strategy):
 
         import math
 
-        target_weight = self.p.buy_pct / self.p.top_k
         self.pending_buy_count = buy_count
         buy_candidates = self._select_pending_buy_candidates(buy_count)
-        self.pending_buy_names = [d._name for d in buy_candidates]
-        buy_names = []
-        for d in buy_candidates:
-            if self.getposition(d).size > 0:
-                continue
+        if not buy_candidates:
+            self.pending_buy_count = 0
+            self.pending_buy_names = []
+            self.log("周三补仓买入完成: 无候选股")
+            return
 
-            total_value = self.broker.getvalue()
-            if not math.isfinite(total_value):
-                self.log(f"  [严重警告] 账户总资金异常 ({total_value})，跳过补仓买入")
+        self.pending_buy_names = [d._name for d in buy_candidates]
+
+        # [修复 Margin] 预算按现金递减追踪，避免固定 target_weight 导致后几笔超支
+        total_cash = self.broker.getcash()
+        total_budget = total_cash * self.p.buy_pct
+        remaining_budget = total_budget
+        remaining_count = len(buy_candidates)
+        buy_names = []
+
+        for d in buy_candidates:
+            if self._has_open_order(d):
+                remaining_count -= 1
+                continue
+            if self.getposition(d).size > 0:
+                remaining_count -= 1
                 continue
 
             close_price = d.close[0]
             if close_price is None or not math.isfinite(close_price) or close_price <= 0.01:
                 self.log(f"  [跳过补仓] {d._name} 当日收盘价无效或过低 ({close_price})")
+                remaining_count -= 1
+                continue
+
+            # [风控] 涨停板不买入
+            _prev_close = d.close[-1]
+            if _prev_close is not None and math.isfinite(_prev_close) and _prev_close > 0.01:
+                _chg = close_price / _prev_close - 1
+                if _chg >= 0.0955:
+                    self.log(f"  [风控] {d._name} 涨停({_chg*100:.1f}%)，跳过补仓")
+                    remaining_count -= 1
+                    continue
+
+            # 剩余预算均分给剩余待买股票
+            budget_per_stock = remaining_budget / remaining_count if remaining_count > 0 else 0
+            if budget_per_stock < 100 * close_price:
+                self.log(f"  [跳过补仓] {d._name} 剩余预算不足 ({budget_per_stock:.2f} < 100股×{close_price:.2f})")
+                remaining_count -= 1
                 continue
 
             try:
-                target_shares = int((total_value * target_weight / close_price) // 100 * 100)
+                target_shares = int((budget_per_stock / close_price) // 100 * 100)
                 if not math.isfinite(target_shares) or target_shares > 1e9:
                     raise OverflowError("股数过大")
             except (ValueError, TypeError, OverflowError) as e:
                 self.log(f"  [跳过补仓] {d._name} 计算股数失败 - {e}")
+                remaining_count -= 1
                 continue
 
-            # [Virtu 改进] 成交量限制：确保订单量不超过当日成交量的 volume_limit_pct
-            daily_volume = d.volume[0]
+            # [Virtu 改进] 成交量限制：使用 SMA20 日均量替代当日量
+            # 当日成交量在回测中已知，但在实盘开盘时未知；SMA20 是更保守的流动性估计
+            if d in self.vol_smas:
+                sma_val = self.vol_smas[d][0]
+                daily_volume = sma_val if (sma_val is not None and math.isfinite(sma_val) and sma_val > 0) else d.volume[0]
+            else:
+                daily_volume = d.volume[0]
             if daily_volume is not None and math.isfinite(daily_volume) and daily_volume > 0:
                 max_shares_by_volume = int(daily_volume * self.p.volume_limit_pct // 100 * 100)
                 if max_shares_by_volume < 100:
                     self.log(f"  [跳过补仓] {d._name} 当日成交量过小 ({daily_volume})，无法满足 100 股最小单位")
+                    remaining_count -= 1
                     continue
                 if target_shares > max_shares_by_volume:
                     self.log(f"  [缩容买入] {d._name} 订单量 {target_shares} 超过成交量限制 {max_shares_by_volume}，缩容至 {max_shares_by_volume}")
                     target_shares = max_shares_by_volume
 
             if target_shares >= 100:
-                self.order_target_size(d, target=target_shares)
+                o = self.order_target_size(d, target=target_shares)
+                if o is not None:
+                    self._pending_orders[d] = o
+                order_cost = target_shares * close_price
+                remaining_budget -= order_cost
                 buy_names.append(d._name)
+                self.log(f"  [预算追踪] {d._name} 预计花费 {order_cost:.0f}, 剩余预算 {remaining_budget:.0f}")
+
+            remaining_count -= 1
 
         self.pending_buy_count = 0
         self.pending_buy_names = []
         if buy_names:
-            self.log(f"周三补仓买入完成: {buy_names}")
+            self.log(f"周三补仓买入完成: {buy_names} (使用预算 {total_budget - remaining_budget:.0f}/{total_budget:.0f})")
         else:
             self.log("周三补仓买入完成: 无有效买单")
 
     def notify_order(self, order):
         if order.status in [order.Submitted, order.Accepted]:
             return
+
+        d = getattr(order, "data", None)
+        if d is not None:
+            existing = self._pending_orders.get(d)
+            if existing is order:
+                del self._pending_orders[d]
             
         if order.status == order.Completed:
             d = order.data
@@ -329,18 +394,14 @@ class EnhancedQlibStrategy(bt.Strategy):
                         else:
                             stop_price = max(price * (1.0 - self.p.stop_loss_pct), 0.01)
                             
-                        # [Two Sigma & Virtu 改进] 发送真实的止损委托单到交易所（撮合引擎）
-                        # 确保日内极端行情下能被 Low 价格刺穿并及时成交，而不是等收盘
-                        stop_order = self.sell(data=d, size=size, exectype=bt.Order.Stop, price=stop_price)
-                        
                         self.trade_states[d] = {
                             'entry_price': price,
                             'max_high': price,
                             'stop_loss': stop_price,
-                            'stop_order': stop_order,
+                            'stop_order': None,
                             'tp_triggered': False,
                         }
-                        self.log(f"  [{d._name}] 建立风控追踪 | 真实止损单挂单价: {stop_price:.4f}")
+                        self.log(f"  [{d._name}] 建立风控追踪 | 止损价: {stop_price:.4f}")
                         
             elif order.issell():
                 self.log(self._format_completed_order_log(order))
@@ -360,12 +421,22 @@ class EnhancedQlibStrategy(bt.Strategy):
                 })
                 
                 # 如果平仓完了，移除追踪
+            # 止损价差调整：如果收盘价高于止损价，扣回超额部分
+            stock_name = d._name
+            if stock_name in self._pending_stop_adjustments:
+                adj = self._pending_stop_adjustments.pop(stock_name)
+                diff = (adj['close_price'] - adj['effective_price']) * adj['size']
+                if diff > 0 and order.status == order.Completed:
+                    self.broker.add_cash(-diff)
+                    self.log('  [止损罚金] ' + d._name + ' 扣除盘中收回价差 ' + format(diff, '.2f'))
                 if self.getposition(d).size == 0:
                     if d in self.trade_states:
                         del self.trade_states[d]
-                        
+                    self._closing_stocks.discard(d._name)
         elif order.status in [order.Canceled, order.Margin, order.Rejected]:
             self.log(self._format_abnormal_order_log(order))
+            if order.issell() and d is not None:
+                self._closing_stocks.discard(d._name)
 
     def next(self):
         # 1. 每日风控检查 (止盈止损)
@@ -422,6 +493,22 @@ class EnhancedQlibStrategy(bt.Strategy):
                 # 所以我们不再需要在 next() 的收盘后手动触发止损。
                 # 但我们需要更新移动止盈/追踪止损的订单。
                     
+                low_price = d.low[0]
+                if low_price is not None and low_price == low_price and low_price <= state['stop_loss']:
+                    if self._has_open_order(d):
+                        continue
+                    current_pos = self.getposition(d).size
+                    if current_pos <= 0:
+                        del self.trade_states[d]
+                        continue
+                    o = self.close(d)
+                    if o is not None:
+                        self._pending_orders[d] = o
+                        self._closing_stocks.add(d._name)
+                    self.log(f"!!! [{d._name}] 触发止损 !!! low {low_price:.4f} <= {state['stop_loss']:.4f}")
+                    del self.trade_states[d]
+                    continue
+                    
                 # 检查移动止盈
                 if self.p.trailing_stop:
                     current_profit_pct = (current_price - state['entry_price']) / state['entry_price']
@@ -430,18 +517,34 @@ class EnhancedQlibStrategy(bt.Strategy):
                     if current_profit_pct > self.p.trailing_start_pct and current_pullback > self.p.trailing_callback_pct:
                         if not state['tp_triggered']:
                             sell_size = pos.size * self.p.take_profit_pct
+                            current_pos = self.getposition(d).size
+                            if current_pos <= 0:
+                                del self.trade_states[d]
+                                continue
                             if self.p.take_profit_pct >= 1.0:
                                 # 取消原来的止损单
                                 if state.get('stop_order'):
                                     self.cancel(state['stop_order'])
-                                self.close(d)
+                                o = self.close(d)
+                                if o is not None:
+                                    self._pending_orders[d] = o
+                                    self._closing_stocks.add(d._name)
                                 self.log(f"!!! [{d._name}] 触发100%止盈 !!! 当前价 {current_price:.4f} (回撤 {current_pullback*100:.1f}%)")
                                 del self.trade_states[d]
                                 continue
                             else:
+                                if self._has_open_order(d):
+                                    continue
+                                current_pos = self.getposition(d).size
+                                if current_pos <= 0:
+                                    continue
                                 if state.get('stop_order'):
                                     self.cancel(state['stop_order'])
-                                self.sell(data=d, size=sell_size)
+                                actual_sell = min(sell_size, current_pos)
+                                o = self.sell(data=d, size=actual_sell)
+                                if o is not None:
+                                    self._pending_orders[d] = o
+                                    self._closing_stocks.add(d._name)
                                 state['tp_triggered'] = True
                                 # 重置止损为保本或更紧的ATR垫
                                 if self.p.stop_type == 'ATR':
@@ -490,9 +593,30 @@ class EnhancedQlibStrategy(bt.Strategy):
         to_sell, buy_count = self._plan_rebalance_actions(top_k_feeds)
 
         for d in to_sell:
+            if d._name in self._closing_stocks:
+                self.log(f"  [跳过卖出] {d._name} 正在平仓中（风控已触发），跳过 rebalance 卖单")
+                if d in self.trade_states:
+                    del self.trade_states[d]
+                continue
+            if self._has_open_order(d):
+                self.log(f"  [跳过卖出] {d._name} 存在未完成委托，跳过")
+                continue
             if d in self.trade_states and self.trade_states[d].get('stop_order'):
                 self.cancel(self.trade_states[d]['stop_order'])
-            self.close(d)
+            current_pos = self.getposition(d).size
+            if current_pos <= 0:
+                self.log(f"  [跳过卖出] {d._name} 当前无持仓 ({current_pos})")
+                if d in self.trade_states:
+                    del self.trade_states[d]
+                continue
+            # [风控] 跌停板不卖出（无法成交）
+            _chg = d.close[0] / d.close[-1] - 1 if d.close[-1] > 0 else 0
+            if _chg <= -0.0955:
+                self.log(f"  [风控] {d._name} 跌停({_chg*100:.1f}%)，暂缓平仓")
+                continue
+            o = self.close(d)
+            if o is not None:
+                self._pending_orders[d] = o
             self.log(f"调仓卖出: {d._name}")
 
         self._queue_pending_buys(buy_count)

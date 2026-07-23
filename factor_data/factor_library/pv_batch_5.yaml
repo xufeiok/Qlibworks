@@ -1,0 +1,742 @@
+name: pv_batch_5
+version: '2.0'
+strategy_type: 价量因子batch_5
+description: 'batch_5: Alpha系列+动量/反转/技术 50 个因子'
+factors:
+- name: Alpha3
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum(If($close == Ref($close,1), 0, If($close > Ref($close,1), $close - Less($low,
+      Ref($close,1)), $close - Greater($high, Ref($close,1)))), 6)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM((CLOSE=DELAY(CLOSE,1)?0:CLOSE-(CLOSE>DELAY(CLOSE,1)?MIN(LOW,DELAY(CLOSE,1)):MAX(HIGH,DELAY(CLOSE,1)))),6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha3 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha4
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If((((Sum($close,8)/8)+Std($close,8))<(Sum($close,2)/2)), (-1*1), If(((Sum($close,2)/2)<((Sum($close,8)/8)-Std($close,8))),
+      1, If(((1<($volume/Mean($volume,20))) | (($volume/Mean($volume,20))==1)), 1,
+      (-1*1))))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    ((((SUM(CLOSE,8)/8)+STD(CLOSE,8))<(SUM(CLOSE,2)/2))?(-1*1):(((SUM(CLOSE,2)/2)<((SUM(CLOSE,8)/8)-STD(CLOSE,8)))?1:(((1<(VOLUME/MEAN(VOLUME,20)))||((VOLUME/MEAN(VOLUME,20))==1))?1:(-1*1))))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha4 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha11
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Sum((($close-$low)-($high-$close))/($high-$low)*$volume,6))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (SUM(((CLOSE-LOW)-(HIGH-CLOSE))./(HIGH-LOW).*VOLUME,6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha11 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha14
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $close-Ref($close,5)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    CLOSE-DELAY(CLOSE,5)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha14 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha15
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $open/Ref($close,1)-1
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    OPEN/DELAY(CLOSE,1)-1
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha15 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha18
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $close/Ref($close,5)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    CLOSE/DELAY(CLOSE,5)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha18 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha19
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If($close<Ref($close,5), ($close-Ref($close,5))/Ref($close,5), If($close==Ref($close,5),
+      0, ($close-Ref($close,5))/$close))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE<DELAY(CLOSE,5)?(CLOSE-DELAY(CLOSE,5))/DELAY(CLOSE,5):(CLOSE=DELAY(CLOSE,5)?0:(CLOSE-DELAY(CLOSE,5))/CLOSE))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha19 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha20
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,6))/Ref($close,6)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,6))/DELAY(CLOSE,6)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha20 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha29
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,6))/Ref($close,6)*$volume
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,6))/DELAY(CLOSE,6)*VOLUME
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha29 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha31
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Mean($close,12))/Mean($close,12)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    LOSE-MEAN(CLOSE,12))/MEAN(CLOSE,12)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha31 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha34
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Mean($close,12)/$close
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    MEAN(CLOSE,12)/CLOSE
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha34 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha38
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If(((Sum($high,20)/20)<$high), (-1*Delta($high,2)), 0)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (((SUM(HIGH,20)/20)<HIGH)?(-1*DELTA(HIGH,2)):0)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha38 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha40
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum(If($close>Ref($close,1), $volume, 0),26)/Sum(If($close<=Ref($close,1),
+      $volume, 0),26)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM((CLOSE>DELAY(CLOSE,1)?VOLUME:0),26)/SUM((CLOSE<=DELAY(CLOSE,1)?VOLUME:0),26)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha40 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha46
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Mean($close,3)+Mean($close,6)+Mean($close,12)+Mean($close,24))/(4*$close)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (MEAN(CLOSE,3)+MEAN(CLOSE,6)+MEAN(CLOSE,12)+MEAN(CLOSE,24))/(4*CLOSE)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha46 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha53
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Count($close>Ref($close,1),12)/12*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    COUNT(CLOSE>DELAY(CLOSE,1),12)/12*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha53 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha58
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Count($close>Ref($close,1),20)/20*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    COUNT(CLOSE>DELAY(CLOSE,1),20)/20*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha58 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha65
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Mean($close,6)/$close
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    MEAN(CLOSE,6)/CLOSE
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha65 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha66
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Mean($close,6))/Mean($close,6)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-MEAN(CLOSE,6))/MEAN(CLOSE,6)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha66 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha70
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Std($amount,6)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    STD(AMOUNT,6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha70 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha71
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Mean($close,24))/Mean($close,24)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-MEAN(CLOSE,24))/MEAN(CLOSE,24)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha71 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha75
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Count($close<$open,50)/Count($close<$open,50)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    BANCHMARKINDEXCLOSE<BANCHMARKINDEXOPEN,50)/COUNT(BANCHMARKINDEXCLOSE<BANCHMARKIN
+    DEXOPEN,50)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha75 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha76
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Std(Abs(($close/Ref($close,1)-1))/$volume,20)/Mean(Abs(($close/Ref($close,1)-1))/$volume,20)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    STD(ABS((CLOSE/DELAY(CLOSE,1)-1))/VOLUME,20)/MEAN(ABS((CLOSE/DELAY(CLOSE,1)-1))/VOLUME,20)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha76 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha80
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($volume-Ref($volume,5))/Ref($volume,5)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (VOLUME-DELAY(VOLUME,5))/DELAY(VOLUME,5)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha80 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha86
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If((0.25<(((Ref($close,20)-Ref($close,10))/10)-((Ref($close,10)-$close)/10))),
+      (-1*1), If(((((Ref($close,20)-Ref($close,10))/10)-((Ref($close,10)-$close)/10))<0),
+      1, ((-1*1)*($close-Ref($close,1)))))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    ((0.25<(((DELAY(CLOSE,20)-DELAY(CLOSE,10))/10)-((DELAY(CLOSE,10)-CLOSE)/10)))?(-1*1):(((((DELAY(CLOSE,20)-DELAY(CLOSE,10))/10)-((DELAY(CLOSE,10)-CLOSE)/10))\<0)?1:((-1*1)*(CLOSE-DELAY(CLOSE,1)))))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha86 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha88
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,20))/Ref($close,20)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,20))/DELAY(CLOSE,20)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha88 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha95
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Std($amount,20)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    STD(AMOUNT,20)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha95 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha97
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Std($volume,10)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    STD(VOLUME,10)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha97 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha100
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Std($volume,20)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    STD(VOLUME,20)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha100 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha106
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $close-Ref($close,20)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    CLOSE-DELAY(CLOSE,20)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha106 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha112
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Sum(If($close-Ref($close,1)>0, $close-Ref($close,1), 0),12)-Sum(If($close-Ref($close,1)<0,
+      Abs($close-Ref($close,1)), 0),12))/(Sum(If($close-Ref($close,1)>0, $close-Ref($close,1),
+      0),12)+Sum(If($close-Ref($close,1)<0, Abs($close-Ref($close,1)), 0),12))*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (SUM((CLOSE-DELAY(CLOSE,1)>0?CLOSE-DELAY(CLOSE,1):0),12)-SUM((CLOSE-DELAY(CLOSE,1)\<0?ABS(CLOS
+    E-DELAY(CLOSE,1)):0),12))/(SUM((CLOSE-DELAY(CLOSE,1)>0?CLOSE-DELAY(CLOSE,1):0),12)+SUM((CLOSE-DE
+    LAY(CLOSE,1)\<0?ABS(CLOSE-DELAY(CLOSE,1)):0),12))*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha112 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha118
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum($high-$open,20)/Sum($open-$low,20)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM(HIGH-OPEN,20)/SUM(OPEN-LOW,20)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha118 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha126
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close+$high+$low)/3
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE+HIGH+LOW)/3
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha126 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha128
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: 100-(100/(1+Sum(If(($high+$low+$close)/3>Ref(($high+$low+$close)/3,1), ($high+$low+$close)/3*$volume,
+      0),14)/Sum(If(($high+$low+$close)/3<Ref(($high+$low+$close)/3,1), ($high+$low+$close)/3*$volume,
+      0),14)))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    100-(100/(1+SUM(((HIGH+LOW+CLOSE)/3>DELAY((HIGH+LOW+CLOSE)/3,1)?(HIGH+LOW+CLOSE)/3*VOLUM
+    E:0),14)/SUM(((HIGH+LOW+CLOSE)/3\
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha128 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha129
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum(If($close-Ref($close,1)<0, Abs($close-Ref($close,1)), 0),12)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM((CLOSE-DELAY(CLOSE,1)\<0?ABS(CLOSE-DELAY(CLOSE,1)):0),12)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha129 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha132
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Mean($amount,20)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    MEAN(AMOUNT,20)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha132 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha134
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,12))/Ref($close,12)*$volume
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,12))/DELAY(CLOSE,12)*VOLUME
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha134 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha139
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (-1*Corr($open,$volume,10))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (-1*CORR(OPEN,VOLUME,10))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha139 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha145
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Mean($volume,9)-Mean($volume,26))/Mean($volume,12)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (MEAN(VOLUME,9)-MEAN(VOLUME,26))/MEAN(VOLUME,12)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha145 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha150
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close+$high+$low)/3*$volume
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE+HIGH+LOW)/3*VOLUME
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha150 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha153
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Mean($close,3)+Mean($close,6)+Mean($close,12)+Mean($close,24))/4
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (MEAN(CLOSE,3)+MEAN(CLOSE,6)+MEAN(CLOSE,12)+MEAN(CLOSE,24))/4
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha153 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha167
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum(If($close-Ref($close,1)>0, $close-Ref($close,1), 0),12)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM((CLOSE-DELAY(CLOSE,1)>0?CLOSE-DELAY(CLOSE,1):0),12
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha167 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha168
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (-1*$volume/Mean($volume,20))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (-1*VOLUME/MEAN(VOLUME,20))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha168 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha178
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,1))/Ref($close,1)*$volume
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,1))/DELAY(CLOSE,1)*VOLUME
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha178 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha189
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Mean(Abs($close-Mean($close,6)),6)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    MEAN(ABS(CLOSE-MEAN(CLOSE,6)),6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha189 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha191
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ((Corr(Mean($volume,20),$low,5)+(($high+$low)/2))-$close)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    ((CORR(MEAN(VOLUME,20),LOW,5)+((HIGH+LOW)/2))-CLOSE)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha191 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: momentum_1m
+  category: 动量与反转
+  expression:
+    qlib: ($close - Ref($close, 20)) / Ref($close, 20)
+    duckdb: (close - lag(close, 20) over (partition by ts_code order by trade_date))
+      / lag(close, 20) over (partition by ts_code order by trade_date)
+  meaning: 过去20个交易日的收益率（月度动量）。
+  usage_scenario: 适合中高频选股策略。A股存在短期的反转效应和中长期的动量效应。
+  strategy_hint: 通常与基本面因子结合，作为趋势跟随策略的核心因子。
+- name: ma_cross_5_20
+  category: 技术面
+  expression:
+    qlib: Mean($close, 5) / Mean($close, 20) - 1
+    duckdb: (avg(close) over (partition by ts_code order by trade_date rows between
+      4 preceding and current row)) / (avg(close) over (partition by ts_code order
+      by trade_date rows between 19 preceding and current row)) - 1
+  meaning: 5日均线与20日均线的偏离度（双均线交叉代理）。
+  usage_scenario: 捕捉中短期趋势的启动点或衡量趋势的强度。
+  strategy_hint: 经典 CTA 策略因子，也可用于股票多头策略的择时过滤。
+- name: short_reversal
+  category: 反转
+  expression:
+    qlib: ($close - Ref($close, 5)) / Ref($close, 5)
+    duckdb: (close - lag(close, 5) over (partition by ts_code order by trade_date))
+      / lag(close, 5) over (partition by ts_code order by trade_date)
+  meaning: 5日收益率。周频核心反转因子，通常与下周收益呈负相关（跌得多的容易反弹）。
+  usage_scenario: 周频调仓模型、超跌反弹策略。
+  strategy_hint: 负向因子（需取反或作为排序的倒序指标），适合在宽幅震荡市捕捉短期超跌标的。
+- name: volume_surge
+  category: 流动性
+  expression:
+    qlib: Mean($volume, 5) / Mean($volume, 60)
+    duckdb: (avg(vol) over (partition by ts_code order by trade_date rows between
+      4 preceding and current row)) / (avg(vol) over (partition by ts_code order by
+      trade_date rows between 59 preceding and current row))
+  meaning: 5日均量除以60日均量。捕捉近期资金温和活跃的标的，避免买入死水股。
+  usage_scenario: 量价配合策略，验证价格反弹的有效性。
+  strategy_hint: 正向因子，反转必须有资金配合，但要避免极端放量（如单日换手过高）。
+- name: long_momentum
+  category: 动量
+  expression:
+    qlib: ($close - Ref($close, 60)) / Ref($close, 60)
+    duckdb: (close - lag(close, 60) over (partition by ts_code order by trade_date))
+      / lag(close, 60) over (partition by ts_code order by trade_date)
+  meaning: 60日收益率。中期动量因子，筛选出中期处于上升通道的股票。
+  usage_scenario: 趋势跟随策略的基础池筛选。
+  strategy_hint: 正向因子，大前提是股票处于中期上升趋势中，然后再利用短期反转寻找上车点。

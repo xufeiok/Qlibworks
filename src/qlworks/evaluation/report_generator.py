@@ -17,13 +17,11 @@ from plotly.subplots import make_subplots
 
 
 def _load_plotly_js() -> str:
-    """从本地 Plotly 包中读取 plotly.min.js，用于内嵌到 HTML 实现离线查看。"""
-    import plotly as _pl
-    _js_path = Path(_pl.__file__).parent / "package_data" / "plotly.min.js"
-    if _js_path.exists():
-        return _js_path.read_text(encoding="utf-8")
-    # fallback: 尝试从 CDN 加载（已安装 plotly 时不应走到这里）
-    return '<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>'
+    """使用 CDN 加载 Plotly.js，避免 3MB 内联脚本导致 IDE 预览卡死。
+
+    使用 cdn.bootcdn.net（国内可用）替代 cdn.plot.ly（国内被墙）。
+    """
+    return '<script src="https://cdn.bootcdn.net/ajax/libs/plotly.js/2.27.0/plotly.min.js"></script>'
 
 
 class FactorReportGenerator:
@@ -60,7 +58,11 @@ class FactorReportGenerator:
             return str(val)
 
     def _ic_plot(self, ic_series: pd.Series) -> str:
-        """IC 时间序列 + 累计 IC 图。"""
+        """IC 时间序列（柱状图）+ 累计 IC（折线图）。
+
+        始终使用 Bar 展示每日 IC，确保围绕 0 轴分布可见。
+        所有 numpy 数组显式转为 Python list，避免 Plotly 6.5.0 的二进制序列化。
+        """
         fig = make_subplots(
             rows=2, cols=1,
             shared_xaxes=True,
@@ -71,17 +73,20 @@ class FactorReportGenerator:
         dates = ic_series.index
         if hasattr(dates, "str"):
             dates = [str(d)[:10] for d in dates]
+        vals = ic_series.values.tolist()  # numpy → list
 
+        # 始终使用 Bar，密集时自动压缩柱宽
+        colors = ["red" if v > 0 else "green" for v in vals]
         fig.add_trace(
-            go.Bar(x=dates, y=ic_series.values, name="IC",
-                   marker_color=["red" if v > 0 else "green" for v in ic_series.values]),
+            go.Bar(x=dates, y=vals, name="IC",
+                   marker_color=colors, marker_line_width=0),
             row=1, col=1,
         )
         fig.add_hline(y=0, line_dash="dash", line_color="gray", row=1, col=1)
 
-        cumic = ic_series.cumsum()
+        cumic = ic_series.cumsum().values.tolist()  # numpy → list
         fig.add_trace(
-            go.Scatter(x=dates, y=cumic.values, mode="lines",
+            go.Scatter(x=dates, y=cumic, mode="lines",
                        name="累计 IC", line=dict(color="navy", width=2)),
             row=2, col=1,
         )
@@ -141,7 +146,7 @@ class FactorReportGenerator:
             dates = [str(d)[:10] for d in dates]
 
         fig.add_trace(go.Scatter(
-            x=dates, y=cum_series.values, mode="lines",
+            x=dates, y=cum_series.values.tolist(), mode="lines",  # numpy→list
             name="多空净值", line=dict(color="darkorange", width=2),
             fill="tozeroy", fillcolor="rgba(255,165,0,0.1)",
         ))
@@ -169,11 +174,20 @@ class FactorReportGenerator:
 
     def _ic_dist_plot(self, ic_series: pd.Series) -> str:
         """IC 分布直方图。"""
+        import math as _m
+        vals = [v for v in ic_series.values if not (isinstance(v, float) and (_m.isnan(v) or _m.isinf(v)))]
         fig = go.Figure()
-        fig.add_trace(go.Histogram(
-            x=ic_series.values, nbinsx=40,
-            marker_color="steelblue", opacity=0.75,
-        ))
+        if not vals:
+            fig.add_annotation(
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                text="IC 数据全部为 NaN/Inf，无法绘制分布图",
+                showarrow=False, font=dict(size=14, color="#94a3b8"),
+            )
+        else:
+            fig.add_trace(go.Histogram(
+                x=vals, nbinsx=40,
+                marker_color="steelblue", opacity=0.75,
+            ))
         fig.add_vline(x=0, line_dash="dash", line_color="red")
         fig.update_layout(
             title="IC 分布",
@@ -234,24 +248,57 @@ class FactorReportGenerator:
         return fig.to_html(include_plotlyjs=False, full_html=False)
 
     def _decay_plot(self, decay_df: pd.DataFrame) -> str:
-        """IC 衰减折线图。"""
+        """IC 衰减折线图。
+
+        如果所有 IC 值都接近 0，会自动调整 y 轴范围使其可见。
+        如果数据完全无效，显示提示文本。
+        """
+        import math as _m
+        x = decay_df['horizon'].values
+        ic_mean = [0.0 if (isinstance(v, float) and (_m.isnan(v) or _m.isinf(v))) else float(v) for v in decay_df['ic_mean'].values]
+        icir = [0.0 if (isinstance(v, float) and (_m.isnan(v) or _m.isinf(v))) else float(v) for v in decay_df['icir'].values]
+
         fig = go.Figure()
+
+        # 检查是否所有 IC 均为 0
+        all_zero = all(abs(v) < 1e-10 for v in ic_mean) and all(abs(v) < 1e-10 for v in icir)
+        if all_zero:
+            fig.add_annotation(
+                xref="paper", yref="paper", x=0.5, y=0.5,
+                text="IC 衰减数据全部为 0（可能因持有期标签导致各 horizon IC 均失效）",
+                showarrow=False, font=dict(size=14, color="#94a3b8"),
+            )
+
         fig.add_trace(go.Scatter(
-            x=decay_df['horizon'].values, y=decay_df['ic_mean'].values,
+            x=x.tolist(), y=ic_mean,  # numpy→list
             mode='lines+markers', name='IC 均值',
             line=dict(color='#8b5cf6', width=2), marker=dict(size=8),
         ))
         fig.add_trace(go.Scatter(
-            x=decay_df['horizon'].values, y=decay_df['icir'].values,
+            x=x.tolist(), y=icir,  # numpy→list
             mode='lines+markers', name='ICIR',
             line=dict(color='#f97316', width=2, dash='dash'), marker=dict(size=8),
             yaxis='y2',
         ))
+
+        # 强制 y 轴包含数据范围
+        y1_min, y1_max = min(ic_mean), max(ic_mean)
+        y2_min, y2_max = min(icir), max(icir)
+        if not all_zero:
+            y1_pad = max(abs(y1_max - y1_min) * 0.2, 0.001) if y1_max != y1_min else 0.001
+            y2_pad = max(abs(y2_max - y2_min) * 0.2, 0.001) if y2_max != y2_min else 0.001
+            y1_range = [y1_min - y1_pad, y1_max + y1_pad]
+            y2_range = [y2_min - y2_pad, y2_max + y2_pad]
+        else:
+            y1_range = [-0.01, 0.01]
+            y2_range = [-0.01, 0.01]
+
         fig.update_layout(
             title='IC 衰减分析',
             xaxis_title='预测期（天）',
-            yaxis=dict(title='IC 均值'),
-            yaxis2=dict(title='ICIR', overlaying='y', side='right'),
+            xaxis=dict(tickmode='array', tickvals=x.tolist()),
+            yaxis=dict(title='IC 均值', range=y1_range),
+            yaxis2=dict(title='ICIR', overlaying='y', side='right', range=y2_range),
             height=350, margin=dict(l=40, r=40, t=40, b=40),
             legend=dict(x=0.02, y=0.98),
         )
@@ -285,6 +332,7 @@ class FactorReportGenerator:
             marker_color='#10b981',
             text=safe_texts,
             textposition='outside',
+            width=0.5,
         ))
         fig.update_layout(
             title='不同调仓周期的多空收益',
@@ -297,42 +345,70 @@ class FactorReportGenerator:
         """分层净值曲线：显示全部 10 条分位组的累计净值。
 
         这是判断因子是否「长期分化」、「阶段性失效」的核心图表。
-        G1（因子最小）→ 红色渐变，G10（因子最大）→ 绿色渐变。
+        G1（因子最小）→ 橙色/红，G10（因子最大）→ 蓝/紫。
+
+        如果分组数 < 2 或各组净值完全相同，显示提示信息。
         """
         if decile_nav.empty:
             return ''
+
+        n_groups = len(decile_nav.columns)
+        if n_groups < 2:
+            return f'<div style="padding:20px;text-align:center;color:#94a3b8;">分层组数不足 ({n_groups} 组)，无法绘制净值曲线</div>'
+
         fig = go.Figure()
 
-        # 使用从红→橙→黄→绿的易区分渐变, G1~G10 顺序
+        # 日期索引转字符串（numpy → list）
+        dates = decile_nav.index
+        if hasattr(dates, "str"):
+            dates = [str(d)[:10] for d in dates]
+        else:
+            dates = list(dates)
+
+        # 10 种高区分度颜色
         colors = ['#d32f2f', '#f57c00', '#fbc02d', '#7cb342', '#388e3c',
                   '#1976d2', '#1565c0', '#6a1b9a', '#c2185b', '#e91e63']
+
+        # 检查是否所有组终值几乎相同
+        final_vals = decile_nav.iloc[-1].values
+        val_range = float(final_vals.max() - final_vals.min())
+
+        # 收集各组 y 数据为 Python list，避免 Plotly 二进制序列化
+        y_data = {}
+        for col in decile_nav.columns:
+            y_data[col] = decile_nav[col].values.tolist()
+
         for i, col in enumerate(decile_nav.columns):
-            is_top = (i >= len(decile_nav.columns) - 2)
+            is_top = (i >= n_groups - 2)
             is_bottom = (i <= 1)
             fig.add_trace(go.Scatter(
-                x=decile_nav.index,
-                y=decile_nav[col].values,
+                x=dates,
+                y=y_data[col],  # Python list
                 mode='lines',
                 name=col,
-                line=dict(color=colors[i % len(colors)], width=3 if is_top or is_bottom else 1.2),
-                opacity=0.9 if is_top or is_bottom else 0.6,
+                line=dict(color=colors[i % len(colors)], width=3 if is_top or is_bottom else 1.5),
+                opacity=0.95 if is_top or is_bottom else 0.7,
             ))
 
-        # 标注各组的最终值（右末端标注）
-        last_idx = decile_nav.index[-1]
+        # 标注首尾两组的终值
+        last_date = dates[-1]
         for i, col in enumerate(decile_nav.columns):
-            is_top = (i >= len(decile_nav.columns) - 2)
-            is_bottom = (i <= 1)
-            if is_top or is_bottom:
+            if i == 0 or i == n_groups - 1:
+                val = float(decile_nav[col].iloc[-1])
                 fig.add_annotation(
-                    x=last_idx, y=decile_nav[col].iloc[-1],
-                    text=f"{col} ({decile_nav[col].iloc[-1]:.3f})",
+                    x=last_date, y=val,
+                    text=f"{col}={val:.3f}",
                     showarrow=False, xanchor='left',
                     font=dict(size=10, color=colors[i], weight='bold'),
                 )
 
+        # 如果终值差异极小，添加说明
+        note = ''
+        if val_range < 0.01:
+            note = ' [⚠ 各组终值差异极小，因子分层效果微弱]'
+
         fig.update_layout(
-            title='分层净值曲线（十分位组累计净值，G1=最小  G10=最大）',
+            title=f'分层净值曲线（十分位组累计净值，G1=最小  G10=最大）{note}',
             xaxis_title='日期', yaxis_title='累计净值',
             height=480, margin=dict(l=40, r=140, t=40, b=60),
             legend=dict(orientation='v', x=1.02, y=1, xanchor='left', yanchor='top',
@@ -346,26 +422,36 @@ class FactorReportGenerator:
     # ── 场景压力测试图表 ──
 
     def _market_cap_ic_plot(self, df: pd.DataFrame) -> str:
-        """分市值 IC 柱状图。"""
+        """分市值 IC 柱状图：按市值分组（大/中/小盘），每个指标一张子图。"""
         if df.empty:
             return ''
-        fig = go.Figure()
+        metrics = [
+            ('ic_mean', 'IC 均值'),
+            ('icir', 'ICIR'),
+            ('ls_ann_ret', '多空年化%'),
+            ('ls_sharpe', '夏普'),
+        ]
+        fig = make_subplots(rows=1, cols=4, subplot_titles=[m[1] for m in metrics])
         colors = ['#3b82f6', '#f59e0b', '#ef4444']
-        for i, (_, row) in enumerate(df.iterrows()):
+        for col_idx, (metric, _) in enumerate(metrics, 1):
+            import math as _m
+            vals = []
+            for v in df[metric].values:
+                if isinstance(v, float) and (_m.isnan(v) or _m.isinf(v)):
+                    vals.append(0.0)
+                else:
+                    vals.append(float(v))
             fig.add_trace(go.Bar(
-                name=row['bucket'],
-                x=['IC 均值', 'ICIR', '多空年化%', '夏普'],
-                y=[row.get('ic_mean', 0) * 100, row.get('icir', 0),
-                   row.get('ls_ann_ret', 0), row.get('ls_sharpe', 0)],
-                marker_color=colors[i % len(colors)],
-                text=[f'{v:.3f}' for v in [row.get('ic_mean', 0) * 100, row.get('icir', 0),
-                      row.get('ls_ann_ret', 0), row.get('ls_sharpe', 0)]],
+                x=df['bucket'].values.tolist(),
+                y=vals,
+                marker_color=colors[:len(df)],
+                text=[f'{v:.4f}' for v in vals],
                 textposition='outside',
-            ))
+            ), row=1, col=col_idx)
         fig.update_layout(
             title='分市值检验（大/中/小盘）',
-            barmode='group',
             height=350, margin=dict(l=40, r=40, t=40, b=40),
+            showlegend=False,
         )
         return fig.to_html(include_plotlyjs=False, full_html=False)
 
@@ -373,6 +459,7 @@ class FactorReportGenerator:
         """牛熊分段 IC 柱状图。"""
         if df.empty:
             return ''
+        import math as _m
         regime_order = ['牛市', '震荡', '熊市']
         df_plot = df.copy()
         df_plot['regime_order'] = df_plot['regime'].apply(lambda x: regime_order.index(x) if x in regime_order else 99)
@@ -380,10 +467,11 @@ class FactorReportGenerator:
         fig = make_subplots(rows=1, cols=3, subplot_titles=('IC 均值', 'ICIR', '多空年化收益 (%)'))
         for col_idx, metric in enumerate(['ic_mean', 'icir', 'ls_ann_ret'], 1):
             colors = ['#22c55e' if r == '牛市' else '#f97316' if r == '震荡' else '#ef4444' for r in df_plot['regime']]
+            vals = [0.0 if (isinstance(v, float) and (_m.isnan(v) or _m.isinf(v))) else float(v) for v in df_plot[metric].values]
             fig.add_trace(go.Bar(
-                x=df_plot['regime'], y=df_plot[metric].values,
+                x=list(df_plot['regime']), y=vals,  # numpy→list
                 marker_color=colors,
-                text=[f'{v:.4f}' for v in df_plot[metric].values],
+                text=[f'{v:.4f}' for v in vals],
                 textposition='outside',
             ), row=1, col=col_idx)
         fig.update_layout(height=350, margin=dict(l=40, r=40, t=40, b=40), showlegend=False)
@@ -393,14 +481,16 @@ class FactorReportGenerator:
         """分行业板块 IC 图。"""
         if df.empty:
             return ''
+        import math as _m
         fig = make_subplots(rows=1, cols=3, subplot_titles=('IC 均值', 'ICIR', '多空年化收益 (%)'))
         colors = ['#6366f1', '#8b5cf6', '#a855f7', '#d946ef', '#ec4899']
         for col_idx, metric in enumerate(['ic_mean', 'icir', 'ls_ann_ret'], 1):
             marker_c = colors[:len(df)]
+            vals = [0.0 if (isinstance(v, float) and (_m.isnan(v) or _m.isinf(v))) else float(v) for v in df[metric].values]
             fig.add_trace(go.Bar(
-                x=df['sector'].values, y=df[metric].values,
+                x=df['sector'].values.tolist(), y=vals,
                 marker_color=marker_c,
-                text=[f'{v:.4f}' for v in df[metric].values],
+                text=[f'{v:.4f}' for v in vals],
                 textposition='outside',
             ), row=1, col=col_idx)
         fig.update_layout(height=350, margin=dict(l=40, r=40, t=40, b=40), showlegend=False)
@@ -413,9 +503,9 @@ class FactorReportGenerator:
         fig = go.Figure()
         fig.add_trace(go.Bar(
             x=[f'Q{g+1}' for g in df['primary_group']],
-            y=(df['ls_return'].values * 100),
+            y=(df['ls_return'].values * 100).tolist(),
             marker_color=px.colors.sequential.Viridis[:len(df)],
-            text=[f'{v:.4f}%' for v in df['ls_return'].values * 100],
+            text=[f'{v:.4f}%' for v in (df['ls_return'].values * 100).tolist()],
             textposition='outside',
         ))
         fig.update_layout(
@@ -493,14 +583,32 @@ class FactorReportGenerator:
         decile_nav: Optional[pd.DataFrame] = None,
         scenario_results: Optional[dict] = None,
         control_results: Optional[dict] = None,
+        # 新增：时序统计检验、风险分析、边际检验
+        statistical_tests: Optional[dict] = None,
+        ic_half_life: Optional[dict] = None,
+        rolling_ic_stability: Optional[dict] = None,
+        risk_metrics: Optional[dict] = None,
+        q1_q10_significance: Optional[dict] = None,
     ) -> str:
         """生成完整 HTML 报告。"""
         ic_series = ic_stats.get("ic_series", pd.Series())
         ls_cum = ls_stats.get("cumulative", pd.Series())
 
+        # ── 诊断信息（HTML 注释，不展示） ──
+        _diag_lines = []
+        _diag_lines.append(f"decile_nav: shape={decile_nav.shape if decile_nav is not None else 'None'}, cols={list(decile_nav.columns) if decile_nav is not None and not decile_nav.empty else '[]'}")
+        _diag_lines.append(f"decay_df: shape={decay_df.shape if decay_df is not None else 'None'}, ic_mean={decay_df['ic_mean'].tolist() if decay_df is not None and not decay_df.empty else '[]'}")
+        _diag_lines.append(f"ic_series: len={len(ic_series)}, mean={ic_series.mean():.6f}, first_5={ic_series.head(5).tolist() if not ic_series.empty else '[]'}")
+        _diag_lines.append(f"circ_mv_in_data: {(decile_nav is not None and 'circ_mv' in str(decile_nav.columns)) if False else 'N/A'}")
+        html_debug = "<!--\n" + "\n".join(_diag_lines) + "\n-->"
+
         tier = (qual_result or {}).get("tier", "N/A")
         composite_score = (qual_result or {}).get("composite_score", 0)
         reasons = (qual_result or {}).get("reasons", [])
+        core_failures = (qual_result or {}).get("core_failures", [])
+        characteristic_notes = (qual_result or {}).get("characteristic_notes", [])
+        recommendation = (qual_result or {}).get("recommendation", "N/A")
+        recommendation_detail = (qual_result or {}).get("recommendation_detail", "")
         dim_scores = (qual_result or {}).get("scores", {})
 
         # 构建核心指标
@@ -508,6 +616,7 @@ class FactorReportGenerator:
             ("IC 均值", f"{ic_stats.get('ic_mean', 0):.6f}"),
             ("IC 标准差", f"{ic_stats.get('ic_std', 0):.6f}"),
             ("ICIR（年化）", f"{ic_stats.get('icir', 0):.4f}"),
+            ("ICIR_NW（自相关修正）", f"{ic_stats.get('icir_nw', 0):.4f}"),
             ("IC 胜率", f"{ic_stats.get('win_rate', 0):.2%}"),
             ("IC > 0 占比", f"{ic_stats.get('ic_positive_ratio', 0):.2%}"),
             ("t 统计量", f"{ic_stats.get('t_stat', 0):.4f}"),
@@ -531,18 +640,20 @@ class FactorReportGenerator:
             for k, v in preprocess_info.items():
                 summary_rows.append((k, str(v)))
 
-        summary_rows.append(("等级", tier))
         summary_rows.append(("综合评分", f"{composite_score:.1f}"))
-        summary_rows.append(("评测结论", "√ 通过" if qual_status else "X 未通过"))
+        summary_rows.append(("等级", tier))
+        summary_rows.append(("推荐结论", recommendation))
 
         # 开始组装 HTML
         html = f"""<!DOCTYPE html>
+<!-- DIAGNOSTICS BELOW -->
+{html_debug}
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>单因子评测报告 — {self.factor_name}</title>
-<script>{_load_plotly_js()}</script>
+{_load_plotly_js()}
 <style>
 * {{ margin: 0; padding: 0; box-sizing: border-box; }}
 body {{ font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif; background: #f5f7fa; color: #333; padding: 20px; }}
@@ -565,7 +676,13 @@ td {{ font-size: 14px; }}
 .status-badge {{ display: inline-block; padding: 4px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }}
 .status-badge.core {{ background: #d1fae5; color: #065f46; }}
 .status-badge.satellite {{ background: #fef3c7; color: #92400e; }}
-.status-badge.archive {{ background: #e2e8f0; color: #475569; }}
+.status-badge.watch {{ background: #e2e8f0; color: #64748b; }}
+.status-badge.reject {{ background: #fee2e2; color: #991b1b; }}
+.recommend-tag {{ display: inline-block; padding: 2px 10px; border-radius: 12px; font-size: 12px; font-weight: 600; }}
+.recommend-tag.strong {{ background: #d1fae5; color: #065f46; }}
+.recommend-tag.ok {{ background: #fef3c7; color: #92400e; }}
+.recommend-tag.watch {{ background: #f1f5f9; color: #64748b; }}
+.recommend-tag.reject {{ background: #fee2e2; color: #991b1b; }}
 .footer {{ text-align: center; color: #94a3b8; font-size: 12px; padding: 20px; }}
 .score-bar {{ height: 8px; border-radius: 4px; margin-top: 4px; }}
 </style>
@@ -578,12 +695,13 @@ td {{ font-size: 14px; }}
     因子名称: <strong>{self.factor_name}</strong> &nbsp;|&nbsp;
     生成时间: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M')} &nbsp;|&nbsp;
     等级: <span class="status-badge {tier}">{tier}</span>
+    &nbsp;|&nbsp; 推荐: <span class="recommend-tag {'strong' if tier=='core' else 'ok' if tier=='satellite' else 'watch' if tier=='watch' else 'reject'}">{recommendation}</span>
   </div>
   <div class="header-meta" style="margin-top:12px;font-size:13px;opacity:0.9;display:flex;flex-wrap:wrap;gap:8px 20px;">
     <span>评测区间: {eval_period.get("start", "N/A") if eval_period else "N/A"} ~ {eval_period.get("end", "N/A") if eval_period else "N/A"}</span>
     <span>标签计算: {label_expr if label_expr else "N/A"}</span>
-    <span>准入标准: IC>={thresholds_info.get("ic", 0.05) if thresholds_info else 0.05} | IR>={thresholds_info.get("icir", 1.0) if thresholds_info else 1.0} | 胜率>={self._fmt_pct(thresholds_info.get("win_rate", 0.65)) if thresholds_info else "65%"} | 多空>={thresholds_info.get("ls_ret", 15) if thresholds_info else 15}% | 夏普>={thresholds_info.get("ls_sharpe", 1.25) if thresholds_info else 1.25}</span>
-    <span>评分体系: 10 维综合评分（新增: 场景稳健性 + 残差独立性）</span>
+    <span>评分体系: 10 维综合评分 + 时序统计检验 + IC 质量 + 尾部风险 + 显著性检验</span>
+    <span style="color:#fef3c7;">{recommendation_detail}</span>
   </div>
 </div>"""
 
@@ -592,7 +710,11 @@ td {{ font-size: 14px; }}
   <h2>核心指标概览</h2>
   <div class="summary-grid">"""
         for label, val in summary_rows:
-            css = "pass" if label == "等级" and val == "core" else ("fail" if label == "评测结论" and "X" in val else "pass" if label == "评测结论" and "√" in val else "")
+            css = ""
+            if label == "等级":
+                css = "pass" if val in ("core", "satellite") else "fail" if val == "reject" else ""
+            elif label == "推荐结论":
+                css = "pass" if "推荐" in val and "不" not in val else "fail" if "不推荐" in val else ""
             html += f"""    <div class="summary-item"><div class="label">{label}</div><div class="value {css}">{val}</div></div>"""
         html += """  </div>
 </div>
@@ -624,10 +746,11 @@ td {{ font-size: 14px; }}
                 is_default = (k in ("scenario_robustness", "residual_independence") and abs(sc - 0.5) < 0.01)
                 badge = '<span style="font-size:11px;color:#f59e0b;margin-left:4px;">⚠️ 无数据</span>' if is_default else ""
                 bar_color = "#d1d5db" if is_default else color
+                weighted = sc * weight
                 html += f"""<div style="background:#f8fafc;border-radius:8px;padding:12px;">
       <div style="display:flex;justify-content:space-between;font-size:13px;">
         <span>{label}{star}{badge}</span>
-        <span><strong>{sc:.2f}</strong> / {weight} 分 <span style="color:#94a3b8;font-size:11px;">({weight}%)</span></span>
+        <span><strong>{weighted:.2f}</strong> / {weight} 分 <span style="color:#94a3b8;font-size:11px;">(归一分 {sc:.2f} × {weight}%)</span></span>
       </div>
       <div style="background:#e2e8f0;border-radius:4px;height:6px;margin-top:6px;">
         <div style="background:{bar_color};width:{score_pct:.0f}%;height:6px;border-radius:4px;"></div>
@@ -643,6 +766,149 @@ td {{ font-size: 14px; }}
       <strong>综合评分: {composite_score:.1f} / 100</strong> &nbsp;|&nbsp; 等级: <span class="status-badge {tier}">{tier}</span>
     </div>
   </div>"""
+
+        # ── 时序统计检验板块（ADF + KPSS + Ljung-Box） ──
+        if statistical_tests:
+            adf = statistical_tests.get("adf", {})
+            kpss_res = statistical_tests.get("kpss", {})
+            lb = statistical_tests.get("ljungbox", {})
+            verdict = statistical_tests.get("stationarity_verdict", "N/A")
+            html += f"""<div class="section">
+  <h2>时序统计检验</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">
+    因子截面均值的时序分析。ADF + KPSS 联合判定序列平稳性；Ljung-Box 检验是否存在自相关结构（白噪声检验）。
+    对反转因子：稳定平稳 + 非白噪声 → 因子存在可预测的自相关结构。
+  </p></div>
+  <table>
+    <tr><th>检验</th><th>统计量</th><th>P 值</th><th>结论</th></tr>
+    <tr>
+      <td>ADF 单位根检验</td>
+      <td>{adf.get("adf_stat", "N/A")}</td>
+      <td>{adf.get("p_value", "N/A")}</td>
+      <td><span style="color:{'#059669' if adf.get('is_stationary') else '#dc2626'};">{'平稳' if adf.get('is_stationary') else '非平稳'}</span></td>
+    </tr>
+    <tr>
+      <td>KPSS 平稳性检验</td>
+      <td>{kpss_res.get("kpss_stat", "N/A")}</td>
+      <td>{kpss_res.get("p_value", "N/A")}</td>
+      <td><span style="color:{'#059669' if kpss_res.get('is_stationary') else '#dc2626'};">{'平稳' if kpss_res.get('is_stationary') else '非平稳'}</span></td>
+    </tr>
+    <tr>
+      <td>Ljung-Box 白噪声检验</td>
+      <td>{lb.get("lb_stat", "N/A")}</td>
+      <td>{lb.get("lb_pvalue", "N/A")}</td>
+      <td><span style="color:{'#dc2626' if not lb.get('is_white_noise') else '#059669'};">{'非白噪声（有自相关结构）' if not lb.get('is_white_noise') else '白噪声'}</span></td>
+    </tr>
+    <tr>
+      <td colspan="4" style="text-align:center;font-weight:600;">
+        综合平稳性判定: <span style="color:{'#059669' if verdict in ('平稳',) else '#d97706'};">{verdict}</span>
+        &nbsp;|&nbsp; 样本量: {adf.get("n_obs", 0)} 个交易日
+      </td>
+    </tr>
+  </table>
+</div>"""
+
+        # ── IC 半衰期 + 滚动 IC 稳定性 ──
+        if ic_half_life or rolling_ic_stability:
+            hl = ic_half_life or {}
+            rs = rolling_ic_stability or {}
+            hl_days = hl.get("half_life_days")
+            hl_display = f"{hl_days} 天" if hl_days is not None else "N/A"
+            hl_color = "#059669" if (hl_days and hl_days <= 60) else "#d97706" if hl_days else "#94a3b8"
+            html += f"""<div class="section">
+  <h2>IC 质量分析</h2>
+  <table>
+    <tr><th>指标</th><th>数值</th><th>说明</th></tr>
+    <tr>
+      <td>IC 半衰期</td>
+      <td style="color:{hl_color};font-weight:600;">{hl_display}</td>
+      <td>IC 自相关衰减到 50% 所需天数。越短 → 调仓频率需越高；越长 → 信号越持久</td>
+    </tr>
+    <tr>
+      <td>IC 衰减率 (lag-1 ACF)</td>
+      <td>{hl.get("decay_rate", "N/A")}</td>
+      <td>IC 序列的一阶自相关系数</td>
+    </tr>
+    <tr>
+      <td>滚动 ICIR 均值</td>
+      <td>{rs.get("rolling_icir_mean", "N/A")}</td>
+      <td>252 日滚动 ICIR 的均值（越高越好）</td>
+    </tr>
+    <tr>
+      <td>滚动 ICIR 标准差</td>
+      <td style="color:{(rs.get('rolling_icir_std') or 0) < 2 and '#059669' or (rs.get('rolling_icir_std') or 0) < 4 and '#d97706' or '#dc2626'};">{rs.get("rolling_icir_std", "N/A")}</td>
+      <td>滚动 ICIR 的标准差（越低越稳定）</td>
+    </tr>
+    <tr>
+      <td>滚动 IC 波动率</td>
+      <td>{rs.get("ic_rolling_vol", "N/A")}</td>
+      <td>滚动窗口内 IC 标准差的均值</td>
+    </tr>
+  </table>
+</div>"""
+
+        # ── VaR/CVaR 尾部风险 ──
+        if risk_metrics:
+            var_95 = risk_metrics.get("var_95", 0)
+            cvar_95 = risk_metrics.get("cvar_95", 0)
+            var_99 = risk_metrics.get("var_99", 0)
+            cvar_99 = risk_metrics.get("cvar_99", 0)
+            mdd = risk_metrics.get("max_drawdown", 0)
+            mdd_dur = risk_metrics.get("max_drawdown_duration", 0)
+            html += f"""<div class="section">
+  <h2>尾部风险分析</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">
+    多空组合日收益的风险度量。VaR 衡量正常市场下的最大损失；CVaR 衡量极端情况下的平均损失。
+  </p></div>
+  <table>
+    <tr><th>指标</th><th>数值</th></tr>
+    <tr><td>VaR (95%)</td><td>{var_95:.6f}</td></tr>
+    <tr><td>CVaR (95%)</td><td>{cvar_95:.6f}</td></tr>
+    <tr><td>VaR (99%)</td><td>{var_99:.6f}</td></tr>
+    <tr><td>CVaR (99%)</td><td>{cvar_99:.6f}</td></tr>
+    <tr><td>最大回撤</td><td style="color:#dc2626;">{mdd:.2%}</td></tr>
+    <tr><td>最长回撤持续期</td><td>{mdd_dur} 个交易日</td></tr>
+    <tr><td colspan="2" style="text-align:center;font-size:12px;color:#94a3b8;">参考: VaR/CVaR 为负值代表损失；正值代表收益（多空组合整体为正时）</td></tr>
+  </table>
+</div>"""
+
+        # ── Q1 vs Q10 差异显著性 ──
+        if q1_q10_significance:
+            t_sig = q1_q10_significance.get("t_significant", False)
+            mw_sig = q1_q10_significance.get("mw_significant", False)
+            t_p = q1_q10_significance.get("t_pvalue", 1)
+            mw_p = q1_q10_significance.get("mw_pvalue", 1)
+            diff = q1_q10_significance.get("diff_mean", 0)
+            html += f"""<div class="section">
+  <h2>Q1 vs Q10 差异显著性检验</h2>
+  <div style="padding:6px 0;"><p style="color:#64748b;font-size:13px;">
+    Q1（最低因子分组）与 Q10（最高因子分组）的收益差异是否统计上显著。
+    若两种检验都显著 → 因子的分层能力不只是随机噪声。
+  </p></div>
+  <table>
+    <tr><th>检验方法</th><th>统计量</th><th>P 值</th><th>是否显著</th></tr>
+    <tr>
+      <td>Welch's t-test（均值差异）</td>
+      <td>{q1_q10_significance.get("t_stat", "N/A")}</td>
+      <td>{t_p}</td>
+      <td><span style="color:{'#059669' if t_sig else '#94a3b8'};">{'显著 (p<0.05)' if t_sig else '不显著'}</span></td>
+    </tr>
+    <tr>
+      <td>Mann-Whitney U 检验（非参数）</td>
+      <td>{q1_q10_significance.get("mw_stat", "N/A")}</td>
+      <td>{mw_p}</td>
+      <td><span style="color:{'#059669' if mw_sig else '#94a3b8'};">{'显著 (p<0.05)' if mw_sig else '不显著'}</span></td>
+    </tr>
+    <tr>
+      <td colspan="4" style="text-align:center;">
+        Q1 均值: {q1_q10_significance.get("q1_mean", 0):.6f} &nbsp;|&nbsp;
+        Q10 均值: {q1_q10_significance.get("q10_mean", 0):.6f} &nbsp;|&nbsp;
+        Q1 - Q10 差异: <span style="color:{'#059669' if diff < 0 else '#dc2626'};font-weight:600;">{diff:.6f}</span>
+        &nbsp;|&nbsp; Q1 样本: {q1_q10_significance.get("q1_n", 0)} &nbsp; Q10 样本: {q1_q10_significance.get("q10_n", 0)}
+      </td>
+    </tr>
+  </table>
+</div>"""
 
         # IC 分析
         if not ic_series.empty:
@@ -832,12 +1098,26 @@ td {{ font-size: 14px; }}
             html += f"""<div class="section">
   <h2>等级判定详情</h2>
   <div style="margin-top:8px;">
-    <p><strong>等级: {tier}</strong> （综合评分: {composite_score:.1f}）</p>
-    <p style="margin-top:8px;color:#dc2626;">未达标项:</p>
+    <p>
+      <strong>等级: {tier}</strong> （综合评分: {composite_score:.1f}）&nbsp;|&nbsp;
+      推荐: <span class="recommend-tag {'strong' if tier=='core' else 'ok' if tier=='satellite' else 'watch' if tier=='watch' else 'reject'}">{recommendation}</span>
+      &nbsp;—&nbsp; {recommendation_detail}
+    </p>"""
+            if core_failures:
+                html += f"""    <p style="margin-top:10px;color:#dc2626;font-weight:600;">🔴 核心缺陷（否决项）:</p>
     <ul style="margin-left:20px;color:#dc2626;">"""
-            for r in reasons:
-                html += f"<li style='margin-top:4px;'>{r}</li>"
-            html += """</ul>
+                for r in core_failures:
+                    html += f"<li style='margin-top:4px;'>{r}</li>"
+                html += """</ul>"""
+            if characteristic_notes:
+                html += f"""    <p style="margin-top:10px;color:#94a3b8;font-weight:600;">⚪ 特征提示（不影响入库判断）:</p>
+    <ul style="margin-left:20px;color:#94a3b8;">"""
+                for r in characteristic_notes:
+                    html += f"<li style='margin-top:4px;'>{r}</li>"
+                html += """</ul>"""
+            if not core_failures and not characteristic_notes:
+                html += """    <p style="margin-top:8px;color:#059669;font-weight:600;">✓ 所有维度均达标，无否决项</p>"""
+            html += """
   </div>
 </div>"""
 

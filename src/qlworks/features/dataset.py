@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Type
 
 
 from qlworks.features.builder import FeatureBundle
+from qlworks.factors.filter_utils import get_stock_pool, filter_codes_post, get_tradeable_filter
 
 
 # DuckDB + Parquet 预计算因子到 Qlib 表达式的映射
@@ -26,7 +27,13 @@ FACTOR_CACHE_EXPRESSIONS = {
 
 @dataclass
 class CustomFeatureCache:
-    """缓存底层特征表，供同一窗口内重复切列/切时间范围复用。"""
+    """缓存底层特征表，供同一窗口内重复切列/切时间范围复用。
+
+    warehouse_df 和 factor_series_list 互斥：
+    - warehouse_df: 合并后的宽表（传统模式，因子数少时使用）
+    - factor_series_list: 未合并的因子序列列表（惰性模式，因子数多时使用，
+      仅在 _slice_feature_cache 按需合并选定因子以节省内存）
+    """
 
     warehouse_df: pd.DataFrame
     qlib_feature_expr_map: Dict[str, str]
@@ -35,6 +42,69 @@ class CustomFeatureCache:
     freq: str
     feature_order: List[str]
     resolved_instruments: Optional[List[str]] = None
+    # [惰性合并] 因子序列列表，未合并前 warehouse_df 为空 DataFrame
+    factor_series_list: Optional[List[pd.Series]] = None
+
+    def get_warehouse_df(
+        self,
+        selected_names: Optional[List[str]] = None,
+        start_time=None,
+        end_time=None,
+    ) -> pd.DataFrame:
+        """按需从因子序列列表合并选定列；若已合并则直接返回。
+
+        selected_names 为 None 时合并全部因子（仅用于因子筛选阶段）。
+        时间过滤在合并前对单因子序列执行，避免先合并全时段再切片导致的内存峰值。
+        """
+        # 已有合并好的 DataFrame，直接返回
+        if not self.warehouse_df.empty:
+            df = self.warehouse_df
+            if start_time or end_time:
+                start_ts = pd.Timestamp(start_time) if start_time else None
+                end_ts = pd.Timestamp(end_time) if end_time else None
+                df = df.loc[start_ts:end_ts]
+            return df
+
+        # 从惰性序列合并
+        if not self.factor_series_list:
+            return pd.DataFrame()
+
+        start_ts = pd.Timestamp(start_time) if start_time else None
+        end_ts = pd.Timestamp(end_time) if end_time else None
+
+        series_list = self.factor_series_list
+        if selected_names is not None:
+            series_list = [s for s in series_list if s.name in selected_names]
+            if not series_list:
+                return pd.DataFrame()
+
+        # 构建联合索引（仅选定时段的 join key，大幅降低内存）
+        index_parts = []
+        for s in series_list:
+            idx_df = s.index.to_frame(index=False)
+            if start_ts is not None:
+                idx_df = idx_df[idx_df["datetime"] >= start_ts]
+            if end_ts is not None:
+                idx_df = idx_df[idx_df["datetime"] <= end_ts]
+            if not idx_df.empty:
+                index_parts.append(idx_df)
+
+        if not index_parts:
+            return pd.DataFrame()
+
+        index_frame = (
+            pd.concat(index_parts, ignore_index=True)
+            .drop_duplicates()
+            .sort_values(["datetime", "instrument"], kind="mergesort")
+        )
+        target_index = pd.MultiIndex.from_frame(index_frame)
+
+        df = pd.concat(series_list, axis=1, sort=False).reindex(target_index)
+        df.index.names = ["datetime", "instrument"]
+        df.columns = pd.MultiIndex.from_product([["feature"], df.columns])
+        if not df.index.is_monotonic_increasing:
+            df = df.sort_index()
+        return df
 
 
 class PreparedDatasetView:
@@ -197,7 +267,13 @@ def _load_factors_from_warehouse(feature_bundle, start_time, end_time):
                             print(f"    [warehouse 去重] {field_name}: 删除 {dup_count:,} 行重复记录，涉及 {dup_keys:,} 个键")
                             df = df.loc[~dup_mask].copy()
                         series = df.set_index(['instrument', 'datetime'])[value_col].sort_index()
-                        series.index.names = ['instrument', 'datetime']
+                        # [统一小写] warehouse 中 instrument 可能在 parquet 中为大写，需统一
+                        instruments_lower = series.index.get_level_values('instrument').str.lower()
+                        new_idx = pd.MultiIndex.from_arrays(
+                            [instruments_lower, series.index.get_level_values('datetime')],
+                            names=['instrument', 'datetime']
+                        )
+                        series.index = new_idx
                         loaded_factors[field_name] = series
                         print(f"    [warehouse 直载] {field_name}: {len(series):,} 条记录")
                         continue
@@ -208,12 +284,20 @@ def _load_factors_from_warehouse(feature_bundle, start_time, end_time):
     return loaded_factors, remaining_factors
 
 
-def _resolve_static_instruments(instruments, start_time=None, end_time=None, verbose=True):
+def _resolve_static_instruments(instruments, start_time=None, end_time=None, verbose=True, filter_pipe=None):
     from qlib.data import D
     from qlworks.config import QLIB_DATA_DIR
 
     if instruments is None:
         return None
+    if filter_pipe is not None:
+        # filter_pipe 现在是 list[ExpressionDFilter]（来自 get_tradeable_filter），
+        # 拆分后每个条件独立求值，避免 Qlib 表达式引擎合并空格导致 SyntaxError
+        inst = D.instruments(market=instruments, filter_pipe=filter_pipe if isinstance(filter_pipe, list) else [filter_pipe])
+        resolved = D.list_instruments(inst, start_time=start_time, end_time=end_time, as_list=True)
+        if verbose:
+            print(f"    [动态池过滤] {instruments} (filter_pipe x{len(filter_pipe) if isinstance(filter_pipe, list) else 1}): {len(resolved):,} 只股票")
+        return resolved
     if isinstance(instruments, str):
         # [Renaissance 改进] 直接读取 instruments/*.txt 文件，绕过 Qlib 有 Bug 的内置解析器。
         # Qlib 的 D.instruments("csi500") 无法正确解析 PIT 格式（code\tentry_date\texit_date），
@@ -316,22 +400,25 @@ def _filter_by_pit_date(warehouse_df: pd.DataFrame, pit_map: dict) -> pd.DataFra
 
 
 def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None, instruments=None, pit_map=None):
-    """在拼接前先裁剪 warehouse 静态表，减少不必要的索引对齐与内存占用。"""
+    """裁剪并过滤 warehouse 因子序列，返回未合并的序列列表以节省内存。
+
+    合并操作延迟到 _slice_feature_cache 按需执行，仅合并选定的因子列。
+    """
     if not loaded_factors:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
     filtered_series = []
     resolved_instruments = instruments
     if resolved_instruments is not None:
-        resolved_instruments = set(resolved_instruments)
+        resolved_instruments = {str(inst).lower() for inst in resolved_instruments}
 
     start_ts = pd.Timestamp(start_time) if start_time else None
     end_ts = pd.Timestamp(end_time) if end_time else None
 
     for name, series in loaded_factors.items():
         frame = series.rename(name).reset_index()
-        # [Renaissance 修复] 统一小写，匹配 csi500 PIT 返回的 .sz 格式
-        frame["instrument"] = frame["instrument"].str.lower()
+        # warehouse 直载因子 instrument 已为小写（在 _load_factors_from_warehouse
+        # 中经 .lower() 处理），跳过 .str.lower() 避免 160 因子 × 7M 行累积 OOM
         if start_ts is not None:
             frame = frame[frame["datetime"] >= start_ts]
         if end_ts is not None:
@@ -340,27 +427,16 @@ def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None
             frame = frame[frame["instrument"].isin(resolved_instruments)]
         if frame.empty:
             continue
-        filtered_series.append(frame.set_index(["instrument", "datetime"])[name].rename(name))
+        ordered = frame.sort_values(["datetime", "instrument"], kind="mergesort")
+        filtered_series.append(
+            ordered.set_index(["datetime", "instrument"])[name].rename(name)
+        )
 
     if not filtered_series:
-        return pd.DataFrame()
+        return pd.DataFrame(), None
 
-    warehouse_df = pd.concat(filtered_series, axis=1, sort=True)
-    warehouse_df.index.names = ["instrument", "datetime"]
-    warehouse_df = warehouse_df.swaplevel("instrument", "datetime").sort_index()
-    warehouse_df.index.names = ["datetime", "instrument"]
-    warehouse_df.columns = pd.MultiIndex.from_product([["feature"], warehouse_df.columns])
-
-    # [Renaissance 改进] 逐日 PIT 过滤：利用 csi500.txt 的 entry/exit 日期，
-    # 精确移除 stock 在非成分股时期的行，消除窗口级粗过滤带来的前视偏差。
-    if pit_map is not None and not warehouse_df.empty:
-        _before = len(warehouse_df)
-        warehouse_df = _filter_by_pit_date(warehouse_df, pit_map)
-        _removed = _before - len(warehouse_df)
-        if _removed > 0:
-            print(f"    [逐日 PIT 过滤] 移除 {_removed:,} 行非成分股时期数据 ({100*_removed/_before:.1f}%)")
-
-    return warehouse_df
+    # [PIT 过滤] 从第一个参数返回空 DataFrame（历史遗留），实际数据在 factor_series_list 中
+    return pd.DataFrame(), filtered_series
 
 
 def _slice_feature_cache(
@@ -369,18 +445,19 @@ def _slice_feature_cache(
     start_time: Optional[str] = None,
     end_time: Optional[str] = None,
 ):
-    """从缓存中按因子和时间范围裁剪特征。"""
+    """从缓存中按因子和时间范围裁剪特征。
+
+    支持惰性合并：当 factor_series_list 非空时，仅合并 selected_feature_names
+    中的因子，避免一次性合并全部因子导致内存溢出。
+    """
     selected_names = list(selected_feature_names or feature_cache.feature_order)
     missing_names = [name for name in selected_names if name not in feature_cache.feature_order]
     if missing_names:
         raise ValueError(f"缓存中不存在这些因子: {missing_names}")
 
-    warehouse_df = feature_cache.warehouse_df
+    # [惰性合并] 从因子序列列表按需合并选定列（时间过滤在合并前执行，节省内存）
+    warehouse_df = feature_cache.get_warehouse_df(selected_names, start_time=start_time, end_time=end_time)
     if not warehouse_df.empty:
-        if start_time or end_time:
-            start_ts = pd.Timestamp(start_time) if start_time else None
-            end_ts = pd.Timestamp(end_time) if end_time else None
-            warehouse_df = warehouse_df.loc[start_ts:end_ts]
 
         if isinstance(warehouse_df.columns, pd.MultiIndex):
             warehouse_names = [name for name in selected_names if ("feature", name) in warehouse_df.columns]
@@ -398,6 +475,12 @@ def _slice_feature_cache(
 
     qlib_feature_names = [name for name in selected_names if name in feature_cache.qlib_feature_expr_map]
     qlib_feature_exprs = [feature_cache.qlib_feature_expr_map[name] for name in qlib_feature_names]
+
+    # [修复 UnsortedIndexError] 兜底排序：_slice_feature_cache 中的 .loc 切片操作
+    # 可能产生非 lexsorted 的 MultiIndex，导致后续 Qlib loader 的 .loc 切片崩溃。
+    if not warehouse_df.empty:
+        warehouse_df = warehouse_df.sort_index()
+
     return warehouse_df, qlib_feature_exprs, qlib_feature_names
 
 
@@ -409,6 +492,7 @@ def build_custom_feature_cache(
     factor_cache_names: Optional[List[str]] = None,
     start_time: str = "2020-01-01",
     end_time: str = "2020-12-31",
+    use_dynamic_filter: bool = False,
     freq: str = "day",
 ) -> CustomFeatureCache:
     """构建窗口级底层特征缓存，供多次重组数据集复用。"""
@@ -464,16 +548,30 @@ def build_custom_feature_cache(
         start_time=start_time,
         end_time=end_time,
         verbose=True,
+        filter_pipe=get_tradeable_filter() if use_dynamic_filter else None,
     )
     # [Renaissance 改进] 加载 PIT 映射表用于逐日过滤，仅对字符串索引名有效（如 "csi500"）
     _pit_map = _load_pit_map(instruments) if isinstance(instruments, str) else None
-    warehouse_df = _build_static_warehouse_frame(
+    warehouse_df, factor_series_list = _build_static_warehouse_frame(
         loaded_factors,
         start_time=start_time,
         end_time=end_time,
         instruments=resolved_instruments,
         pit_map=_pit_map,
     )
+
+    # [TODO] PIT 过滤暂不支持惰性模式（factor_series_list），仅对已合并的 warehouse_df 生效
+    if _pit_map is not None and not warehouse_df.empty:
+        _before = len(warehouse_df)
+        warehouse_df = _filter_by_pit_date(warehouse_df, _pit_map)
+        _removed = _before - len(warehouse_df)
+        if _removed > 0:
+            print(f"    [逐日 PIT 过滤] 移除 {_removed:,} 行非成分股时期数据 ({100*_removed/_before:.1f}%)")
+
+    # [修复 UnsortedIndexError] 二级兜底排序：确保 warehouse_df 传入缓存前
+    # index 是完全 lexsorted 的，防止 NestedDataLoader merge 后产生无序索引。
+    if not warehouse_df.empty:
+        warehouse_df = warehouse_df.sort_index()
 
     return CustomFeatureCache(
         warehouse_df=warehouse_df,
@@ -483,6 +581,7 @@ def build_custom_feature_cache(
         freq=freq,
         feature_order=feature_order,
         resolved_instruments=resolved_instruments,
+        factor_series_list=factor_series_list,
     )
 
 
@@ -502,11 +601,37 @@ class InstrumentAwareStaticDataLoader:
             resolved_instruments = self._default_instruments
         else:
             resolved_instruments = _resolve_static_instruments(instruments, start_time=start_time, end_time=end_time)
-        if resolved_instruments is not None:
-            self._loader._maybe_load_raw_data()
-            available_instruments = set(self._loader._data.index.get_level_values("instrument").unique())
-            resolved_instruments = [inst for inst in resolved_instruments if inst in available_instruments]
-        return self._loader.load(resolved_instruments, start_time=start_time, end_time=end_time)
+
+        self._loader._maybe_load_raw_data()
+        df = self._loader._data
+
+        # [修复 UnsortedIndexError] 绕过多重 .loc 切片操作（这些操作要求 MultiIndex 完全
+        # lexsorted，但 pandas 2.3.3 中 sort_index() 后 _lexsort_depth 仍可能为 0），
+        # 改用布尔索引（不依赖索引排序）按时间筛选 + 按股票筛选。
+        if not df.empty:
+            # 第1步：兜底排序，确保 index 尽量有序
+            df = df.sort_index()
+            # 第2步：布尔索引时间切片（安全，不依赖 lexsort）
+            if start_time is not None or end_time is not None:
+                _st = pd.Timestamp(start_time) if start_time is not None else None
+                _et = pd.Timestamp(end_time) if end_time is not None else None
+                _dt_level = df.index.get_level_values("datetime")
+                if _st is not None and _et is not None:
+                    _mask = (_dt_level >= _st) & (_dt_level <= _et)
+                elif _st is not None:
+                    _mask = _dt_level >= _st
+                else:
+                    _mask = _dt_level <= _et
+                df = df.loc[_mask]
+            # 第3步：布尔索引选取可用股票（安全，不依赖 lexsort）
+            if resolved_instruments is not None:
+                available_instruments = set(df.index.get_level_values("instrument").unique())
+                resolved = [inst for inst in resolved_instruments if inst in available_instruments]
+                if resolved:
+                    _inst_mask = df.index.get_level_values("instrument").isin(resolved)
+                    df = df.loc[_inst_mask]
+
+        return df
 
 
 def _build_mixed_loader_config(
@@ -824,6 +949,7 @@ def create_custom_dataset(
     infer_processors: Optional[list] = None,
     learn_processors: Optional[list] = None,
     segments: Optional[Dict[str, tuple]] = None,
+    use_dynamic_filter: bool = False,
     symmetric_orthogonalization: bool = False,
 ):
     """
@@ -861,6 +987,7 @@ def create_custom_dataset(
             start_time=start_time,
             end_time=end_time,
             freq=freq,
+            use_dynamic_filter=use_dynamic_filter,
         )
 
     data_loader_config = _build_mixed_loader_config(

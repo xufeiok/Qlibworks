@@ -58,19 +58,20 @@ class EvalConfig:
     quantiles: int = 10
     long_short_quantiles: tuple = field(default_factory=lambda: (0, 9))
 
-    ic_threshold: float = 0.03
-    icir_threshold: float = 0.5
+    ic_threshold: float = 0.05       # WorldQuant 标准：IC>0.05 才有交易价值
+    icir_threshold: float = 1.0      # AQR 标准：ICIR≥1.0 为最低可接受
     win_rate_threshold: float = 0.55
-    ls_annual_return_threshold: float = 0.05
-    ls_sharpe_threshold: float = 0.5
-    satellite_composite_min: float = 40.0
+    ls_annual_return_threshold: float = 0.10   # 多空年化≥10%
+    ls_sharpe_threshold: float = 1.0           # 多空夏普≥1.0
+    satellite_composite_min: float = 70.0      # ≥70 推荐入库
+    watch_composite_min: float = 50.0          # ≥50 观察，<50 否决
 
     enable_fama_macbeth: bool = True
     fm_standard_errors: str = "newey_west"
     fm_nw_lags: int = 4
 
     enable_walk_forward: bool = True
-    wf_train_months: int = 36
+    wf_train_months: int = 18  # 周频策略 18月≈75周截面，避免3年前过时市场结构
     wf_valid_months: int = 12
     wf_step_months: int = 12
 

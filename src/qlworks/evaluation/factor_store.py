@@ -342,7 +342,8 @@ class FactorStore:
     def append_to_warehouse(self, name: str, expr: str,
                               start_date: Optional[str] = None,
                               stocks: Optional[List[str]] = None,
-                              duckdb_expr: Optional[str] = None) -> int:
+                              duckdb_expr: Optional[str] = None,
+                              compute_backend: str = "auto") -> int:
         """
         增量追加新数据到仓库（每周/每月调用）。
         只计算 start_date 之后的新数据，与已有数据按日去重。
@@ -352,6 +353,7 @@ class FactorStore:
             expr: Qlib/DuckDB 表达式
             start_date: 起始日期，None 则自动从仓库最后日期+1天开始
             stocks: 可选股票代码列表
+            compute_backend: auto/duckdb/qlib
 
         Returns:
             新增行数
@@ -373,8 +375,16 @@ class FactorStore:
             logger.info(f"[仓库] {name} 已是最新（最后日期={warehouse_meta.get('data_range', {}).get('last_date','?')}），无需追加")
             return 0
 
-        logger.info(f"[仓库] 增量追加 {name}: {start_date} ~ {today}")
-        df = self._compute(name, expr, start_date, today, stocks, duckdb_expr=duckdb_expr)
+        logger.info(f"[仓库] 增量追加 {name}: {start_date} ~ {today} | backend={compute_backend}")
+        df = self._compute(
+            name,
+            expr,
+            start_date,
+            today,
+            stocks,
+            duckdb_expr=duckdb_expr,
+            compute_backend=compute_backend,
+        )
         if df is None or df.empty:
             logger.info(f"[仓库] {name} 无新数据")
             return 0
@@ -1018,14 +1028,31 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
         return result
 
     def _compute(self, name, expr, start_date=None, end_date=None, stocks=None,
-                 duckdb_expr=None):
+                 duckdb_expr=None, compute_backend: str = "auto"):
         """计算因子（DuckDB 价格指标路径 → DuckDB 财务路径 → Qlib 兜底）。"""
         sd = start_date or self.config.start_time
         ed = end_date or self.config.end_time
 
+        if compute_backend not in {"auto", "duckdb", "qlib"}:
+            raise ValueError(f"不支持的 compute_backend: {compute_backend}")
+
+        if compute_backend == "qlib":
+            logger.info(f"[计算] {name} 显式指定 backend=qlib")
+            df = self._try_qlib(name, expr, sd, ed, stocks)
+            if df is not None:
+                return df
+            raise RuntimeError(f"无法用 Qlib 计算因子 {name}: {expr}")
+
         # 检查是否强制使用 Qlib
         force_qlib = os.environ.get("FORCE_QLIB", "false").lower() == "true"
-        if not force_qlib:
+        if compute_backend != "duckdb" and force_qlib:
+            logger.info(f"[计算] {name} 强制使用 Qlib (FORCE_QLIB=true)")
+            df = self._try_qlib(name, expr, sd, ed, stocks)
+            if df is not None:
+                return df
+            raise RuntimeError(f"无法计算因子 {name}: {expr}")
+
+        if compute_backend in {"auto", "duckdb"} and not force_qlib:
             # [Bloomberg Data Pipeline] 第 1 层：DuckDB + daily_prices/daily_indicators
             # 覆盖量价因子 + 估值/市值类因子（pe_ttm, pb, circ_mv 等）
             df = self._try_duckdb(name, expr, sd, ed, stocks, duckdb_expr=duckdb_expr)
@@ -1043,9 +1070,6 @@ WHERE ann_date >= '{sd}' AND ann_date <= '{ed}'"""
                     return df
                 if df is not None:
                     logger.warning(f"[计算] {name} DuckDB 财务结果退化，回退到 Qlib...")
-        else:
-            logger.info(f"[计算] {name} 强制使用 Qlib (FORCE_QLIB=true)")
-
         # 第 3 层：Qlib 兜底（最慢但最全）
         df = self._try_qlib(name, expr, sd, ed, stocks)
         if df is not None:

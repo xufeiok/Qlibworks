@@ -31,6 +31,42 @@ import qlib
 from _config import resolve_runtime_config
 
 # ==============================================================================
+# [候选池支持：从 registry/candidate_pool.json 读取准入因子列表]
+# ==============================================================================
+_CANDIDATE_POOL_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "../../factor_data/registry/candidate_pool.json"
+)
+
+
+def _load_candidate_pool_factor_files() -> list[str] | None:
+    """
+    从 candidate_pool.json 读取已准入因子所在的 YAML 源文件列表。
+    若候选池为空或不存在，返回 None（回退到默认 factor_files）。
+    """
+    if not os.path.exists(_CANDIDATE_POOL_PATH):
+        return None
+    try:
+        with open(_CANDIDATE_POOL_PATH, "r", encoding="utf-8") as f:
+            pool = json.load(f)
+        factors = pool.get("factors", [])
+        if not factors:
+            return None
+        # 收集因子所在的源 YAML 文件（去重）
+        source_files = set()
+        for fd in factors:
+            sf = fd.get("source_file")
+            if sf:
+                source_files.add(sf)
+        if not source_files:
+            return None
+        return list(source_files)
+    except Exception as e:
+        print(f"  [候选池读取警告] {e}，回退到默认 factor_files")
+        return None
+
+
+# ==============================================================================
 # [全局配置区]
 # ==============================================================================
 DEFAULT_YAML_CONFIG_NAME = "icir_2025"
@@ -57,7 +93,7 @@ LOCAL_CONFIG = {
     "neutralize_features": False, 
     "renormalize_features_after_neutralize": False,
     "normalize_labels": True, 
-    "neutralize_labels": False, 
+    "neutralize_labels": True, 
     "symmetric_orthogonalization": False,
 
     "rolling_windows": [
@@ -85,7 +121,7 @@ LOCAL_CONFIG = {
     "feature_selection_date_stride": 2,  # ICIR 计算按日期抽样步长；2=隔天
     "factor_redundancy_check": {
         "enabled": True,
-        "correlation_threshold": 0.95,   # 相关性超过此阈值视为冗余，只保留 IC 最高的那个
+        "correlation_threshold": 0.70,   # 相关性超过此阈值视为冗余，只保留 IC 最高的那个（与评估侧对齐）
     },
 }
 
@@ -134,7 +170,13 @@ def run_icir_baseline_pipeline(config_source: str = "local", config_name: str | 
         pass
     
     print("\n[2] 读取因子库的所有因子公式...")
-    factor_files = CONFIG["factor_files"]
+    # 优先从候选池读取，回退到配置中的 factor_files
+    pool_factor_files = _load_candidate_pool_factor_files()
+    factor_files = pool_factor_files if pool_factor_files is not None else CONFIG["factor_files"]
+    if pool_factor_files is not None:
+        print(f">>> 从候选池读取因子源文件: {factor_files}")
+    else:
+        print(f">>> 使用配置中的默认 factor_files: {factor_files}")
     bundle_all = build_factor_library_bundle(factor_files)
     bundle_all.label_fields = CONFIG["label_fields"]
     bundle_all.label_names = CONFIG["label_names"]

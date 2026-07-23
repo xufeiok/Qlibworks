@@ -2,7 +2,10 @@
 # ICIR 基线训练配置
 # 对应脚本: train_icir.py
 # =====================================================================
-instruments: csi500
+instruments: main_board
+use_dynamic_filter: true
+filter_new_stocks: true
+filter_st: true
 start_time: "2020-01-01"
 end_time: "2025-12-31"
 model_type: linear
@@ -18,7 +21,7 @@ normalize_features: true
 neutralize_features: false
 renormalize_features_after_neutralize: false
 normalize_labels: true
-neutralize_labels: false
+neutralize_labels: true
 symmetric_orthogonalization: false
 
 rolling_windows:

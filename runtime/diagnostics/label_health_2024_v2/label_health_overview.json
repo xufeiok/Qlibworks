@@ -1,0 +1,13 @@
+{
+  "total_rows": 759076,
+  "anomaly_rows": 2359,
+  "label_issue_rows": 2147,
+  "price_issue_rows": 1516,
+  "unique_anomaly_stocks": 990,
+  "unique_anomaly_dates": 239,
+  "max_abs_label_5d": 9918.2783203125,
+  "label_mean": 0.056582462042570114,
+  "label_std": 15.530285835266113,
+  "label_min": -0.999908983707428,
+  "label_max": 9918.2783203125
+}

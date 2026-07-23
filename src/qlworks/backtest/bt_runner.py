@@ -48,7 +48,11 @@ def _print_backtest_report(strat, initial_cash: float, final_value: float) -> No
         dd = strat.analyzers.drawdown.get_analysis()
         sharpe_analysis = strat.analyzers.sharpe.get_analysis()
         returns_analysis = strat.analyzers.returns.get_analysis()
-        sqn_analysis = strat.analyzers.sqn.get_analysis()
+        try:
+            sqn_analysis = strat.analyzers.sqn.get_analysis()
+            sqn = sqn_analysis.get('sqn', 0.0)
+        except (AttributeError, KeyError, TypeError):
+            sqn = 0.0
 
         # 总收益率
         total_ret = 0.0
@@ -60,7 +64,6 @@ def _print_backtest_report(strat, initial_cash: float, final_value: float) -> No
 
         max_dd = dd.get('max', {}).get('drawdown', 0)
         sharpe_ratio = sharpe_analysis.get('sharperatio', 0.0) or 0.0
-        sqn = sqn_analysis.get('sqn', 0.0)
 
         total_trades = trade_analyzer.get('total', {}).get('closed', 0)
         won_trades = trade_analyzer.get('won', {}).get('total', 0)
@@ -140,7 +143,7 @@ def run_qlib_backtrader(
     initial_cash=100000.0,
     commission=CFG_COMMISSION,
     stamp_duty=STAMP_DUTY,
-    set_slippage_perc=0.0,
+    set_slippage_perc=0.001,
     server_url='http://localhost:5888/api/backtest/upload',
     timeframe_label='1d',
     output_dir='./bt_output',
@@ -167,10 +170,24 @@ def run_qlib_backtrader(
 
     # 确定回测日期范围（使用预测数据中的实际交易日，避免引入非交易日的 NaN）
     full_calendar = pred_df.index.get_level_values('datetime').unique().sort_values()
+
+    # [Filter] 预处理：剔除上市不满250日的新股
+    from qlworks.factors.filter_utils import filter_codes_post
+    _all_instruments = pred_df.index.get_level_values("instrument").unique().tolist()
+    _filtered_instruments = filter_codes_post(_all_instruments, str(full_calendar[0].date()), filter_new_stocks=True, filter_st=False)
+    _filtered_set = set(_filtered_instruments)
+    pred_df = pred_df[pred_df.index.get_level_values("instrument").isin(_filtered_set)]
+    # 也从 price_df_dict 中移除被过滤的股票
+    for _inst in list(price_df_dict.keys()):
+        if _inst not in _filtered_set:
+            del price_df_dict[_inst]
+    print(f"  [Filter] 新股过滤后: {len(_filtered_instruments)} / {len(_all_instruments)} 只股票")
     print(f"回测日期范围: {full_calendar.min().date()} ~ {full_calendar.max().date()} ({len(full_calendar)} 个交易日)")
     
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
+    # 禁止做空：A股不允许融券卖空
+    cerebro.broker.set_shortcash(False)
     
     # [Virtu 改进] 注入 A 股真实手续费模型（区分买卖、印花税）
     comminfo = AShareCommission(stamp_duty=stamp_duty, commission=commission)
@@ -195,7 +212,13 @@ def run_qlib_backtrader(
             except:
                 pass
         df_bench = df_bench[~df_bench.index.duplicated(keep='first')]
-        df_bench = df_bench.reindex(full_calendar)
+        # 手动重建索引以绕过 pandas reindex bug（同上）
+        full_dates = pd.DatetimeIndex(full_calendar)
+        matching_dates = full_dates.intersection(df_bench.index)
+        df_new = pd.DataFrame(index=full_dates, columns=df_bench.columns, dtype="float64")
+        for col in df_bench.columns:
+            df_new.loc[matching_dates, col] = df_bench.loc[matching_dates, col].values.astype(np.float64)
+        df_bench = df_new
         invalid_bench_mask = (
             df_bench['close'].isna() | (df_bench['close'] <= 0.01) | (df_bench['close'] > 1e6) |
             df_bench['open'].isna() | (df_bench['open'] <= 0.01) | (df_bench['open'] > 1e6) |
@@ -204,7 +227,7 @@ def run_qlib_backtrader(
             df_bench['volume'].isna() | (df_bench['volume'] <= 0)
         )
         df_bench.loc[invalid_bench_mask, ['open', 'high', 'low', 'close']] = np.nan
-        df_bench[['open', 'high', 'low', 'close']] = df_bench[['open', 'high', 'low', 'close']].ffill().bfill().fillna(1.0)
+        df_bench[['open', 'high', 'low', 'close']] = df_bench[['open', 'high', 'low', 'close']].ffill().fillna(1.0)
         df_bench['volume'] = df_bench['volume'].fillna(0)
         df_bench['score'] = np.nan # 补齐格式
         data_bench = QlibPandasData(dataname=df_bench, name='benchmark')
@@ -213,8 +236,12 @@ def run_qlib_backtrader(
 
     # 处理并添加数据源
     added_count = 0
-    for inst, price_df in price_df_dict.items():
+    for idx, (inst, price_df) in enumerate(price_df_dict.items()):
         df = price_df.copy()
+
+        # 将 MultiIndex 转换为单层 DatetimeIndex（Qlib 数据默认带 instrument 层级）
+        if isinstance(df.index, pd.MultiIndex):
+            df.index = df.index.droplevel('instrument')
 
         # 确保 datetime 为索引
         if 'datetime' in df.columns:
@@ -226,23 +253,59 @@ def run_qlib_backtrader(
             except:
                 pass
 
-        # 提取当前股票的预测分数
-        if 'instrument' in pred_df.index.names:
-            if inst in pred_df.index.get_level_values('instrument'):
-                inst_pred = pred_df.xs(inst, level='instrument')
-                if 'score' not in inst_pred.columns and len(inst_pred.columns) == 1:
-                    inst_pred.columns = ['score']
-                df = df.join(inst_pred['score'], how='left')
+        # 如果 score 列已在数据中（tree.py 提前 join 的），跳过二次 join
+        if 'score' not in df.columns:
+            # 提取当前股票的预测分数
+            if 'instrument' in pred_df.index.names:
+                if inst in pred_df.index.get_level_values('instrument'):
+                    inst_pred = pred_df.xs(inst, level='instrument')
+                    if 'score' not in inst_pred.columns and len(inst_pred.columns) == 1:
+                        inst_pred.columns = ['score']
+                    df = df.join(inst_pred['score'], how='left')
+                else:
+                    df['score'] = np.nan
             else:
                 df['score'] = np.nan
-        else:
-            df['score'] = np.nan
 
         # 移除重复索引
         df = df[~df.index.duplicated(keep='first')]
 
+        # 调试：打印第一个股票的 score 统计
+        if idx == 0:
+            import tempfile
+            _debug_p = output_dir if os.access(str(output_dir), os.W_OK) else tempfile.gettempdir()
+            _debug_f = os.path.join(str(_debug_p), '_bt_debug_runner.txt')
+            debug_f = open(_debug_f, 'w')
+            score_notna = df['score'].notna().sum() if 'score' in df.columns else 0
+            close_ok = (df['close'] > 0.01).sum() if 'close' in df.columns else 0
+            debug_f.write(f'First stock: {inst}\n')
+            debug_f.write(f'df rows: {len(df)}\n')
+            debug_f.write(f'columns: {list(df.columns)}\n')
+            debug_f.write(f'score_notna: {score_notna}\n')
+            debug_f.write(f'close>0.01: {close_ok}\n')
+            if score_notna > 0:
+                debug_f.write(f'score>0.7: {(df["score"] > 0.7).sum()}\n')
+                debug_f.write(f'score max: {df["score"].max()}\n')
+            debug_f.write(f'index_dates[:5]: {df.index[:5].astype(str).tolist()}\n')
+            debug_f.write(f'pred dates from df: {sorted(pred_df.index.get_level_values("datetime").unique())[:5]}\n')
+            debug_f.close()
+
         # 对齐到统一日期范围（所有数据源等长）
-        df = df.reindex(full_calendar)
+        # 手动重建索引以绕过 "cannot include dtype 'M' in a buffer" 的 pandas 内部 bug
+        full_dates = pd.DatetimeIndex(full_calendar)
+        matching_dates = full_dates.intersection(df.index)
+        df_aligned = pd.DataFrame(index=full_dates, columns=df.columns, dtype="float64")
+        for col in df.columns:
+            df_aligned.loc[matching_dates, col] = df.loc[matching_dates, col].values.astype(np.float64)
+        df = df_aligned
+
+        # 调试：reindex 后第一个股票 score 情况
+        if idx == 0:
+            debug_f = open(_debug_f, 'a')
+            score_notna_re = df['score'].notna().sum()
+            debug_f.write(f'After reindex: score_notna={score_notna_re}, total={len(df)}\n')
+            debug_f.write(f'matching_dates[:5]: {matching_dates[:5].astype(str).tolist() if len(matching_dates) > 0 else "EMPTY!"}\n')
+            debug_f.close()
 
         # 找出真正的无效天（原本就没有数据的天，或者价格<=0.01的天，防范 1e-19 极小值脏数据，或者异常大的脏数据，或者停牌日 volume<=0）
         invalid_mask = (
@@ -256,9 +319,17 @@ def run_qlib_backtrader(
         # 把无效天的 score 强行置为 NaN，确保它在这天不会被策略选中买入
         df.loc[invalid_mask, 'score'] = np.nan
 
+        # 调试：invalid_mask 后 score 情况
+        if idx == 0:
+            debug_f = open(_debug_f, 'a')
+            score_notna_after = df['score'].notna().sum()
+            invalid_count = invalid_mask.sum()
+            debug_f.write(f'After invalid_mask: score_notna={score_notna_after}, invalid={invalid_count}/{len(df)}\n')
+            debug_f.close()
+
         # 修复价格数据，过滤掉任何<=0.01的坏价格
         df.loc[invalid_mask, ['open', 'high', 'low', 'close']] = np.nan
-        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].ffill().bfill()
+        df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].ffill()
         
         # 兜底：如果连bfill都填不上（极小概率），填1.0防崩溃
         df[['open', 'high', 'low', 'close']] = df[['open', 'high', 'low', 'close']].fillna(1.0)
@@ -298,12 +369,17 @@ def run_qlib_backtrader(
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
     cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='returns')
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days, riskfreerate=0.0)
-    cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
+    # 注意：不添加 SQN 分析器，因其内部 Calmar 计算在净值归零时会 math.log(负数) 崩溃
         
     print(f"=== 开始回测 ===")
     print(f"初始资金: {cerebro.broker.get_value():.2f}")
     # 所有数据已经完全对齐，可以安全使用向量化模式加速
-    results = cerebro.run()
+    try:
+        results = cerebro.run()
+    except Exception as e:
+        print(f"[回测异常] {e}")
+        print("回测运行过程中出现异常，将尝试输出已计算的中间结果。")
+        results = None
     final_value = cerebro.broker.get_value()
     print(f"期末资金: {final_value:.2f}")
     
@@ -364,6 +440,8 @@ def run_duckdb_backtrader(
     cerebro = bt.Cerebro()
     cerebro.broker.setcash(initial_cash)
     cerebro.broker.setcommission(commission=commission)
+    # 禁止做空：A股不允许融券卖空
+    cerebro.broker.set_shortcash(False)
     
     if set_slippage_perc > 0:
         cerebro.broker.set_slippage_perc(set_slippage_perc)
@@ -463,12 +541,17 @@ def run_duckdb_backtrader(
     cerebro.addanalyzer(bt.analyzers.DrawDown, _name='drawdown')
     cerebro.addanalyzer(bt.analyzers.TimeReturn, _name='returns')
     cerebro.addanalyzer(bt.analyzers.SharpeRatio, _name='sharpe', timeframe=bt.TimeFrame.Days, riskfreerate=0.0)
-    cerebro.addanalyzer(bt.analyzers.SQN, _name='sqn')
+    # 注意：不添加 SQN 分析器，因其内部 Calmar 计算在净值归零时会 math.log(负数) 崩溃
         
     print(f"=== 开始回测 ===")
     print(f"初始资金: {cerebro.broker.get_value():.2f}")
     # runonce=False: 逐行处理兼容不等长数据
-    results = cerebro.run(runonce=False)
+    try:
+        results = cerebro.run(runonce=False)
+    except Exception as e:
+        print(f"[回测异常] {e}")
+        print("回测运行过程中出现异常，将尝试输出已计算的中间结果。")
+        results = None
     final_value = cerebro.broker.get_value()
     print(f"期末资金: {final_value:.2f}")
     

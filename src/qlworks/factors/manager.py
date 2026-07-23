@@ -41,7 +41,12 @@ class FactorLibraryManager:
             config = yaml.safe_load(f)
         return config
 
-    def get_expressions(self, strategy_names: str | list[str], lang: str = "qlib") -> tuple:
+    def get_expressions(
+        self,
+        strategy_names: str | list[str],
+        lang: str = "qlib",
+        factor_names: list[str] | None = None,
+    ) -> tuple:
         """
         提取因子表达式和名称。
 
@@ -54,12 +59,15 @@ class FactorLibraryManager:
 
         all_fields = []
         all_names = []
+        selected_name_set = set(factor_names) if factor_names is not None else None
         seen_names: set = set()
 
         for strategy_name in strategy_names:
             config = self.load_strategy_config(strategy_name)
             for factor in config.get('factors', []):
                 name = factor.get('name')
+                if selected_name_set is not None and name not in selected_name_set:
+                    continue
                 if name in seen_names:
                     print(f"[警告] 发现重名因子 '{name}' (位于 {strategy_name}.yaml 中)，已跳过合并。")
                     continue
@@ -77,11 +85,11 @@ class FactorLibraryManager:
         return all_fields, all_names
 
     # 向后兼容
-    def get_qlib_expressions(self, strategy_names):
-        return self.get_expressions(strategy_names, lang="qlib")
+    def get_qlib_expressions(self, strategy_names, factor_names: list[str] | None = None):
+        return self.get_expressions(strategy_names, lang="qlib", factor_names=factor_names)
 
-    def get_duckdb_expressions(self, strategy_names):
-        return self.get_expressions(strategy_names, lang="duckdb")
+    def get_duckdb_expressions(self, strategy_names, factor_names: list[str] | None = None):
+        return self.get_expressions(strategy_names, lang="duckdb", factor_names=factor_names)
 
     def print_strategy_report(self, strategy_name: str):
         config = self.load_strategy_config(strategy_name)

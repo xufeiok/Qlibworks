@@ -71,10 +71,17 @@ MARKET_REGIMES = [
 ]
 
 
-def _sector_from_industry(industry_name: str) -> str:
+def _sector_from_industry(industry_name) -> str:
     if pd.isna(industry_name):
         return "其他"
-    return SECTOR_MAP.get(industry_name.strip(), "其他")
+    # 兼容数值型行业编码（如 801780.0→"801780"）和字符串名称
+    name = str(industry_name).strip().rstrip(".0")
+    # 尝试匹配中文行业名称
+    result = SECTOR_MAP.get(name, "其他")
+    if result != "其他":
+        return result
+    # 如果没匹配到，可能是 Shenwan 数值编码，统一归为"其他"
+    return "其他"
 
 
 def _calc_bucket_ic_stats(
@@ -116,7 +123,7 @@ def test_by_market_cap_buckets(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    mkt_cap_col: str = "mkt_cap",
+    mkt_cap_col: str = "circ_mv",
     quantiles: int = 10,
     annual_factor: float = 252.0,
     label_horizon: int = 5,
@@ -132,7 +139,9 @@ def test_by_market_cap_buckets(
 
     tmp = df.copy()
     def _assign_bucket(x):
-        if x.nunique() < 6:
+        n_uniq = x.nunique()
+        if n_uniq < 6:
+            logger.info(f"[分市值] 日期 {x.name} 市值唯一值仅 {n_uniq} 个，标记为未知")
             return pd.Series(["未知"] * len(x))
         return pd.qcut(x.rank(method="first"), q=3, labels=["小盘", "中盘", "大盘"])
 
@@ -213,7 +222,7 @@ def test_by_industry_sector(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    industry_col: str = "industry",
+    industry_col: str = "sw_l1",
     sector_map: dict = None,
     quantiles: int = 10,
     annual_factor: float = 252.0,
@@ -264,7 +273,7 @@ def bivariate_sort(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    primary_col: str = "mkt_cap",
+    primary_col: str = "circ_mv",
     primary_n: int = 5,
     secondary_n: int = 5,
     annual_factor: float = 252.0,
@@ -297,8 +306,9 @@ def bivariate_sort(
         p_groups = np.floor((p_ranks - 1) / len(p_ranks) * primary_n).clip(0, primary_n - 1).astype(int)
 
         for pg in range(primary_n):
-            mask = valid.copy()
-            mask[mask] = p_groups == pg
+            mask = pd.Series(np.zeros(len(valid), dtype=bool), index=valid.index)
+            valid_idx = np.where(valid.values)[0]
+            mask.iloc[valid_idx] = (p_groups == pg)
             if mask.sum() < secondary_n * 2:
                 continue
 
@@ -362,13 +372,13 @@ def residual_factor_test(
     这是最严格的「控制变量对冲」检验——验证因子收益是否来自已知风险因子。
 
     Args:
-        control_cols: 需要剔除的变量列表，如 ["mkt_cap", "industry"]
+        control_cols: 需要剔除的变量列表，如 ["circ_mv", "sw_l1"]
 
     Returns:
         dict with keys: residual_ic_stats, residual_ls_stats, residual_group_means, control_cols
     """
     if not control_cols:
-        control_cols = ["mkt_cap"]
+        control_cols = ["circ_mv"]
 
     from sklearn.linear_model import Ridge
 
@@ -381,7 +391,7 @@ def residual_factor_test(
 
         control_dfs = []
         for col in control_cols:
-            if col == "industry" and col in grp.columns:
+            if col == "sw_l1" and col in grp.columns:
                 dummies = pd.get_dummies(grp[col].astype(str), prefix="ind", drop_first=False)
                 control_dfs.append(dummies)
             elif col in grp.columns:
@@ -437,7 +447,7 @@ def size_neutral_test(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    mkt_cap_col: str = "mkt_cap",
+    mkt_cap_col: str = "circ_mv",
     quantiles: int = 5,
     annual_factor: float = 252.0,
     label_horizon: int = 5,

@@ -19,6 +19,10 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import deque
 import threading
+import atexit
+import logging
+
+logger = logging.getLogger(__name__)
 
 import pandas as pd
 import numpy as np
@@ -56,12 +60,27 @@ class QuantDataAPI:
     3. Tushare 作为后备数据源
     """
 
+    # 类级别共享 DuckDB 连接（避免多实例创建多个连接、进程崩溃后残留锁文件）
+    _shared_duckdb_conn = None
+    _duckdb_lock = threading.Lock()
+
+    @classmethod
+    def _close_shared_duckdb(cls):
+        """进程退出时释放共享 DuckDB 连接。"""
+        conn = cls._shared_duckdb_conn
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            cls._shared_duckdb_conn = None
+
     def __init__(self):
         """
         初始化 QuantDataAPI
         """
         self._ch_client = None
-        self._duckdb_conn = None
+        self._init_duckdb()
         self._tushare_pro = None  # Tushare Pro 客户端
         # Tushare 限速器（实例级别，避免每次调用 get_daily_data 重建）
         self._ts_rate_limit_sem = threading.Semaphore(4)  # 最多 4 个并发
@@ -71,12 +90,23 @@ class QuantDataAPI:
         self._query_cache_dir = Path(str(FS_CACHE_DIR)) / "query_cache"
         self._query_cache_dir.mkdir(parents=True, exist_ok=True)
         self.clear_query_cache(max_age_sec=604800)
-        self._init_duckdb()
 
     def _init_duckdb(self):
-        """初始化 DuckDB 连接"""
+        """初始化 DuckDB 连接（单例模式，所有实例共享同一连接）"""
         DUCKDB_PATH.parent.mkdir(parents=True, exist_ok=True)
-        self._duckdb_conn = duckdb.connect(str(DUCKDB_PATH))
+        if QuantDataAPI._shared_duckdb_conn is None:
+            with QuantDataAPI._duckdb_lock:
+                if QuantDataAPI._shared_duckdb_conn is None:
+                    try:
+                        QuantDataAPI._shared_duckdb_conn = duckdb.connect(str(DUCKDB_PATH))
+                    except duckdb.IOException as e:
+                        if "Cannot open file" in str(e) or "already open" in str(e):
+                            logger.warning(f"DuckDB 文件被锁（{e}），尝试只读模式...")
+                            QuantDataAPI._shared_duckdb_conn = duckdb.connect(str(DUCKDB_PATH), read_only=True)
+                        else:
+                            raise
+                    atexit.register(QuantDataAPI._close_shared_duckdb)
+        self._duckdb_conn = QuantDataAPI._shared_duckdb_conn
         # 注意：查询缓存已改用 Parquet 文件存储（query_cached 方法），
         # DuckDB 保留用于后续元数据管理功能。
     
@@ -392,12 +422,12 @@ class QuantDataAPI:
             sql = f"""
                 SELECT
                     p.ts_code AS ts_code, p.trade_date AS trade_date,
-                    p.open * COALESCE(a.adj_factor, 1) / {adj_divisor} AS open,
-                    p.high * COALESCE(a.adj_factor, 1) / {adj_divisor} AS high,
-                    p.low * COALESCE(a.adj_factor, 1) / {adj_divisor} AS low,
-                    p.close * COALESCE(a.adj_factor, 1) / {adj_divisor} AS close,
+                    p.open * COALESCE(NULLIF(a.adj_factor, 0), 1) / {adj_divisor} AS open,
+                    p.high * COALESCE(NULLIF(a.adj_factor, 0), 1) / {adj_divisor} AS high,
+                    p.low * COALESCE(NULLIF(a.adj_factor, 0), 1) / {adj_divisor} AS low,
+                    p.close * COALESCE(NULLIF(a.adj_factor, 0), 1) / {adj_divisor} AS close,
                     p.vol AS vol,
-                    p.close * COALESCE(a.adj_factor, 1) / {adj_divisor} * p.vol AS amount,
+                    p.close * COALESCE(NULLIF(a.adj_factor, 0), 1) / {adj_divisor} * p.vol AS amount,
                     i.pe AS pe, i.pe_ttm AS pe_ttm, i.pb AS pb, i.ps AS ps, i.ps_ttm AS ps_ttm,
                     i.total_mv AS total_mv, i.circ_mv AS circ_mv, i.dv_ttm AS dv_ttm,
                     a.adj_factor AS adj_factor,
@@ -406,9 +436,9 @@ class QuantDataAPI:
                 LEFT JOIN daily_indicators i ON p.ts_code = i.ts_code AND p.trade_date = i.trade_date
                 LEFT JOIN daily_adj_factors a ON p.ts_code = a.ts_code AND p.trade_date = a.trade_date
                 LEFT JOIN (
-                    SELECT ts_code, adj_factor
+                    SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor
                     FROM daily_adj_factors
-                    WHERE trade_date = (SELECT MAX(trade_date) FROM daily_adj_factors WHERE ts_code = daily_adj_factors.ts_code)
+                    GROUP BY ts_code
                 ) latest ON p.ts_code = latest.ts_code
             """
         else:
@@ -591,11 +621,9 @@ class QuantDataAPI:
         self._close_connections()
 
     def _close_connections(self):
-        """关闭所有连接"""
+        """关闭所有连接（共享 DuckDB 连接由进程退出时自动释放）"""
         if self._ch_client:
             self._ch_client.close()
             self._ch_client = None
-        if self._duckdb_conn:
-            self._duckdb_conn.close()
-            self._duckdb_conn = None
+        # DuckDB 连接是类级别共享的，不在此关闭
         self._ts_executor.shutdown(wait=False)

@@ -1,0 +1,1 @@
+@"E:\Conda_env\Qlib_env\python.exe" "e:\Quant\Qlibworks\scripts\training\train_from_selected.py" > "e:\Quant\Qlibworks\_training_stdout.log" 2> "e:\Quant\Qlibworks\_training_stderr.log"

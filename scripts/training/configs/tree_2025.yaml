@@ -1,25 +1,40 @@
 # =====================================================================
-# 树模型训练配置
+# 树模型训练配置（与 train_tree.py LOCAL_CONFIG 完全对齐）
 # 对应脚本: train_tree.py
 # =====================================================================
-instruments: csi500
+instruments: main_board
 start_time: "2020-01-01"
 end_time: "2025-12-31"
 model_type: tree
 
+# 标签: T+1开盘买入, T+5收盘卖出
 label_fields: ["Ref($close, -5) / Ref($open, -1) - 1"]
 label_names: ["LABEL_5D"]
 
+# 因子库（使用精选优质因子）
 factor_files:
-  - reversal_momentum_factors
+  - selected_good_factors
 factor_cache_names: []
 
+# 预处理开关（树模型：截面分位数化 + 不中性化）
 normalize_features: true
 neutralize_features: false
 renormalize_features_after_neutralize: false
 normalize_labels: true
 neutralize_labels: false
 
+# 动态过滤 + ST/次新过滤
+use_dynamic_filter: true
+filter_new_stocks: true
+filter_st: true
+
+# 运行期质量闸门
+window_quality_gate:
+  enabled: true
+  min_valid_samples: 30
+  min_healthy_models: 2
+
+# 滚动窗口 (Walk-Forward Optimization, 训练→验证→测试 间隔 10 天 Embargo)
 rolling_windows:
   - name: Test_2023
     train: ["2020-01-01", "2021-12-20"]
@@ -34,25 +49,39 @@ rolling_windows:
     valid: ["2024-01-01", "2024-12-20"]
     test: ["2025-01-01", "2025-12-31"]
 
-top_k_factors: 5
+# 特征选择（首窗口全局筛选 + 后续复用）
+top_k_factors: 20
 feature_selection_date_stride: 2
+
+# 模型配置
 train_models: ["lgb", "xgb", "cat"]
 model_params:
   lgb:
-    num_boost_round: 600
-    early_stopping_rounds: 50
+    num_boost_round: 150
+    early_stopping_rounds: 20
+    device_type: gpu
+    gpu_device_id: 0
   xgb:
-    num_boost_round: 600
-    early_stopping_rounds: 50
+    num_boost_round: 150
+    early_stopping_rounds: 20
+    device: cuda
   cat:
-    num_boost_round: 400
-    early_stopping_rounds: 30
-    task_type: CPU
+    num_boost_round: 150
+    early_stopping_rounds: 20
+    task_type: GPU
 
+# [AQR 改进] 因子冗余检测
 factor_redundancy_check:
   enabled: true
   correlation_threshold: 0.95
 
+# [Citadel Alpha Lab 改进] ICIR 稳定性校验
+icir_stability_check:
+  enabled: true
+  rolling_window: 60
+  keep_ratio: 0.8
+
+# 特征选择细节
 feature_selection:
   method: embedded
   algo: lightgbm

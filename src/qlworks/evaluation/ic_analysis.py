@@ -6,28 +6,66 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
+# ── 默认参数（可统一修改） ──
+_IC_METHOD: str = "spearman"                 # IC 计算方法: spearman / pearson
+_IC_ANNUAL_FACTOR: float = 252.0             # 日频年化因子
+_IC_MIN_SAMPLES: int = 5                     # 最小有效样本数
+_IC_NW_MIN_SAMPLES: int = 10                 # Newey-West 最小样本数
+_IC_MAX_LAG: int = 120                       # IC 半衰期最大滞后天数
+_IC_ROLLING_WINDOW: int = 252                # 滚动 IC 窗口（252 = 1 年）
+_IC_DECAY_HORIZONS: list = [1, 5, 10, 20, 40, 60]  # 衰减分析预测期列表
+_IC_BOOTSTRAP_N: int = 1000                  # Bootstrap 抽样次数
+_IC_BOOTSTRAP_CI: float = 0.95               # Bootstrap 置信区间
+_IC_NW_LAGS_DIVISOR_FACTOR: int = 4          # Newey-West 滞后公式系数
+_IC_NW_LAGS_EXPONENT: float = 2 / 9          # Newey-West 滞后公式指数
+_IC_NW_MAX_LAGS_DIVISOR: int = 3             # NW 最大滞后 = n // N
+_IC_FM_MIN_SAMPLES: int = 10                 # Fama-MacBeth 最小样本数
+
 
 def calc_daily_ic(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    method: str = "spearman",
+    method: str = _IC_METHOD,
+    min_obs: int = 10,
 ) -> pd.Series:
     """每日截面 IC（向量化加速版）。
 
     对 Spearman 方法：先 rank 再计算 Pearson 相关，等效但比逐日 apply 快 3-5 倍。
     对 Pearson 方法：直接 groupby corr。
+
+    当某天有效样本 < min_obs 时，该天 IC 置为 NaN（避免 1-2 只股票算出虚假相关）。
     """
     corr_method = "spearman" if method == "spearman" else "pearson"
     tmp = df[[factor_col, label_col]].copy()
     tmp["_dt"] = df["datetime"].values
+
+    # 过滤样本过少的日期，避免 groupby corr 返回标量 NaN 导致索引结构变化
+    obs_count = tmp.groupby("_dt").size()
+    valid_dates = obs_count[obs_count >= min_obs].index
+    tmp = tmp[tmp["_dt"].isin(valid_dates)]
+
+    if tmp.empty:
+        ic = pd.Series(dtype=float, name="ic")
+        ic.index.name = "datetime"
+        return ic
 
     if corr_method == "spearman":
         # Spearman = rank 后的 Pearson 相关
         tmp[[factor_col, label_col]] = tmp.groupby("_dt")[[factor_col, label_col]].rank()
 
     corr_mats = tmp.groupby("_dt")[[factor_col, label_col]].corr(method="pearson")
-    ic = corr_mats.loc[pd.IndexSlice[:, factor_col], label_col].droplevel(1)
+    try:
+        ic = corr_mats.loc[pd.IndexSlice[:, factor_col], label_col].droplevel(1)
+    except (AssertionError, KeyError):
+        # 兜底：少数日期 groupby corr 后索引结构异常，逐日计算
+        ic_vals = {}
+        for dt, g in tmp.groupby("_dt"):
+            if len(g) >= min_obs:
+                cr = g[[factor_col, label_col]].corr(method=corr_method)
+                if factor_col in cr.index and label_col in cr.columns:
+                    ic_vals[dt] = cr.loc[factor_col, label_col]
+        ic = pd.Series(ic_vals, name="ic")
     ic.index.name = "datetime"
     return ic
 
@@ -68,10 +106,14 @@ def calc_rankic_series(
     return daily
 
 
-def calc_ic_stats(ic_series: pd.Series, annual_factor: float = 252.0) -> dict:
-    """计算 IC 统计量。"""
+def calc_ic_stats(ic_series: pd.Series, annual_factor: float = _IC_ANNUAL_FACTOR) -> dict:
+    """计算 IC 统计量（含 Newey-West 自相关修正 ICIR）。
+
+    5 日重叠标签导致 IC 序列存在强自相关，原始 ICIR (ic_mean/ic_std) 会被高估。
+    Newey-West HAC 修正通过 Bartlett 核估计自相关稳健标准误，得到更保守的 ICIR。
+    """
     ic_clean = ic_series.dropna()
-    if len(ic_clean) < 5:
+    if len(ic_clean) < _IC_MIN_SAMPLES:
         return {"ic_mean": 0.0, "ic_std": 0.0, "icir": 0.0, "win_rate": 0.5, "t_stat": 0.0}
 
     ic_mean = float(ic_clean.mean())
@@ -83,10 +125,20 @@ def calc_ic_stats(ic_series: pd.Series, annual_factor: float = 252.0) -> dict:
     t_stat, _ = stats.ttest_1samp(ic_clean.dropna(), 0)
     t_stat = float(t_stat)
 
+    # Newey-West 自相关修正 ICIR
+    nw_result = calc_newey_west_tstat(ic_clean) if len(ic_clean) >= _IC_NW_MIN_SAMPLES else {"nw_std": ic_std, "n_obs": 0}
+    nw_se = nw_result.get("nw_std", ic_std)
+    n_obs = nw_result.get("n_obs", len(ic_clean))
+    # nw_std 返回的是标准误(SE of mean)，需转换回序列标准差
+    # NW 序列标准差 = NW 标准误 × √n
+    nw_std_series = nw_se * np.sqrt(n_obs) if n_obs > 0 else ic_std
+    icir_nw = ic_mean / nw_std_series * np.sqrt(annual_factor) if nw_std_series > 1e-12 else 0.0
+
     return {
         "ic_mean": round(ic_mean, 6),
         "ic_std": round(ic_std, 6),
         "icir": round(icir, 4),
+        "icir_nw": round(icir_nw, 4),  # Newey-West 修正 ICIR，更保守准确
         "win_rate": round(win_rate, 4),
         "t_stat": round(t_stat, 4),
         "ic_positive_ratio": round(float((ic_clean > 0).mean()), 4),
@@ -97,6 +149,129 @@ def calc_ic_stats(ic_series: pd.Series, annual_factor: float = 252.0) -> dict:
 def calc_cumulative_ic(ic_series: pd.Series) -> pd.Series:
     """累计 IC 序列（用于可视化）。"""
     return ic_series.dropna().cumsum()
+
+
+# ──────────── IC 半衰期 ────────────
+
+def calc_ic_half_life(ic_series: pd.Series, max_lag: int = _IC_MAX_LAG) -> dict:
+    """因子 IC 半衰期：IC 自相关衰减到 50% 所需的滞后天数。
+
+    计算方法：
+      1. 计算 IC 序列的滞后自相关系数（lag 1 到 max_lag）
+      2. 找到自相关首次降低到 50% 以下的滞后阶数
+      3. 如果找不到，用指数衰减模型外推
+
+    半衰期越短 → 因子预测力衰减越快 → 需要高频调仓
+    半衰期越长 → 因子预测力持续越久 → 适合低频换仓
+
+    Args:
+        ic_series: 日度 IC 序列
+        max_lag: 最大考察滞后天数（默认 120 个交易日）
+
+    Returns:
+        dict: half_life_days（半衰期天数）, decay_rate（衰减率）,
+              acf_1（lag-1 自相关）, effective_max_lag（有效最大滞后）
+    """
+    ic = ic_series.dropna()
+    if len(ic) < 20:
+        return {"half_life_days": None, "decay_rate": None, "acf_1": None,
+                "note": "样本不足"}
+
+    # 用 pandas 自相关（最多到 max_lag）
+    acf = [ic.autocorr(lag=l) for l in range(1, min(max_lag, len(ic) // 4) + 1)]
+    if not acf or acf[0] is None:
+        return {"half_life_days": None, "decay_rate": None, "acf_1": None,
+                "note": "自相关计算失败"}
+
+    acf_1 = float(acf[0])
+    half_life = None
+
+    # 方法 1：直接查找自相关首次低于 0.5 的 lag
+    for i, v in enumerate(acf):
+        if v < 0.5 or v < 0:
+            half_life = i + 1
+            break
+
+    # 方法 2：如果找不到（所有 lag 自相关都 > 0.5），用指数衰减模型外推
+    if half_life is None and acf_1 > 0:
+        # 假设指数衰减: acf(lag) = acf_1 ^ lag
+        # 求解 acf_1 ^ half_life = 0.5
+        import math
+        half_life = math.log(0.5) / math.log(acf_1) if acf_1 > 0 and acf_1 != 1 else max_lag
+        half_life = int(round(half_life))
+    elif half_life is None:
+        half_life = max_lag
+
+    decay_rate = float(acf_1) if acf_1 is not None else None
+
+    return {
+        "half_life_days": int(half_life) if half_life else None,
+        "decay_rate": round(decay_rate, 4) if decay_rate else None,
+        "acf_1": round(acf_1, 4) if acf_1 is not None else None,
+        "effective_max_lag": len(acf),
+        "n_obs": len(ic),
+    }
+
+
+# ──────────── 滚动 IC 稳定性 ────────────
+
+def calc_rolling_ic_stability(
+    ic_series: pd.Series,
+    window: int = _IC_ROLLING_WINDOW,
+    annual_factor: float = _IC_ANNUAL_FACTOR,
+) -> dict:
+    """滚动 IC 稳定性分析。
+
+    计算滚动窗口内的 IC 均值和 ICIR 的时序稳定性。
+    稳定性指标：
+      - rolling_icir_mean: 滚动 ICIR 的均值（越高越好）
+      - rolling_icir_std: 滚动 ICIR 的标准差（越低越稳定）
+      - rolling_icir_stability: rolling_icir_mean / rolling_icir_std
+      - ic_rolling_volatility: 滚动 IC 标准差的时间序列均值（越低越稳定）
+
+    Args:
+        ic_series: 日度 IC 序列
+        window: 滚动窗口大小（默认 252 = 1 年）
+        annual_factor: 年化因子
+
+    Returns:
+        dict: 各类稳定性指标
+    """
+    ic = ic_series.dropna()
+    if len(ic) < window + 20:
+        return {"rolling_icir_mean": None, "rolling_icir_std": None,
+                "rolling_icir_stability": None, "ic_rolling_vol": None,
+                "note": f"样本不足（{len(ic)} < {window}+20）"}
+
+    # 滚动 IC 均值
+    rolling_mean = ic.rolling(window, min_periods=window // 2).mean()
+    rolling_std = ic.rolling(window, min_periods=window // 2).std()
+
+    # 滚动 ICIR
+    rolling_icir = rolling_mean / rolling_std * np.sqrt(annual_factor)
+
+    # 稳定性指标
+    valid = rolling_icir.dropna()
+    if len(valid) < 10:
+        return {"rolling_icir_mean": None, "rolling_icir_std": None,
+                "rolling_icir_stability": None, "ic_rolling_vol": None,
+                "note": "有效滚动窗口不足"}
+
+    rolling_icir_mean = float(valid.mean())
+    rolling_icir_std = float(valid.std())
+    stability = rolling_icir_mean / rolling_icir_std if rolling_icir_std > 1e-12 else 0.0
+
+    # IC 波动率稳定性
+    ic_rolling_vol = float(rolling_std.dropna().mean())
+
+    return {
+        "rolling_icir_mean": round(rolling_icir_mean, 4),
+        "rolling_icir_std": round(rolling_icir_std, 4),
+        "rolling_icir_stability": round(stability, 4),
+        "ic_rolling_vol": round(ic_rolling_vol, 6),
+        "window_days": window,
+        "n_windows": len(valid),
+    }
 
 def calc_decay_analysis(
     df: pd.DataFrame, factor_col: str, label_col: str,
@@ -113,7 +288,7 @@ def calc_decay_analysis(
         DataFrame with columns: horizon, ic_mean, icir, t_stat, n_days
     """
     if horizons is None:
-        horizons = [1, 5, 10, 20, 40, 60]
+        horizons = _IC_DECAY_HORIZONS
 
     # 单次预处理：为每个 horizon 创建 shift 后的 label 列
     cols = {factor_col, label_col, "instrument", "datetime"}
@@ -149,7 +324,7 @@ def calc_decay_analysis(
 
 
 def calc_ic_bootstrap_ci(
-    ic_series: pd.Series, n_bootstrap: int = 1000, ci: float = 0.95,
+    ic_series: pd.Series, n_bootstrap: int = _IC_BOOTSTRAP_N, ci: float = _IC_BOOTSTRAP_CI,
 ) -> dict:
     """Bootstrap 计算 IC 均值的置信区间。
 
@@ -210,7 +385,7 @@ def calc_fama_macbeth(
         y = grp[label_col].values
         x = grp[factor_col].values
         mask = ~(np.isnan(x) | np.isnan(y) | np.isinf(x) | np.isinf(y))
-        if mask.sum() < 10:
+        if mask.sum() < _IC_FM_MIN_SAMPLES:
             continue
         x_c = np.column_stack([np.ones(mask.sum()), x[mask]])
         y_c = y[mask]
@@ -220,7 +395,7 @@ def calc_fama_macbeth(
         except Exception:
             continue
 
-    if len(gammas) < 10:
+    if len(gammas) < _IC_FM_MIN_SAMPLES:
         return {"gamma_mean": 0.0, "gamma_std": 0.0, "t_stat": 0.0, "p_value": 1.0, "n_days": len(gammas)}
 
     gamma_arr = np.array(gammas)
@@ -256,8 +431,8 @@ def calc_newey_west_tstat(
         return {"mean": 0.0, "nw_std": 0.0, "nw_tstat": 0.0, "nw_pvalue": 1.0}
 
     if lags is None:
-        lags = int(4 * (n / 100) ** (2 / 9))
-    lags = max(1, min(lags, n // 3))
+        lags = int(_IC_NW_LAGS_DIVISOR_FACTOR * (n / 100) ** _IC_NW_LAGS_EXPONENT)
+    lags = max(1, min(lags, n // _IC_NW_MAX_LAGS_DIVISOR))
 
     mean = float(np.mean(s))
     resid = s - mean
@@ -294,7 +469,7 @@ def calc_newey_west_tstat(
 
 def calc_lo_adjusted_sharpe(
     returns: pd.Series,
-    annual_factor: float = 252.0,
+    annual_factor: float = _IC_ANNUAL_FACTOR,
     q: int = None,
 ) -> dict:
     """Lo (2002) 修正夏普比率的置信区间。

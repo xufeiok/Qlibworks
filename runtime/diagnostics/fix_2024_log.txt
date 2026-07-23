@@ -1,0 +1,3 @@
+2024 OHLCV ÐÞ¸´
+open: fixed=0, stocks=0
+close: fixed=0, stocks=0

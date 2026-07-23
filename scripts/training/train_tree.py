@@ -2,6 +2,7 @@ import os
 import sys
 import warnings
 import argparse
+import copy
 
 # MLflow 新版禁止文件系统存储，设置环境变量启用（Qlib 默认使用文件系统）
 os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
@@ -37,6 +38,7 @@ from qlworks.models.training import (
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
+from qlworks.factors.filter_utils import filter_codes_post
 import qlib
 from _config import resolve_runtime_config
 
@@ -47,14 +49,10 @@ from _config import resolve_runtime_config
 # ==============================================================================
 DEFAULT_YAML_CONFIG_NAME = "tree_2025"
 LOCAL_CONFIG = {
-    # [Renaissance 改进] 使用 csi500 指数静态池 + 逐日 PIT 过滤。
-    # _resolve_static_instruments 从 csi500.txt 读取 PIT 格式成分股数据
-    # （code\tentry_date\texit_date），做窗口级粗过滤 + 逐日精确过滤：
-    #   - 窗口级：保留窗口期内任一时刻是成分股的股票
-    #   - 逐日级：利用 csi500.txt 的 entry/exit 日期，移除非成分股时期的数据行
-    # 这消除了前视偏差（在入指数前就将股票纳入训练首日）和幸存者偏差（退市股正常包含在历史期间）。
-    # 注意：停牌股票无需特殊过滤——NaN 标签会被 DropnaLabel 自然剔除。
-    "instruments": "csi500", 
+    # 使用沪深主板股票池（main_board.txt）。
+    # main_board 是沪深主板（600/601/603/000 开头）的静态池，无 PIT 窗口，
+    # 只需做股票代码交集过滤。退市股在 all.txt 中标记，由退市过滤剔除。
+    "instruments": "main_board", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     
@@ -79,13 +77,23 @@ LOCAL_CONFIG = {
     "model_type": "tree", # 机器学习模型类型 (tree / linear 等)
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"], # [Citadel Alpha Lab 改进] 预测标签公式: T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"], # 预测标签名称
-    "factor_files": ["reversal_momentum_factors"], # 待加载的因子文件
+    "factor_files": ["selected_good_factors"], # 待加载的因子文件
     "factor_cache_names": [], # DuckDB + Parquet 预计算因子（注入为 Qlib 表达式）
     "normalize_features": True, # 是否对特征进行标准化；tree=True 时固定采用 CSQuantileNorm
     "neutralize_features": False, # 是否对特征进行横截面中性化
     "renormalize_features_after_neutralize": False, # 特征中性化后是否再标准化；tree 默认关闭
     "normalize_labels": True, # 是否对标签进行横截面分位数化
     "neutralize_labels": False, # 是否对标签进行横截面中性化（行业/市值残差化）
+    "use_dynamic_filter": True, # 动态过滤：剔除停牌股 + 低流动性僵尸股
+    "filter_new_stocks": True,  # 后置过滤：上市不足 250 日次新股
+    "filter_st": True,          # 后置过滤：ST 股票
+    
+    # 运行期质量闸门：剔除标签/数据异常导致的坏窗口
+    "window_quality_gate": {
+        "enabled": True,
+        "min_valid_samples": 30,
+        "min_healthy_models": 2,
+    },
     
     # 【Renaissance 级改进】使用滚动窗口进行训练和测试，防止概念漂移和前视偏差
     # [Point] 引入 Embargo (隔离期)：训练集到验证集、验证集到测试集之间留出约10天安全垫，防止 T+N 标签导致的未来数据泄漏 (Look-ahead Bias)
@@ -109,13 +117,13 @@ LOCAL_CONFIG = {
             "test":  ("2025-01-01", "2025-12-31"),
         }
     ],
-    "top_k_factors": 6, # 我们选取筛选出来的 Top 6 因子来建模
+    "top_k_factors": 20, # 从筛选结果中取 Top 20 个因子建模
     "feature_selection_date_stride": 2, # 特征筛选按日期抽样步长；2=隔天抽样，显著降低筛选耗时
-    "train_models": ["lgb", "xgb", "cat"], # 默认包含 CatBoost；当前默认以 CPU 模式训练，避免 GPU OOM
+    "train_models": ["lgb", "xgb", "cat"],
     "model_params": {
-        "lgb": {"num_boost_round": 150, "early_stopping_rounds": 20},
-        "xgb": {"num_boost_round": 150, "early_stopping_rounds": 20},
-        "cat": {"num_boost_round": 150, "early_stopping_rounds": 20, "task_type": "CPU"},
+        "lgb": {"num_boost_round": 150, "early_stopping_rounds": 20, "device_type": "gpu", "gpu_device_id": 0},
+        "xgb": {"num_boost_round": 150, "early_stopping_rounds": 20, "device": "cuda"},
+        "cat": {"num_boost_round": 150, "early_stopping_rounds": 20, "task_type": "GPU"},
     },
     "factor_redundancy_check": {
         "enabled": True,                  # [AQR 改进] 开启因子冗余检测
@@ -131,12 +139,208 @@ LOCAL_CONFIG = {
         "algo": "lightgbm",     
         "label_col": "LABEL_5D",  
         "remove_collinearity": False,
-    }
+    },
 }
+
+
+def get_latest_qlib_calendar_date(calendar_path: str | Path | None = None) -> str:
+    """
+    读取本地 Qlib 日历中的最新交易日。
+
+    输入:
+    - calendar_path: Qlib 日历文件路径；为空时默认读取 qlib_data/calendars/day.txt
+
+    输出:
+    - 最新交易日，格式 YYYY-MM-DD
+
+    边界:
+    - 日历文件不存在或为空时抛出异常，避免训练误用过期时间窗口。
+    """
+    path = Path(calendar_path) if calendar_path else Path(QLIB_DATA_DIR) / "calendars" / "day.txt"
+    if not path.exists():
+        raise FileNotFoundError(f"Qlib 日历文件不存在: {path}")
+
+    with open(path, "r", encoding="utf-8") as f:
+        dates = [line.strip() for line in f if line.strip()]
+
+    if not dates:
+        raise ValueError(f"Qlib 日历文件为空: {path}")
+
+    return dates[-1]
+
+
+def build_effective_local_config(base_config: dict | None = None, latest_date: str | None = None) -> dict:
+    """
+    基于本地 Qlib 最新交易日扩展训练配置。
+
+    输入:
+    - base_config: 原始本地配置；为空时使用 LOCAL_CONFIG
+    - latest_date: 指定最新交易日；为空时自动从本地 Qlib 日历读取
+
+    输出:
+    - 已按最新交易日修正 end_time/rolling_windows 的新配置
+
+    规则:
+    - 保留已有历史窗口，避免影响 2023~2025 的样本外评估
+    - 当本地数据已进入 2026 年时，自动补一个 Test_2026 窗口用于当前训练/打分
+    """
+    config = copy.deepcopy(base_config or LOCAL_CONFIG)
+    resolved_latest_date = latest_date or get_latest_qlib_calendar_date()
+    latest_ts = pd.Timestamp(resolved_latest_date)
+
+    if latest_ts > pd.Timestamp(config["end_time"]):
+        config["end_time"] = resolved_latest_date
+
+    if latest_ts >= pd.Timestamp("2026-01-01"):
+        test_2026_window = {
+            "name": "Test_2026",
+            "train": ("2023-01-01", "2024-12-20"),
+            "valid": ("2025-01-01", "2025-12-20"),
+            "test": ("2026-01-01", resolved_latest_date),
+        }
+
+        windows = []
+        replaced = False
+        for window in config.get("rolling_windows", []):
+            if window.get("name") == "Test_2026":
+                windows.append(test_2026_window)
+                replaced = True
+            else:
+                windows.append(window)
+        if not replaced:
+            windows.append(test_2026_window)
+        config["rolling_windows"] = windows
+
+    return config
+
+
+def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_start, train_end,
+                                out_dir=None, batch_size=20, top_k=60, stride=2):
+    """分批因子筛选：每次合并 batch_size 个因子计算 IC，避免 OOM。
+
+    参数：
+    - feature_cache: 包含 factor_series_list 的全局缓存
+    - label_expr: Qlib 标签表达式（如 "Ref($close, -1) / $close - 1"）
+    - label_name: 标签名称
+    - train_start, train_end: 训练期时间范围
+    - batch_size: 每批处理的因子数
+    - top_k: 最终选出的因子数
+    - stride: 日期抽样步长（=2 表示隔天计算 IC）
+
+    返回：
+    - selected_names: 按 |IC| 降序排列的 top_k 因子名列表
+    """
+    from qlib.data import D
+    from qlworks.models.training import compute_ic
+    import gc
+
+    series_list = feature_cache.factor_series_list
+    if not series_list:
+        print("    [警告] factor_series_list 为空，无法进行因子筛选")
+        return []
+
+    factor_names = [s.name for s in series_list]
+    print(f"    [分批筛选] 共 {len(factor_names)} 个因子，每批 {batch_size} 个")
+
+    # 从 Qlib 直接加载标签数据
+    print(f"    [分批筛选] 加载标签 {label_name} ({train_start} ~ {train_end})...")
+    all_instruments = feature_cache.resolved_instruments or list(
+        set(idx[0] for s in series_list for idx in s.index)
+    )
+    batch_size_instr = 500
+    label_frames = []
+    for i in range(0, len(all_instruments), batch_size_instr):
+        batch_inst = all_instruments[i:i+batch_size_instr]
+        try:
+            _df = D.features(
+                batch_inst,
+                [label_expr],
+                start_time=train_start,
+                end_time=train_end,
+                freq="day",
+            )
+            if _df is not None and not _df.empty:
+                label_frames.append(_df)
+        except Exception:
+            continue
+    if not label_frames:
+        raise RuntimeError("无法加载标签数据")
+
+    label_df = pd.concat(label_frames)
+    label_df.index.names = ["instrument", "datetime"]
+    # [对齐] 标签索引保持 (instrument, datetime) 格式，与 warehouse 因子 swaplevel 后一致
+    label_series = label_df[label_df.columns[0]].sort_index()
+    label_series = label_series.rename(label_name)
+    label_dates = label_series.index.get_level_values("datetime").unique()
+    if stride > 1:
+        label_dates = label_dates[::stride]
+        label_series = label_series[label_series.index.get_level_values("datetime").isin(label_dates)]
+    print(f"    [分批筛选] 标签数据: {len(label_series):,} 条，{len(label_dates)} 个交易日")
+
+    # 分批计算 IC
+    all_ic_results = {}
+    for batch_start in range(0, len(factor_names), batch_size):
+        batch_names = factor_names[batch_start:batch_start + batch_size]
+        print(f"    [分批筛选] 处理 [{batch_start+1}-{min(batch_start+batch_size, len(factor_names))}]/{len(factor_names)}: {', '.join(batch_names[:3])}{'...' if len(batch_names)>3 else ''}")
+
+        # 按需合并当前批次的因子
+        batch_df = feature_cache.get_warehouse_df(batch_names, start_time=train_start, end_time=train_end)
+        if batch_df.empty:
+            continue
+
+        # 对齐标签和因子
+        if isinstance(batch_df.columns, pd.MultiIndex):
+            batch_df.columns = batch_df.columns.get_level_values(1)
+        batch_df = batch_df.swaplevel().sort_index() if batch_df.index.names[0] == "datetime" else batch_df.sort_index()
+
+        common_index = batch_df.index.intersection(label_series.index)
+        if len(common_index) < 100:
+            continue
+
+        batch_df = batch_df.loc[common_index]
+        labels = label_series.loc[common_index]
+
+        # 日期抽样
+        if stride > 1:
+            _dates = batch_df.index.get_level_values("datetime").unique()[::stride]
+            _mask = batch_df.index.get_level_values("datetime").isin(_dates)
+            batch_df = batch_df.loc[_mask]
+            labels = labels.loc[_mask]
+
+        # 计算每个因子的 IC
+        for col in batch_df.columns:
+            feat = batch_df[col].dropna()
+            lab = labels.reindex(feat.index).dropna()
+            common = feat.index.intersection(lab.index)
+            if len(common) < 50:
+                continue
+            try:
+                ic_val = compute_ic(feat.loc[common], lab.loc[common])
+                all_ic_results[col] = ic_val
+            except Exception:
+                all_ic_results[col] = 0.0
+
+        del batch_df
+        gc.collect()
+
+    # 按 |IC| 排序并返回 top_k
+    ic_df = pd.Series(all_ic_results).sort_values(key=abs, ascending=False)
+    selected = list(ic_df.head(top_k).index)
+    if selected:
+        print(f"    [分批筛选] 完成！Top {len(selected)} 因子 (|IC| 范围: {abs(ic_df[selected[-1]]):.4f} ~ {abs(ic_df[selected[0]]):.4f})")
+    else:
+        print("    [分批筛选] 警告：未选出任何因子，请检查数据对齐")
+
+    if out_dir is not None:
+        ic_df.to_csv(Path(out_dir) / "batch_factor_ic.csv")
+        pd.Series(selected).to_csv(Path(out_dir) / "batch_selected_factors.csv", index=False, header=["factor"])
+
+    return selected
+
 
 def run_ml_pipeline(config_source: str = "local", config_name: str | None = None):
     CONFIG = resolve_runtime_config(
-        local_config=LOCAL_CONFIG,
+        local_config=build_effective_local_config(),
         default_yaml_name=DEFAULT_YAML_CONFIG_NAME,
         config_source=config_source,
         config_name=config_name,
@@ -149,25 +353,25 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
     print("\n[1] 初始化 Qlib 环境...")
     qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn", joblib_backend="threading", maxtasksperchild=None)
 
-    # [1b] 验证 csi500 成分股可用且非空，确保后续训练只在 csi500 上运行
-    print("\n[1b] 验证 csi500 成分股配置...")
+    # [1b] 验证 main_board 股票池可用且非空，确保后续训练只在沪深主板上运行
+    print("\n[1b] 验证 main_board 股票池配置...")
     try:
-        _inst_dir = Path(QLIB_DATA_DIR) / "instruments" / "csi500.txt"
+        _inst_dir = Path(QLIB_DATA_DIR) / "instruments" / "main_board.txt"
         if not _inst_dir.exists():
-            print("  [警告] csi500.txt 文件不存在！请先运行数据同步脚本生成成分股文件。")
+            print("  [警告] main_board.txt 文件不存在！请先运行数据同步脚本生成股票池文件。")
         else:
             with open(_inst_dir) as _f:
-                _csi500_stocks = set()
+                _main_board_stocks = set()
                 for _l in _f:
                     _l = _l.strip()
                     if not _l: continue
-                    _parts = _l.split('\t')
-                    if len(_parts) >= 3:
-                        _csi500_stocks.add(_parts[0].lower())
-            print(f"csi500 成分股文件: {_inst_dir} ({len(_csi500_stocks)} 只历史成分股)")
-            print(f"样本: {sorted(_csi500_stocks)[:5]}")
+                    _parts = _l.split()
+                    if _parts:
+                        _main_board_stocks.add(_parts[0].lower())
+            print(f"main_board 股票池文件: {_inst_dir} ({len(_main_board_stocks)} 只股票)")
+            print(f"样本: {sorted(_main_board_stocks)[:5]}")
     except Exception as e:
-        print(f"  [警告] csi500 成分股验证失败: {e}")
+        print(f"  [警告] main_board 验证失败: {e}")
 
     # [1c] 验证退市日期配置真实
     print("\n[1c] 验证退市日期配置...")
@@ -214,66 +418,35 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
     print(f"    训练期: {first_window['train'][0]} ~ {first_window['train'][1]}")
     print(f"{'='*60}")
 
-    print(f"\n[3A.0] 构建首窗口特征缓存...")
-    first_feature_cache = build_custom_feature_cache(
+    print(f"\n[3A.0] 构建全局特征缓存（覆盖 {CONFIG['start_time']} ~ {CONFIG['end_time']}，复用至所有窗口）...")
+    global_feature_cache = build_custom_feature_cache(
         instruments=CONFIG["instruments"],
         feature_bundle=bundle_all,
         factor_cache_names=CONFIG["factor_cache_names"],
-        start_time=first_segments["train"][0],
-        end_time=first_segments["test"][1],
+        start_time=CONFIG["start_time"],
+        end_time=CONFIG["end_time"],
         freq="day",
+        use_dynamic_filter=CONFIG["use_dynamic_filter"],
+    )
+    print(f"    >>> 全局缓存构建完成（动态过滤={'是' if CONFIG['use_dynamic_filter'] else '否'}）")
+
+    print(f"\n[3A.1] 分批因子筛选（避免 OOM）...")
+    label_expr = CONFIG["label_fields"][0]
+    label_name = CONFIG["label_names"][0]
+    global_selected_factor_names = _batch_factor_ic_selection(
+        feature_cache=global_feature_cache,
+        label_expr=label_expr,
+        label_name=label_name,
+        train_start=first_segments["train"][0],
+        train_end=first_segments["train"][1],
+        out_dir=CONFIG.get("output_dir", "."),
+        batch_size=CONFIG.get("feature_selection_batch_size", 20),
+        top_k=CONFIG["top_k_factors"],
+        stride=max(int(CONFIG.get("feature_selection_date_stride", 2)), 1),
     )
 
-    print(f"\n[3A.1] 构建全量因子数据集（仅训练期）...")
-    _, first_dataset_full = create_custom_dataset(
-        instruments=CONFIG["instruments"],
-        feature_cache=first_feature_cache,
-        start_time=first_segments["train"][0],
-        end_time=first_segments["train"][1],
-        fit_start_time=first_segments["train"][0],
-        fit_end_time=first_segments["train"][1],
-        segments={"train": first_segments["train"]},
-        model_type=CONFIG["model_type"],
-        normalize_features=CONFIG["normalize_features"],
-        neutralize_features=CONFIG["neutralize_features"],
-        renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
-        normalize_labels=CONFIG["normalize_labels"],
-        neutralize_labels=CONFIG["neutralize_labels"]
-    )
-
-    print(f"\n[3A.2] 执行全局因子筛选 (选取前 {CONFIG['top_k_factors']} 个)...")
-    train_frame_full_fs = first_dataset_full.prepare("train")
-    print(f"    >>> 训练集数据: {train_frame_full_fs.shape[0]} 行 x {train_frame_full_fs.shape[1]} 列")
-    label_col_name = fs_conf["label_col"]
-    if label_col_name in train_frame_full_fs.columns:
-        pass
-    elif ("label", label_col_name) in train_frame_full_fs.columns:
-        label_col_name = ("label", label_col_name)
-    print(f"    >>> label_col 实际名: {label_col_name}")
-
-    fs_stride = max(int(CONFIG.get("feature_selection_date_stride", 1)), 1)
-    if fs_stride > 1:
-        sampled_dates = train_frame_full_fs.index.get_level_values('datetime').unique()[::fs_stride]
-        train_frame_fs = train_frame_full_fs.loc[train_frame_full_fs.index.get_level_values('datetime').isin(sampled_dates)]
-        print(f"    >>> 特征筛选抽样: 每 {fs_stride} 个交易日取 1 个，降至 {train_frame_fs.shape[0]} 行")
-    else:
-        train_frame_fs = train_frame_full_fs
-
-    x_train, y_train, _ = prepare_feature_selection_data(train_frame_fs, label_col=label_col_name)
-    valid_idx = y_train.dropna().index
-    x_train = x_train.loc[valid_idx]
-    y_train = y_train.loc[valid_idx]
-
-    global_fs_result = cached_select_features(
-        x_train, y_train,
-        method=fs_conf["method"],
-        algo=fs_conf["algo"],
-        threshold=0.0,
-        model_kwargs={"max_features": CONFIG["top_k_factors"], "importance_type": "gain"},
-        remove_collinearity=fs_conf["remove_collinearity"]
-    )
-
-    global_selected_factor_names = list(global_fs_result.selected_features)
+    if not global_selected_factor_names:
+        raise RuntimeError("分批因子筛选失败，未选出任何因子")
     print(f"\n>>> 全局因子筛选完成！固定使用以下 {len(global_selected_factor_names)} 个因子:")
     for i, fname in enumerate(global_selected_factor_names, 1):
         print(f"    {i}. {fname}")
@@ -356,6 +529,22 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         else:
             print(f"      特征数不足，跳过")
 
+    # 保存全局最终因子列表供后续复盘与查询
+    _selected_dir = Path(__file__).parent
+    _selected_path = _selected_dir / "selected_factors_tree.txt"
+    _selected_archive_path = _selected_dir / f"selected_factors_tree_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
+    with open(_selected_path, "w", encoding="utf-8") as _f:
+        for _i, _fn in enumerate(global_selected_factor_names, 1):
+            _f.write(f"{_i}. {_fn}\n")
+    pd.DataFrame(
+        {
+            "rank": range(1, len(global_selected_factor_names) + 1),
+            "factor_name": global_selected_factor_names,
+        }
+    ).to_csv(_selected_archive_path, index=False, encoding="utf-8-sig")
+    print(f"\n>>> 全局因子筛选结果已保存至: {_selected_path} ({len(global_selected_factor_names)} 个)")
+    print(f">>> 因子归档文件已保存至: {_selected_archive_path}")
+
     del first_dataset_full, train_frame_full_fs, train_frame_fs, x_train, y_train, global_fs_result
     gc.collect()
 
@@ -380,20 +569,8 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
             "test":  window["test"],
         }
 
-        print(f"\n[3B.0 - {window_name}] 构建窗口级特征缓存...")
-        # [性能优化] 首窗口的特征缓存已在 3A.0 构建过，直接复用避免重复计算
-        if window_name == CONFIG["rolling_windows"][0]["name"] and "first_feature_cache" in dir():
-            feature_cache = first_feature_cache
-            print(f"      [复用 3A 缓存] 跳过重复计算")
-        else:
-            feature_cache = build_custom_feature_cache(
-                instruments=CONFIG["instruments"],
-                feature_bundle=bundle_all,
-                factor_cache_names=CONFIG["factor_cache_names"],
-                start_time=segments["train"][0],
-                end_time=segments["test"][1],
-                freq="day",
-            )
+        print(f"\n[3B.0 - {window_name}] 复用全局特征缓存...")
+        feature_cache = global_feature_cache
 
         print(f"\n[3B.1 - {window_name}] 使用固定因子集构建轻量级 DatasetH...")
         _, dataset_sub = create_custom_dataset(
@@ -410,7 +587,8 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
             neutralize_features=CONFIG["neutralize_features"],
             renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
             normalize_labels=CONFIG["normalize_labels"],
-            neutralize_labels=CONFIG["neutralize_labels"]
+            neutralize_labels=CONFIG["neutralize_labels"],
+            use_dynamic_filter=CONFIG.get("use_dynamic_filter", False),
         )
 
         train_frame_window = dataset_sub.prepare("train")
@@ -504,6 +682,29 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         else:
             print(f"      >> 使用等权重集成")
 
+        # 窗口质量闸门：验证集样本不足或健康模型过少时跳过该窗口
+        gate_cfg = CONFIG.get("window_quality_gate", {})
+        if gate_cfg.get("enabled", True):
+            healthy_count = sum(1 for w in model_ic_weights if w > 1e-6)
+            min_healthy = gate_cfg.get("min_healthy_models", 2)
+            min_samples = gate_cfg.get("min_valid_samples", 30)
+
+            valid_sample_count = 0
+            if valid_frame is not None and valid_frame.shape[0] > 0:
+                valid_sample_count = valid_frame.shape[0]
+
+            if valid_sample_count < min_samples:
+                print(f"    [闸门] {window_name} 验证集样本 {valid_sample_count} < {min_samples}，跳过")
+                del dataset_sub, models, feature_cache
+                gc.collect()
+                continue
+            if healthy_count < min_healthy:
+                print(f"    [闸门] {window_name} 健康模型数 {healthy_count} < {min_healthy}，跳过")
+                del dataset_sub, models, feature_cache
+                gc.collect()
+                continue
+            print(f"    [闸门] {window_name} 通过: 验证样本 {valid_sample_count}，健康模型 {healthy_count}/{len(models)}")
+
         print(f"\n[3B.3 - {window_name}] 测试集预测...")
         predictions = predict_ensemble_models(models, dataset_sub, segment="test", model_weights=model_ic_weights)
 
@@ -525,23 +726,24 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
     # 按时间排序，确保回测顺序正确
     final_predictions.sort_index(level=["datetime", "instrument"], inplace=True)
     
-    # [PIT 过滤] 按每一天过滤 csi500 成分股 + 退市股，杜绝未来函数和幸存者偏差
+    # [PIT 过滤] 按每一天过滤 main_board 股票池 + 退市股 + ST/次新股，杜绝未来函数和幸存者偏差
     try:
-        # 1. 加载 csi500 成分股历史（读取 csi500.txt 构建 PIT 映射）
-        _inst_path = Path(QLIB_DATA_DIR) / "instruments" / "csi500.txt"
-        _csi500_pit = {}  # {stock: [(start_date, end_date), ...]}
+        before = len(final_predictions)
+
+        # 1. 加载 main_board 股票池（静态池）
+        _inst_path = Path(QLIB_DATA_DIR) / "instruments" / "main_board.txt"
+        _main_board_stocks = set()
         if _inst_path.exists():
             with open(_inst_path) as _f:
                 for _l in _f:
                     _l = _l.strip()
                     if not _l:
                         continue
-                    _parts = _l.split('\t')
-                    if len(_parts) >= 3:
-                        _code, _s, _e = _parts[0].lower(), _parts[1], _parts[2]
-                        _csi500_pit.setdefault(_code, []).append((_s, _e))
+                    _parts = _l.split()
+                    if _parts:
+                        _main_board_stocks.add(_parts[0].lower())
 
-        # 2. 加载退市股日期（读取 all.txt）
+        # 2. 加载退市股日期
         _all_path = Path(QLIB_DATA_DIR) / "instruments" / "all.txt"
         _delist_pit = {}  # {stock: delist_date}
         if _all_path.exists():
@@ -556,44 +758,51 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                         if _delist_d != '9999-12-31':
                             _delist_pit[_code] = _delist_d
 
-        # 3. 逐日过滤
-        before = len(final_predictions)
-        _filtered_rows = []
-        for (_dt, _inst), _row in final_predictions.iterrows():
-            _dt_str = str(_dt)[:10]
-            _inst_lower = _inst.lower()
+        # 3. 向量化过滤：逐日分组 → 主板/退市筛查 → ST/次新过滤
+        _filter_new_stocks = CONFIG.get("filter_new_stocks", True)
+        _filter_st = CONFIG.get("filter_st", True)
+        _filtered_parts = []
+        _total_st_removed = 0
 
-            # 3a. 检查是否已退市
-            _delist_d = _delist_pit.get(_inst_lower, '9999-12-31')
-            if _dt_str > _delist_d:
-                continue  # 退市后剔除
+        for _date, _day_df in final_predictions.groupby(level="datetime"):
+            _dt_str = str(_date)[:10]
 
-            # 3b. 检查当天是否在 csi500 中
-            _in_csi500 = False
-            if _inst_lower in _csi500_pit:
-                for _s, _e in _csi500_pit[_inst_lower]:
-                    if _s <= _dt_str <= _e:
-                        _in_csi500 = True
-                        break
-            if not _in_csi500:
-                continue  # 非 csi500 成分股剔除
-
-            _filtered_rows.append(((_dt, _inst_lower), _row))
-
-        if _filtered_rows:
-            final_predictions = pd.DataFrame(
-                [r[1] for r in _filtered_rows],
-                index=pd.MultiIndex.from_tuples([r[0] for r in _filtered_rows], names=["datetime", "instrument"])
+            # 3a. 主板股票池 + 退市检查（向量化）
+            _day_insts = _day_df.index.get_level_values("instrument").str.lower()
+            _in_board = _day_insts.isin(_main_board_stocks)
+            _not_delisted = _day_insts.map(
+                lambda x: _delist_pit.get(x, "9999-12-31") >= _dt_str
             )
+            _day_df = _day_df[_in_board & _not_delisted]
+
+            if _day_df.empty:
+                continue
+
+            # 3b. ST/次新过滤
+            _codes = _day_df.index.get_level_values("instrument").unique().tolist()
+            _filtered_codes = filter_codes_post(
+                _codes, _dt_str,
+                filter_new_stocks=_filter_new_stocks,
+                filter_st=_filter_st,
+            )
+            _total_st_removed += len(_codes) - len(_filtered_codes)
+
+            _filtered_set = set(_filtered_codes)
+            _keep = _day_df.index.get_level_values("instrument").str.lower().isin(_filtered_set)
+            _day_df = _day_df[_keep]
+            if not _day_df.empty:
+                _filtered_parts.append(_day_df)
+
+        if _filtered_parts:
+            final_predictions = pd.concat(_filtered_parts)
+            final_predictions.sort_index(level=["datetime", "instrument"], inplace=True)
         else:
             final_predictions = final_predictions.iloc[0:0]
 
         after = len(final_predictions)
-        _excluded_delisted = sum(1 for _dt, _inst in final_predictions.index for _ in [1]
-                                 if _delist_pit.get(_inst.lower(), '9999-12-31') != '9999-12-31')
-        print(f"\n  [PIT 过滤] 前 {before} 行 → 后 {after} 行 (剔除了 {before-after} 行非 csi500/退市)")
+        print(f"\n  [PIT 过滤] 前 {before} → 后 {after} (主板/退市/ST/次新共剔除 {before-after} 行)")
     except Exception as e:
-        print(f"  [警告] PIT 过滤失败: {e}，跳过过滤")
+        print(f"  [警告] 股票池过滤失败: {e}，跳过过滤")
     
     print(f">>> 合并完成！总测试集跨度: {final_predictions.index.get_level_values('datetime').min().date()} 至 {final_predictions.index.get_level_values('datetime').max().date()}")
     print("    【预测排名 (Score) 抽样展示】(1.0代表当天全市场最强):")

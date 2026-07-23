@@ -58,6 +58,9 @@ CONFIG = {
     "industry_neutral": True,             # True=施加行业约束, False=纯信号对比
     "max_per_industry": 4,               # 单行业最大持仓数
 
+    # — 准入预过滤 —
+    "admission_buffer": 3,                # 每天保留 top_k × buffer 只候选股，减少 Cerebro 数据源数量
+
     # — 子样本剥离（零算力防伪测试） —
     "subsample_filter": {
         "enabled": False,                 # True=仅回测指定成分股（如 csi300），False=全市场
@@ -152,6 +155,22 @@ def run_backtest_for_score(pred_df, label, industry_maps=None, subsample_set=Non
 
     if CONFIG["industry_neutral"] and industry_maps is not None:
         df = apply_industry_constraint_pit(df, industry_maps, top_k=CONFIG["top_k"], max_per_industry=CONFIG["max_per_industry"])
+
+    # [准入预过滤] 每天只保留 score 排名 top_k × buffer 的候选股
+    buf = CONFIG.get("admission_buffer", 0)
+    if buf > 0:
+        top_candidates = CONFIG["top_k"] * buf
+        print(f"    [准入预过滤] {label}: 每天保留 score 前 {top_candidates} 只候选股...")
+        before_inst = len(df.index.get_level_values('instrument').unique())
+        before_rows = len(df)
+        keep_mask = (
+            df.groupby(level='datetime')['score']
+            .rank(ascending=False, na_option='bottom')
+            <= top_candidates
+        )
+        df = df[keep_mask].copy()
+        after_inst = len(df.index.get_level_values('instrument').unique())
+        print(f"      股票数: {before_inst} → {after_inst} 只  |  行数: {before_rows} → {len(df)}")
 
     all_instruments = df.index.get_level_values('instrument').unique().tolist()
     price_dict = get_price_dict(all_instruments, CONFIG["start_date"], CONFIG["end_date"])

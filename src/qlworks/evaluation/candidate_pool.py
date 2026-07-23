@@ -35,7 +35,23 @@ class CandidatePool:
     def _ensure_pool(self):
         if not self._pool_path.exists():
             with open(self._pool_path, "w", encoding="utf-8") as f:
-                json.dump({"candidate_pool": [], "last_updated": str(datetime.now())}, f, ensure_ascii=False, indent=2)
+                json.dump({
+                    "_meta": {
+                        "version": "1.0",
+                        "description": "多因子准入候选池 — 由 evaluate() 和 admit_to_multifactor.py 共同维护",
+                        "updated_at": str(datetime.now()),
+                        "admit_thresholds": {
+                            "max_correlation_existing": 0.70,
+                            "min_oos_icir": 0.5,
+                            "min_recent_3y_ic_positive_ratio": 0.60,
+                            "direction_consistency_required": True,
+                        },
+                    },
+                    "factors": [],
+                    "rejected": [],
+                    "stats": {"total_candidates": 0, "admitted": 0,
+                              "rejected_corr": 0, "rejected_marginal": 0, "rejected_direction": 0},
+                }, f, ensure_ascii=False, indent=2)
 
     def _save(self, data: dict):
         with open(self._pool_path, "w", encoding="utf-8") as f:
@@ -144,46 +160,50 @@ class CandidatePool:
         return result
 
     def add_candidate(self, factor_name: str, metrics: dict, screening: dict) -> dict:
-        """将因子加入候选池。"""
+        """将因子加入候选池（新格式，与 admit_to_multifactor.py 兼容）。"""
         data = self._load()
-        pool = data["candidate_pool"]
+        pool = data.setdefault("factors", [])
 
         entry = {
-            "factor_name": factor_name,
-            "added_date": str(datetime.now()),
-            "metrics": metrics,
-            "screening": screening,
-            "status": "active" if screening["passed"] else "pending",
-            "eval_count": 1,
+            "name": factor_name,
+            "tier": "core" if screening.get("composite_score", 0) >= 80 else "satellite",
+            "category": "",
+            "sub_category": "",
+            "meaning": "",
+            "source_file": "",
+            "latest_icir": metrics.get("ir", 0),
+            "admitted_at": str(datetime.now()),
+            "_metrics": metrics,
+            "_screening": screening,
         }
 
         # 已存在则更新
         for i, e in enumerate(pool):
-            if e["factor_name"] == factor_name:
-                entry["eval_count"] = e.get("eval_count", 0) + 1
+            if e.get("name") == factor_name:
                 pool[i] = entry
                 break
         else:
             pool.append(entry)
 
-        # 按综合评分排序
-        pool.sort(key=lambda x: x.get("screening", {}).get("composite_score", 0), reverse=True)
-        data["candidate_pool"] = pool
-        data["last_updated"] = str(datetime.now())
+        # 按 ICIR 排序
+        pool.sort(key=lambda x: x.get("latest_icir", 0), reverse=True)
+        data["_meta"]["updated_at"] = str(datetime.now())
+        data["stats"]["admitted"] = len(pool)
         self._save(data)
         return entry
 
     def remove_candidate(self, factor_name: str):
         """从候选池移除因子。"""
         data = self._load()
-        data["candidate_pool"] = [e for e in data["candidate_pool"] if e["factor_name"] != factor_name]
-        data["last_updated"] = str(datetime.now())
+        data["factors"] = [e for e in data.get("factors", []) if e.get("name") != factor_name]
+        data["_meta"]["updated_at"] = str(datetime.now())
+        data["stats"]["admitted"] = len(data["factors"])
         self._save(data)
 
     def list_candidates(self, status: Optional[str] = None) -> list:
         """列出候选池因子。"""
         data = self._load()
-        pool = data["candidate_pool"]
+        pool = data.get("factors", [])
         if status:
             pool = [e for e in pool if e.get("status") == status]
         return pool
@@ -191,7 +211,7 @@ class CandidatePool:
     def get_candidate(self, factor_name: str) -> Optional[dict]:
         """获取单个候选因子信息。"""
         data = self._load()
-        for entry in data["candidate_pool"]:
-            if entry["factor_name"] == factor_name:
+        for entry in data.get("factors", []):
+            if entry.get("name") == factor_name:
                 return entry
         return None

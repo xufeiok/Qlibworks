@@ -1,7 +1,9 @@
+import argparse
 import os
 import sys
 from pathlib import Path
 import pandas as pd
+import numpy as np
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../src")))
 
@@ -10,7 +12,7 @@ from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
 from qlworks.backtest.bt_strategy_label import LabelConsistencyStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
 
 # ==============================================================================
 # [参数区] — 标签一致性回测专用
@@ -37,6 +39,9 @@ HOLDING_DAYS = 5                          # 严格持仓天数（对照实验：
 # — 行业敞口控制 —
 INDUSTRY_NEUTRAL = True                   # True=施加行业约束, False=纯信号对比
 MAX_PER_INDUSTRY = 4                      # 单行业最大持仓数
+
+# — 准入预过滤 —
+ADMISSION_BUFFER = 3                      # 每天保留 top_k × buffer 只候选股，减少 Cerebro 数据源数量
 
 # — 反向测试控制 —
 REVERSE_TEST = False                       # True=反向测试（买入得分最低的股票），False=正向测试
@@ -105,7 +110,115 @@ def _load_delist_dates() -> dict:
     return delist_map
 
 
-def _pit_filter_predictions(pred_df: pd.DataFrame) -> pd.DataFrame:
+def _filter_delisted_only(pred_df: pd.DataFrame, start_date: pd.Timestamp) -> pd.DataFrame:
+    """
+    向量化退市过滤：剔除已退市股票。
+
+    分两步：
+    1. 剔除整个回测期前已退市的股票（无可用行情数据）
+    2. 对回测期内退市的股票，剔除退市日期之后的行
+
+    Args:
+        pred_df: MultiIndex (datetime, instrument) 的预测 DataFrame
+        start_date: 回测起始日期
+
+    Returns:
+        过滤后的 DataFrame
+    """
+    delist_pit = _load_delist_dates()
+    if not delist_pit:
+        print("    [退市过滤] 无退市 PIT 数据，跳过")
+        return pred_df
+
+    before = len(pred_df)
+    delist_dates = {k.lower(): pd.Timestamp(v) for k, v in delist_pit.items()}
+
+    # ---- 步骤 1：剔除整个回测期前已退市的股票 ----
+    pre_delisted = {k for k, v in delist_dates.items() if v < start_date}
+    if pre_delisted:
+        insts_lower = pred_df.index.get_level_values("instrument").str.lower()
+        pre_mask = ~insts_lower.isin(pre_delisted)
+        pred_df = pred_df[pre_mask].copy()
+        print(f"    [退市过滤-期前] 剔除 {len(pre_delisted)} 只期前已退市股票 "
+              f"（前 5: {sorted(pre_delisted)[:5]}）")
+
+    # ---- 步骤 2：回测期内退市股，剔除退市日期之后的行 ----
+    insts = pred_df.index.get_level_values("instrument").str.lower()
+    dts = pred_df.index.get_level_values("datetime")
+
+    mapped = insts.to_series().map(delist_dates)
+    row_delist = mapped.to_numpy(dtype="datetime64[ns]")
+    nat_mask = np.isnat(row_delist)
+
+    dts64 = dts.to_numpy(dtype="datetime64[ns]")
+    keep_mask = nat_mask | (dts64 <= row_delist)
+    filtered = pred_df[keep_mask].copy()
+    after = len(filtered)
+    print(f"    [退市过滤-期内] 前 {before} 行 → 后 {after} 行（剔除 {before - after} 行退市股）")
+
+    if filtered.empty:
+        print("    [严重警告] 退市过滤后预测数据为空！")
+    return filtered
+
+
+def _load_st_codes() -> set:
+    """
+    从 ClickHouse stock_basic 表获取当前 ST/*ST 股票代码列表。
+
+    Returns:
+        set of lower-cased ts_code（如 {'600654.sh', '000004.sz'}）
+    """
+    try:
+        import clickhouse_connect
+        client = clickhouse_connect.get_client(
+            host=CH_HOST, port=CH_PORT,
+            username=CH_USER, password=CH_PASSWORD,
+            database=CH_DATABASE,
+        )
+        rows = client.query(
+            "SELECT ts_code FROM stock_basic "
+            "WHERE name LIKE '%ST%' OR name LIKE '%*ST%'"
+        )
+        st_set = {r[0].lower() for r in rows.result_rows}
+        client.close()
+        print(f"    [ST 数据] 从 ClickHouse 加载 {len(st_set)} 只 ST/*ST 股票")
+        return st_set
+    except Exception as e:
+        print(f"    [ST 数据] 查询失败（{e}），跳过 ST 过滤")
+        return set()
+
+
+def _filter_st_stocks(pred_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    过滤 ST/*ST 股票。
+
+    注：当前基于 ClickHouse 中的最新股票名称判断，非严格 PIT 过滤。
+    但对于 ST 股票（通常长期戴帽），此方法能覆盖绝大多数场景。
+
+    Args:
+        pred_df: MultiIndex (datetime, instrument) 的预测 DataFrame
+
+    Returns:
+        过滤后的 DataFrame
+    """
+    st_codes = _load_st_codes()
+    if not st_codes:
+        print("    [ST 过滤] 无 ST 数据，跳过")
+        return pred_df
+
+    before = len(pred_df)
+    insts = pred_df.index.get_level_values("instrument").str.lower()
+    st_mask = insts.isin(st_codes)
+    filtered = pred_df[~st_mask].copy()
+    after = len(filtered)
+    print(f"    [ST 过滤] 前 {before} 行 → 后 {after} 行（剔除 {before - after} 行 ST 股）")
+
+    if filtered.empty:
+        print("    [严重警告] ST 过滤后预测数据为空！")
+    return filtered
+
+
+def _pit_filter_csi500(pred_df: pd.DataFrame) -> pd.DataFrame:
     """
     逐日 PIT 过滤：确保每天参与回测的股票同时满足：
     1. 当天属于 csi500 成分股
@@ -123,7 +236,7 @@ def _pit_filter_predictions(pred_df: pd.DataFrame) -> pd.DataFrame:
     delist_pit = _load_delist_dates()
 
     if not csi500_pit and not delist_pit:
-        print("    [PIT 过滤] 无 PIT 数据可用，跳过过滤")
+        print("    [CSI500 PIT 过滤] 无 PIT 数据可用，跳过过滤")
         return pred_df
 
     before = len(pred_df)
@@ -131,7 +244,7 @@ def _pit_filter_predictions(pred_df: pd.DataFrame) -> pd.DataFrame:
     excluded_csi500 = 0
     excluded_delisted = 0
 
-    for (dt, inst), row in pred_df.iterrows():
+    for (dt, inst), _ in pred_df.iterrows():
         dt_str = str(dt)[:10]
         inst_lower = inst.lower()
 
@@ -155,9 +268,9 @@ def _pit_filter_predictions(pred_df: pd.DataFrame) -> pd.DataFrame:
         filtered.append((dt, inst_lower))
 
     after = len(filtered)
-    print(f"    [PIT 过滤] 前 {before} 行 → 后 {after} 行")
+    print(f"    [CSI500 PIT 过滤] 前 {before} 行 → 后 {after} 行")
     print(f"      - 退市剔除: {excluded_delisted} 行")
-    print(f"      - 非CSI500剔除: {excluded_csi500} 行")
+    print(f"      - 非 CSI500 剔除: {excluded_csi500} 行")
     print(f"      - 实际剔除: {before - after} 行")
 
     if filtered:
@@ -167,7 +280,7 @@ def _pit_filter_predictions(pred_df: pd.DataFrame) -> pd.DataFrame:
         )
         return filtered_df
     else:
-        print("    [严重警告] PIT 过滤后预测数据为空！回测无法进行")
+        print("    [严重警告] CSI500 PIT 过滤后预测数据为空！回测无法进行")
         return pred_df.iloc[0:0]
 
 
@@ -210,8 +323,16 @@ def _load_forward_adjusted_prices(api, instruments, start_date, end_date):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="标签一致性回测")
+    parser.add_argument("--universe", type=str, default="csi500",
+                        choices=["csi500", "main_board", "none"],
+                        help="回测股票池: csi500=中证500成分股(默认), main_board=沪深主板, none=不过滤")
+    parser.add_argument("--no-st-filter", action="store_true",
+                        help="跳过 ST 股票过滤（默认开启过滤）")
+    args = parser.parse_args()
+
     print("=" * 60)
-    print(f"=== {MODEL_LABEL} 回测（{'行业约束 ON' if INDUSTRY_NEUTRAL else '行业约束 OFF'} | {'反向测试' if REVERSE_TEST else '正向测试'}）===")
+    print(f"=== {MODEL_LABEL} 回测（{'行业约束 ON' if INDUSTRY_NEUTRAL else '行业约束 OFF'} | {'反向测试' if REVERSE_TEST else '正向测试'} | 股票池={args.universe}）===")
     print("=" * 60)
 
     print("[1] 初始化 Qlib 环境...")
@@ -241,57 +362,129 @@ def main():
     instruments = pred_df.index.get_level_values("instrument").unique().tolist()
     print(f"    测试集: {start_date.date()} ~ {end_date.date()}  |  原始股票池: {len(instruments)} 只")
 
-    # [PIT 过滤 — 杜绝未来函数和幸存者偏差]
-    # 核心改进：逐日检查每只股票在当天是否满足：
-    #   1. 属于 csi500 成分股（避免非成分股混入）
-    #   2. 未退市（避免幸存者偏差）
-    print("\n[2.1] PIT 过滤（CSI500 + 退市）+ 统一小写...")
-    pred_df = _pit_filter_predictions(pred_df)
+    # [股票池过滤] 根据 --universe 参数选择过滤方式
+    #   csi500     → PIT 过滤：只保留当天属于中证500且未退市的股票
+    #   main_board → 退市过滤：只剔除已退市股票，保留沪深主板全量
+    #   none       → 不过滤
+    print(f"\n[2.1] 股票池过滤（{args.universe}）...")
+    if args.universe == "csi500":
+        pred_df = _pit_filter_csi500(pred_df)
+    elif args.universe == "main_board":
+        pred_df = _filter_delisted_only(pred_df, start_date)
+    else:  # none
+        print("    [跳过] 不过滤股票池")
     instruments = pred_df.index.get_level_values("instrument").unique().tolist()
-    print(f"    PIT 过滤后股票池: {len(instruments)} 只")
+    print(f"    过滤后股票池: {len(instruments)} 只")
+
+    if not args.no_st_filter:
+        print("\n[2.2] ST 股票过滤...")
+        pred_df = _filter_st_stocks(pred_df)
+        instruments = pred_df.index.get_level_values("instrument").unique().tolist()
+        print(f"    ST 过滤后股票池: {len(instruments)} 只")
+    else:
+        print("\n[2.2] ST 过滤已跳过（--no-st-filter）")
 
     if INDUSTRY_NEUTRAL:
-        print("\n[2.2] 加载行业映射(PIT)并施加行业约束...")
+        print("\n[2.3] 加载行业映射(PIT)并施加行业约束...")
         industry_maps = load_industry_maps_pit(instruments, start_date, end_date)
         pred_df = apply_industry_constraint_pit(pred_df, industry_maps, top_k=TOP_K,
                                                  max_per_industry=MAX_PER_INDUSTRY,
                                                  reverse_test=REVERSE_TEST)
         instruments = pred_df.index.get_level_values("instrument").unique().tolist()
 
+    # [2.4] 按 Qlib 数据存量过滤：剔除 features 目录中无数据文件的股票
+    print("\n[2.4] 按 Qlib 数据存量过滤...")
+    features_dir = Path(QLIB_DATA_DIR) / "features"
+    available_in_features = set()
+    if features_dir.exists():
+        for d in os.listdir(str(features_dir)):
+            full = features_dir / d
+            if full.is_dir():
+                available_in_features.add(d.lower())
+    else:
+        print(f"    [警告] features 目录不存在: {features_dir}")
+    before = len(instruments)
+    instruments = [c for c in instruments if c in available_in_features]
+    removed = before - len(instruments)
+    if removed > 0:
+        print(f"    剔除 {removed} 只无行情数据股票（features 目录无对应子目录）")
+        pred_df = pred_df[pred_df.index.get_level_values("instrument").isin(instruments)]
+    else:
+        print(f"    全部 {before} 只均有行情数据")
+    print(f"    数据存量过滤后股票池: {len(instruments)} 只")
+
+    # ========================================================================
+    # [2.5] 准入预过滤：每天只保留 score 排名 top_k × buffer 的候选股
+    # ========================================================================
+    if ADMISSION_BUFFER > 0:
+        TOP_CANDIDATES = TOP_K * ADMISSION_BUFFER
+        print(f"\n[2.5] 准入预过滤: 每天保留 score 前 {TOP_CANDIDATES} 只候选股...")
+        before_inst = len(instruments)
+        before_rows = len(pred_df)
+        keep_mask = (
+            pred_df.groupby(level='datetime')['score']
+            .rank(ascending=False, na_option='bottom')
+            <= TOP_CANDIDATES
+        )
+        pred_df = pred_df[keep_mask].copy()
+        instruments = pred_df.index.get_level_values("instrument").unique().tolist()
+        print(f"    股票数: {before_inst} → {len(instruments)} 只  |  行数: {before_rows} → {len(pred_df)}")
+    else:
+        print(f"\n[2.5] 准入预过滤: 已跳过（ADMISSION_BUFFER=0）")
+
     print("\n[3] 拉取行情数据（前复权）...")
-    price_data = D.features(
-        instruments, ["$open", "$high", "$low", "$close", "$volume"],
-        start_time=start_date, end_time=end_date,
-    )
-    if not price_data.empty:
+    BATCH_SIZE = 500
+    print(f"    共 {len(instruments)} 只股票，分批 {BATCH_SIZE} 只加载 5 特征...")
+    price_data_parts = []
+    total_batches = (len(instruments) + BATCH_SIZE - 1) // BATCH_SIZE
+    for batch_i in range(0, len(instruments), BATCH_SIZE):
+        batch = instruments[batch_i:batch_i + BATCH_SIZE]
+        batch_num = batch_i // BATCH_SIZE + 1
+        print(f"    批次 {batch_num}/{total_batches}: {len(batch)} 只股票...", end=" ", flush=True)
+        chunk = D.features(
+            batch, ["$open", "$high", "$low", "$close", "$volume"],
+            start_time=start_date, end_time=end_date,
+        )
+        if chunk is not None and not chunk.empty:
+            price_data_parts.append(chunk)
+            print(f"ok ({len(chunk)} 行)")
+        else:
+            print("空结果")
+
+    if price_data_parts:
+        price_data = pd.concat(price_data_parts)
         price_data.columns = ["open", "high", "low", "close", "volume"]
         print(f"    从 Qlib 获取行情: {len(price_data)} 行")
     else:
-        print("    *** Qlib D.features 返回空，从 ClickHouse 直接拉取前复权数据 ***")
+        print("    *** Qlib 分批 D.features 返回空，从 ClickHouse 直接拉取前复权数据 ***")
         try:
             from qlworks.data import QuantDataAPI
             with QuantDataAPI() as api:
                 price_data = _load_forward_adjusted_prices(api, instruments, start_date, end_date)
         except Exception as ch_err:
             print(f"    ClickHouse 前复权拉取失败: {ch_err}")
+            price_data = pd.DataFrame()
 
+    # 向量化构建 price_dict：groupby 替代 3307 次 xs() 切片
     price_dict = {}
     missing_stocks = []
-    for inst in instruments:
-        if inst not in price_data.index.get_level_values("instrument"):
-            missing_stocks.append(inst)
+    instrument_set = set(instruments)
+    for inst, grp in price_data.groupby(level="instrument"):
+        if inst not in instrument_set:
             continue
-        df = price_data.xs(inst, level="instrument").copy()
+        df = grp.copy()
         df.dropna(subset=["close"], inplace=True)
         if df.empty:
             missing_stocks.append(inst)
             continue
-        df = df[
+        # 过滤 OHLC 异常值
+        mask = (
             (df["close"] > 0.01) & (df["close"] < 1e6) &
             (df["open"] > 0.01) & (df["open"] < 1e6) &
             (df["high"] > 0.01) & (df["high"] < 1e6) &
             (df["low"] > 0.01) & (df["low"] < 1e6)
-        ]
+        )
+        df = df[mask]
         if df.empty:
             missing_stocks.append(inst)
             continue
@@ -299,6 +492,12 @@ def main():
         if not valid.empty:
             df = df[df.index <= valid.index[-1]]
         price_dict[inst] = df
+
+    # 检查 instrument_set 中哪些不在 price_dict 中
+    for inst in instruments:
+        if inst not in price_dict:
+            if inst not in missing_stocks:
+                missing_stocks.append(inst)
 
     if missing_stocks:
         print(f"    *** 警告: {len(missing_stocks)}/{len(instruments)} 只股票无行情数据或数据非法 ***")

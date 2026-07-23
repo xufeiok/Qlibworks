@@ -21,6 +21,7 @@ KNOWN_FACTOR_PACKAGES = {
     "price_volume": "price_volume_factors",
     "sentiment": "sentiment_factors",
     "risk": "risk_factors",
+    "reversal_momentum": "reversal_momentum_factors",
 }
 
 
@@ -99,7 +100,11 @@ def build_alpha_feature_bundle() -> FeatureBundle:
     )
 
 
-def build_factor_library_bundle(strategy_names: str | list[str], repo_path: str = None) -> FeatureBundle:
+def build_factor_library_bundle(
+    strategy_names: str | list[str],
+    repo_path: str = None,
+    factor_names: list[str] | None = None,
+) -> FeatureBundle:
     """
     功能概述：
     - 从 YAML 因子库加载策略因子并转成统一特征包。
@@ -107,6 +112,7 @@ def build_factor_library_bundle(strategy_names: str | list[str], repo_path: str 
     输入：
     - strategy_names: 因子组合名称（或名称列表），如 "alpha158_factor_dictionary" 或 ["alpha158_factor_dictionary", "gtja191_factor_dictionary"]。
     - repo_path: 因子库目录，可为空使用默认目录。
+    - factor_names: 可选，限定仅保留指定因子名。
     输出：
     - 统一的特征与标签配置对象。
     边界条件：
@@ -117,7 +123,12 @@ def build_factor_library_bundle(strategy_names: str | list[str], repo_path: str 
     manager = FactorLibraryManager(repo_path=repo_path)
     # 支持短名称映射（如 "alpha158" → "alpha158_factor_dictionary"）
     resolved = [KNOWN_FACTOR_PACKAGES.get(n, n) for n in (strategy_names if isinstance(strategy_names, list) else [strategy_names])]
-    fields, names = manager.get_qlib_expressions(resolved)
+    fields, names = manager.get_qlib_expressions(resolved, factor_names=factor_names)
+    if factor_names is not None:
+        field_map = dict(zip(names, fields))
+        ordered_names = [name for name in factor_names if name in field_map]
+        fields = [field_map[name] for name in ordered_names]
+        names = ordered_names
     return FeatureBundle(
         fields=fields,
         names=names,

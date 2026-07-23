@@ -45,6 +45,9 @@ SCORE_DROP_THRESHOLD = 0.3                # 得分恶化平仓阈值
 INDUSTRY_NEUTRAL = True                   # True=施加行业约束, False=纯信号对比
 MAX_PER_INDUSTRY = 4                      # 单行业最大持仓数
 
+# — 准入预过滤 —
+ADMISSION_BUFFER = 3                      # 每天保留 top_k × buffer 只候选股，大幅减少 Cerebro 数据源数量
+
 # ==============================================================================
 
 SCORE_PATH = os.path.join(os.path.dirname(__file__), f"../training/{SCORE_FILE}")
@@ -75,6 +78,25 @@ def main():
         industry_maps = load_industry_maps_pit(instruments, start_date, end_date)
         pred_df = apply_industry_constraint_pit(pred_df, industry_maps, top_k=TOP_K, max_per_industry=MAX_PER_INDUSTRY)
         instruments = pred_df.index.get_level_values("instrument").unique().tolist()
+
+    # ========================================================================
+    # [2.2] 准入预过滤：每天只保留 score 排名 top_k × buffer 的候选股
+    # ========================================================================
+    if ADMISSION_BUFFER > 0:
+        TOP_CANDIDATES = TOP_K * ADMISSION_BUFFER
+        print(f"\n[2.2] 准入预过滤: 每天保留 score 前 {TOP_CANDIDATES} 只候选股...")
+        before_inst = len(instruments)
+        before_rows = len(pred_df)
+        keep_mask = (
+            pred_df.groupby(level='datetime')['score']
+            .rank(ascending=False, na_option='bottom')
+            <= TOP_CANDIDATES
+        )
+        pred_df = pred_df[keep_mask].copy()
+        instruments = pred_df.index.get_level_values("instrument").unique().tolist()
+        print(f"    股票数: {before_inst} → {len(instruments)} 只  |  行数: {before_rows} → {len(pred_df)}")
+    else:
+        print(f"\n[2.2] 准入预过滤: 已跳过（ADMISSION_BUFFER=0）")
 
     print("\n[3] 拉取行情数据...")
     price_data = D.features(

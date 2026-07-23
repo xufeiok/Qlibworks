@@ -19,6 +19,7 @@ from .config import EvalConfig, DEFAULT_CONFIG
 from .preprocessor import preprocess_factor
 from .factor_def import DataQualityReport
 from .ic_analysis import calc_daily_ic, calc_ic_stats, calc_decay_analysis, calc_rankic_series
+from .ic_analysis import calc_ic_half_life, calc_rolling_ic_stability
 from .group_analysis import (
     quantile_returns, long_short_returns, calc_ls_stats,
     calc_group_avg_returns, calc_monotonicity_score, calc_turnover,
@@ -42,6 +43,9 @@ from .lifecycle import LifecycleManager
 from .factor_store import FactorStore
 from .ic_analysis import calc_fama_macbeth, calc_newey_west_tstat, calc_ic_bootstrap_ci, calc_lo_adjusted_sharpe
 from .group_analysis import filter_ashare_constraints, calc_capacity_analysis, calc_group_cumulative_returns
+from .group_analysis import calc_q1_q10_significance
+from .statistical_tests import calc_factor_statistical_tests
+from .risk_analysis import calc_var_cvar
 from .config import EXTREME_EVENTS
 
 
@@ -80,9 +84,13 @@ class FactorEvaluator:
     def _load_labels(self, start_time, end_time):
         """加载标签收益率。
 
-        Qlib 数据已含复权价格，直接从本地 Qlib 计算标签。
+        优先通过本地 Qlib 数据计算标签收益率（含复权价格）。
+        如果 Qlib 不可用，回退到 ClickHouse 实时查询 close/open 数据。
         """
-        logger.info("[标签] 从本地 Qlib 数据计算标签...")
+        logger.info("[标签] 计算标签收益率...")
+        label_col = self.config.label_name
+
+        # ── 路径 A：Qlib 路径 ──
         try:
             import qlib
             from qlib.config import REG_CN
@@ -97,8 +105,12 @@ class FactorEvaluator:
             _QC.dataloader_workers = 1
             _QC.joblib_backend = "threading"
 
-            # 从 instruments/all.txt 读取股票列表
-            ins_file = Path(str(QLIB_DATA_DIR)) / "instruments" / "all.txt"
+            # 从 instruments 读取股票列表（使用 config.instruments 指定的股票池）
+            pool_name = getattr(self.config, "instruments", "csi500")
+            ins_file = Path(str(QLIB_DATA_DIR)) / "instruments" / f"{pool_name}.txt"
+            if not ins_file.exists():
+                # 回退到 all.txt
+                ins_file = Path(str(QLIB_DATA_DIR)) / "instruments" / "all.txt"
             all_ins = []
             if ins_file.exists():
                 with open(ins_file, encoding="utf-8") as f:
@@ -124,21 +136,75 @@ class FactorEvaluator:
                 except Exception:
                     continue
 
-            if not all_parts:
+            if all_parts:
+                df = pd.concat(all_parts)
+
+                if isinstance(df.columns, pd.MultiIndex):
+                    df.columns = [c[0] for c in df.columns]
+
+                df = df.reset_index()
+                df["datetime"] = pd.to_datetime(df["datetime"])
+                df["instrument"] = df["instrument"].astype(str)
+                df = df.rename(columns={"$close": "close", "$open": "open"})
+                # 将 qlib 列名映射为 DuckDB 可识别的列名
+                df = df.rename(columns={"instrument": "ts_code", "datetime": "trade_date"})
+
+                result = self._compute_labels_via_duckdb(df, label_col, start_time, end_time)
+                if result is not None:
+                    logger.info(f"[标签] Qlib 标签: {len(result)} 行, "
+                                f"{result.index.get_level_values('instrument').nunique()} 只股票")
+                    return result
+
+        except ImportError:
+            logger.info("[标签] Qlib 未安装，切换到 ClickHouse 路径计算标签...")
+        except Exception as e:
+            logger.warning(f"[标签] Qlib 路径失败: {e}，切换到 ClickHouse 路径...")
+
+        # ── 路径 B：ClickHouse 后备（通过 QuantDataAPI 查询复权 close/open） ──
+        try:
+            from qlworks.data import QuantDataAPI
+            api = QuantDataAPI()
+            # 用 factor_store 的复权 SQL 获取前复权 close/open
+            adj_sql = f"""SELECT p.ts_code AS ts_code, p.trade_date AS trade_date,
+       CAST(p.close * a.adj_factor / latest.adj_factor AS DOUBLE) AS close,
+       CAST(p.open * a.adj_factor / latest.adj_factor AS DOUBLE) AS open
+FROM daily_prices p
+JOIN daily_adj_factors a ON p.ts_code=a.ts_code AND p.trade_date=a.trade_date
+JOIN (SELECT ts_code, argMax(adj_factor, trade_date) AS adj_factor FROM daily_adj_factors GROUP BY ts_code) latest ON p.ts_code=latest.ts_code
+WHERE p.trade_date>='{pd.Timestamp(start_time) - pd.Timedelta(days=60):%Y-%m-%d}' AND p.trade_date<='{end_time}'
+ORDER BY p.ts_code, p.trade_date"""
+            raw = api.query(adj_sql)
+            if raw is None or raw.empty:
+                logger.warning("[标签] ClickHouse 查询返回空数据")
                 return None
-            df = pd.concat(all_parts)
 
-            if isinstance(df.columns, pd.MultiIndex):
-                df.columns = [c[0] for c in df.columns]
+            raw["trade_date"] = pd.to_datetime(raw["trade_date"])
+            logger.info(f"[标签] ClickHouse OHLCV 数据: {len(raw)} 行, {raw['ts_code'].nunique()} 只股票")
 
-            df = df.reset_index()
-            df["datetime"] = pd.to_datetime(df["datetime"])
-            df["instrument"] = df["instrument"].astype(str)
-            df = df.rename(columns={"$close": "close", "$open": "open"})
-            # 将 qlib 列名映射为 DuckDB 可识别的列名
-            df = df.rename(columns={"instrument": "ts_code", "datetime": "trade_date"})
+            result = self._compute_labels_via_duckdb(raw, label_col, start_time, end_time)
+            if result is not None:
+                logger.info(f"[标签] ClickHouse 标签: {len(result)} 行, "
+                            f"{result.index.get_level_values('instrument').nunique()} 只股票")
+                return result
 
-            # 用 DuckDB 本地计算标签（将 Ref 表达式转为 DuckDB SQL）
+        except Exception as e:
+            logger.warning(f"[标签] ClickHouse 后备也失败: {e}")
+
+        return None
+
+    def _compute_labels_via_duckdb(self, df: pd.DataFrame, label_col: str,
+                                    start_time: str, end_time: str) -> Optional[pd.DataFrame]:
+        """通用的 DuckDB 标签计算逻辑。
+
+        Args:
+            df: 含 ts_code / trade_date / close / open 列的 DataFrame
+            label_col: 标签列名
+            start_time / end_time: 评测时间区间
+
+        Returns:
+            MultiIndex [instrument, datetime] 的 DataFrame，仅含 label_col 列
+        """
+        try:
             conn = duckdb.connect()
             conn.register("_raw", df)
             label_expr = self.config.label_expr
@@ -156,7 +222,7 @@ class FactorEvaluator:
             label_expr = _re.sub(r"Ref\((\w+),\s*(-?\d+)\)", _translate_ref, label_expr)
             r = conn.execute(f"""
                 SELECT ts_code AS instrument, trade_date AS datetime,
-                       {label_expr} AS {self.config.label_name}
+                       {label_expr} AS {label_col}
                 FROM _raw
                 WHERE ts_code IS NOT NULL AND trade_date IS NOT NULL
                 ORDER BY ts_code, trade_date
@@ -167,17 +233,14 @@ class FactorEvaluator:
                 return None
             r["datetime"] = pd.to_datetime(r["datetime"])
             # 过滤 inf/-inf，并裁剪极端值（避免开源/除零产生的异常收益率污染统计）
-            col = self.config.label_name
-            r[col] = r[col].replace([np.inf, -np.inf], np.nan)
-            r[col] = r[col].clip(-1.0, 10.0)  # -100% ~ +1000%，裁掉明显异常值
+            r[label_col] = r[label_col].replace([np.inf, -np.inf], np.nan)
+            r[label_col] = r[label_col].clip(-1.0, 10.0)  # -100% ~ +1000%，裁掉明显异常值
             r = r.set_index(["instrument", "datetime"])
             r = r[r.index.get_level_values("datetime") >= start_time]
             r = r[r.index.get_level_values("datetime") <= end_time]
-            logger.info(f"[标签] Qlib 标签: {len(r)} 行, {r.index.get_level_values('instrument').nunique()} 只股票")
-            return r[[self.config.label_name]]
-
+            return r[[label_col]]
         except Exception as e:
-            logger.warning(f"[标签] Qlib 兜底也失败: {e}")
+            logger.warning(f"[标签] DuckDB 标签计算失败: {e}")
             return None
 
     def _load_via_qlib(self, factor_expr, factor_name, instruments, st, et, extra_fields):
@@ -246,8 +309,8 @@ class FactorEvaluator:
             "standardize_method": config.standardize_method,
             "neutralization": config.neutralization,
         }
-        ic_col = "industry" if "industry" in df.columns else None
-        mc_col = "mkt_cap" if "mkt_cap" in df.columns else None
+        ic_col = "sw_l1" if "sw_l1" in df.columns else None
+        mc_col = "circ_mv" if "circ_mv" in df.columns else None
         df_proc = preprocess_factor(df, factor_col, ic_col, mc_col, preproc_cfg)
         preproc_info = {
             "去极值": config.winsorize_method,
@@ -265,14 +328,18 @@ class FactorEvaluator:
             )
 
         # 2. IC 分析（含向量化 Spearman + 行业中性 IC）
+        logger.info(f"[{factor_name}] 开始计算 IC 序列...")
         ic_series = calc_daily_ic(df_proc, factor_col, label_col, config.ic_method)
+        logger.info(f"[{factor_name}] IC 计算完成, 有效日期={len(ic_series.dropna())}")
         ic_stats = calc_ic_stats(ic_series, config.ic_annual_factor)
+        logger.info(f"[{factor_name}] IC 统计: mean={ic_stats['ic_mean']:.4f}, icir={ic_stats['icir']:.4f}, "
+                    f"icir_nw={ic_stats.get('icir_nw', 0):.4f}")
 
-        # 2b. 行业中性 Rank IC（如果数据含 industry 列）
+        # 2b. 行业中性 Rank IC（如果数据含 sw_l1 列）
         industry_ic_series = None
-        if "industry" in df_proc.columns:
+        if "sw_l1" in df_proc.columns:
             try:
-                industry_ic_series = calc_rankic_series(df_proc, factor_col, label_col, group_col="industry")
+                industry_ic_series = calc_rankic_series(df_proc, factor_col, label_col, group_col="sw_l1")
                 ic_ind = calc_ic_stats(industry_ic_series, config.ic_annual_factor)
                 ic_stats["industry_ic_mean"] = ic_ind["ic_mean"]
                 ic_stats["industry_icir"] = ic_ind["icir"]
@@ -280,6 +347,7 @@ class FactorEvaluator:
                 pass
 
         # 3. 分层回测
+        logger.info(f"[{factor_name}] 开始分层回测...")
         q_df = quantile_returns(df_proc, factor_col, label_col, config.quantiles)
         group_means = calc_group_avg_returns(q_df) if not q_df.empty else pd.Series()
         mono = calc_monotonicity_score(q_df) if not q_df.empty else 0.0
@@ -287,15 +355,20 @@ class FactorEvaluator:
 
         # 3a. 分层净值曲线（10条分位组累计净值）
         decile_nav = calc_group_cumulative_returns(q_df) if not q_df.empty else pd.DataFrame()
+        logger.info(f"[{factor_name}] 分层回测完成, shape={decile_nav.shape}")
 
         # 使用配置中的滑点参数（入场+出场+冲击成本），而非固定 cost
         total_bps = config.slippage_entry_bps + config.slippage_exit_bps + config.market_impact_bps
         ls_df = long_short_returns(q_df, config.quantiles - 1, 0, cost=total_bps / 10000.0)
         ls_stats = calc_ls_stats(ls_df, config.ic_annual_factor, config.label_horizon)
         ls_stats["monotonicity"] = round(mono, 4)
+        logger.info(f"[{factor_name}] 多空收益: {ls_stats.get('annual_return', 0):.2%}, "
+                    f"夏普: {ls_stats.get('sharpe', 0):.2f}")
 
         turnover_stats = calc_turnover(q_df) if not q_df.empty else {}
+        logger.info(f"[{factor_name}] 计算衰减分析...")
         decay_df = calc_decay_analysis(df_proc, factor_col, label_col) if not df_proc.empty else pd.DataFrame()
+        logger.info(f"[{factor_name}] 衰减分析完成, 行数={len(decay_df)}")
 
         # 3b. 多期持有收益分析（不同调仓周期的因子表现）
         hpr_df = calc_holding_period_returns(df_proc, factor_col, label_col, config.quantiles,
@@ -308,10 +381,54 @@ class FactorEvaluator:
             best_horizon = int(best_row["horizon"]) if best_row is not None else 5
             logger.info(f"[多期HPR] {factor_name} 最佳调仓周期={best_horizon}日")
 
+        # 3c. 统计检验：ADF 单位根 + KPSS + Ljung-Box 白噪声（基于因子截面均值）
+        stat_tests = {}
+        try:
+            factor_ts = df_proc.groupby("datetime")[factor_col].mean()
+            stat_tests = calc_factor_statistical_tests(factor_ts)
+        except Exception as e:
+            logger.warning(f"[统计检验] {factor_name} 跳过: {e}")
+
+        # 3d. IC 半衰期
+        ic_half_life = {}
+        try:
+            ic_half_life = calc_ic_half_life(ic_series)
+        except Exception as e:
+            logger.warning(f"[IC半衰期] {factor_name} 跳过: {e}")
+
+        # 3e. 滚动 IC 稳定性
+        rolling_ic_stability = {}
+        try:
+            rolling_ic_stability = calc_rolling_ic_stability(ic_series, annual_factor=config.ic_annual_factor)
+        except Exception as e:
+            logger.warning(f"[滚动IC] {factor_name} 跳过: {e}")
+
+        # 3f. VaR / CVaR（基于多空组合收益）
+        risk_metrics = {}
+        try:
+            ls_returns = ls_df["ls_return"] if "ls_return" in ls_df.columns else pd.Series()
+            risk_metrics = calc_var_cvar(ls_returns)
+        except Exception as e:
+            logger.warning(f"[风险分析] {factor_name} 跳过: {e}")
+
+        # 3g. Q1 vs Q10 差异显著性检验
+        q1_q10_sig = {}
+        try:
+            q1_q10_sig = calc_q1_q10_significance(q_df)
+        except Exception as e:
+            logger.warning(f"[Q1Q10检验] {factor_name} 跳过: {e}")
+
         # 4. 稳健性检验 — 子时段 + 子股票池
+        # [Citadel Alpha Lab] 动态追加「近2年」独立分段：判断近期市场适配度
+        periods = list(config.robustness_sub_periods)
+        try:
+            recent_start = (pd.Timestamp(config.end_time) - pd.DateOffset(years=2)).strftime("%Y-%m-%d")
+            periods.append((recent_start, config.end_time))
+        except Exception:
+            pass
         robustness_df = test_sub_periods(
             df_proc, factor_col, label_col,
-            config.robustness_sub_periods,
+            periods,
             config.ic_annual_factor, config.label_horizon,
         )
         if hasattr(config, 'robustness_sub_pools') and config.robustness_sub_pools:
@@ -338,10 +455,10 @@ class FactorEvaluator:
 
         # 4b. 场景压力测试 — 分市值、牛熊市、分行业板块
         scenario_results = {}
-        if "mkt_cap" in df_proc.columns:
+        if "circ_mv" in df_proc.columns:
             try:
                 scenario_results["market_cap_ic"] = test_by_market_cap_buckets(
-                    df_proc, factor_col, label_col, "mkt_cap",
+                    df_proc, factor_col, label_col, "circ_mv",
                     config.quantiles, config.ic_annual_factor, config.label_horizon,
                 )
             except Exception as e:
@@ -357,10 +474,10 @@ class FactorEvaluator:
         except Exception as e:
             logger.warning(f"[场景] 牛熊分段跳过: {e}")
 
-        if "industry" in df_proc.columns:
+        if "sw_l1" in df_proc.columns:
             try:
                 scenario_results["industry_sector"] = test_by_industry_sector(
-                    df_proc, factor_col, label_col, "industry",
+                    df_proc, factor_col, label_col, "sw_l1",
                     quantiles=config.quantiles,
                     annual_factor=config.ic_annual_factor,
                     label_horizon=config.label_horizon,
@@ -370,10 +487,10 @@ class FactorEvaluator:
 
         # 4c. 控制变量对冲 — 双变量分组 + 残差因子 + 规模分组
         control_results = {}
-        if "mkt_cap" in df_proc.columns:
+        if "circ_mv" in df_proc.columns:
             try:
                 control_results["bivariate"] = bivariate_sort(
-                    df_proc, factor_col, label_col, "mkt_cap",
+                    df_proc, factor_col, label_col, "circ_mv",
                     primary_n=5, secondary_n=5,
                     annual_factor=config.ic_annual_factor,
                     label_horizon=config.label_horizon,
@@ -383,10 +500,10 @@ class FactorEvaluator:
 
         try:
             control_cols = []
-            if "mkt_cap" in df_proc.columns:
-                control_cols.append("mkt_cap")
-            if "industry" in df_proc.columns:
-                control_cols.append("industry")
+            if "circ_mv" in df_proc.columns:
+                control_cols.append("circ_mv")
+            if "sw_l1" in df_proc.columns:
+                control_cols.append("sw_l1")
             if control_cols:
                 control_results["residual"] = residual_factor_test(
                     df_proc, factor_col, label_col, control_cols,
@@ -397,10 +514,10 @@ class FactorEvaluator:
         except Exception as e:
             logger.warning(f"[控制变量] 残差因子跳过: {e}")
 
-        if "mkt_cap" in df_proc.columns:
+        if "circ_mv" in df_proc.columns:
             try:
                 control_results["size_neutral"] = size_neutral_test(
-                    df_proc, factor_col, label_col, "mkt_cap",
+                    df_proc, factor_col, label_col, "circ_mv",
                     quantiles=config.quantiles,
                     annual_factor=config.ic_annual_factor,
                     label_horizon=config.label_horizon,
@@ -412,6 +529,18 @@ class FactorEvaluator:
         total_dates = df_proc["datetime"].nunique() if "datetime" in df_proc.columns else 0
         n_dates_all = len(ic_series.dropna())
         coverage_pct = n_dates_all / total_dates if total_dates > 0 else 1.0
+
+        # [Citadel Alpha Lab] 计算近2年独立 IC 统计，用于双门槛准入判定
+        recent_ic_stats = None
+        try:
+            recent_start_2y = (pd.Timestamp(config.end_time) - pd.DateOffset(years=2)).strftime("%Y-%m-%d")
+            recent_df = df_proc[df_proc["datetime"] >= recent_start_2y]
+            if len(recent_df["datetime"].unique()) > 20:
+                recent_ic_s = calc_daily_ic(recent_df, factor_col, label_col)
+                recent_ic_stats = calc_ic_stats(recent_ic_s, config.ic_annual_factor)
+        except Exception:
+            pass
+
         qual_result = evaluate_qualification(
             ic_stats, ls_stats, config,
             decay_df=decay_df,
@@ -419,6 +548,7 @@ class FactorEvaluator:
             coverage_pct=coverage_pct,
             scenario_results=scenario_results,
             control_results=control_results,
+            recent_ic_stats=recent_ic_stats,  # 近2年 IC 统计（双门槛准入）
         )
         tier = qual_result["tier"]
 
@@ -485,6 +615,12 @@ class FactorEvaluator:
             decile_nav=decile_nav,
             scenario_results=scenario_results,
             control_results=control_results,
+            # 新增：统计检验、IC半衰期、滚动IC稳定性、VaR/CVaR、Q1vsQ10显著性
+            statistical_tests=stat_tests,
+            ic_half_life=ic_half_life,
+            rolling_ic_stability=rolling_ic_stability,
+            risk_metrics=risk_metrics,
+            q1_q10_significance=q1_q10_sig,
         )
         report_path = gen.save(html)
         csv_path = str(report_dir / "_summary.csv")
@@ -515,69 +651,6 @@ class FactorEvaluator:
             "lifecycle_stage": qual_result.get("lifecycle_stage", ""),
             "data_quality": dq_report,
         }
-
-    # ── Walk-Forward 滚动外推验证 ──
-
-    def walk_forward_evaluate(self, factor_name, df, config_override=None):
-        import numpy as np
-        config = self.config
-        if config_override:
-            for k, v in config_override.items():
-                if hasattr(config, k):
-                    setattr(config, k, v)
-        if not config.enable_walk_forward:
-            return self.evaluate(factor_name, df)
-        df = df.sort_values('datetime').reset_index(drop=True)
-        all_dates = sorted(df['datetime'].unique())
-        if len(all_dates) < 200:
-            return self.evaluate(factor_name, df)
-        train_days = config.wf_train_months * 21
-        valid_days = config.wf_valid_months * 21
-        step_days = config.wf_step_months * 21
-        total_days = len(all_dates)
-        if total_days < train_days + valid_days:
-            return self.evaluate(factor_name, df)
-        windows = []
-        start_idx = 0
-        while start_idx + train_days + valid_days <= total_days:
-            windows.append((
-                all_dates[start_idx],
-                all_dates[start_idx + train_days - 1],
-                all_dates[start_idx + train_days],
-                all_dates[start_idx + train_days + valid_days - 1],
-            ))
-            start_idx += step_days
-        from .ic_analysis import calc_daily_ic, calc_ic_stats
-        all_ic = []
-        wf_rows = []
-        for w_idx, (ts, te, vs, ve) in enumerate(windows):
-            valid_df = df[(df['datetime'] >= str(vs)[:10]) & (df['datetime'] <= str(ve)[:10])]
-            if valid_df.empty:
-                continue
-            ic_s = calc_daily_ic(valid_df, factor_name, config.label_name)
-            stats = calc_ic_stats(ic_s, config.ic_annual_factor)
-            all_ic.extend(ic_s.dropna().tolist())
-            wf_rows.append({
-                'window': w_idx + 1,
-                'train': f'{str(ts)[:10]}~{str(te)[:10]}',
-                'valid': f'{str(vs)[:10]}~{str(ve)[:10]}',
-                'ic_mean': stats['ic_mean'],
-                'icir': stats['icir'],
-            })
-        if not all_ic:
-            return self.evaluate(factor_name, df)
-        wf_mean = float(np.mean(all_ic))
-        wf_std = float(np.std(all_ic, ddof=1)) if len(all_ic) > 1 else 1.0
-        wf_icir = wf_mean / wf_std * np.sqrt(config.ic_annual_factor) if wf_std > 1e-12 else 0.0
-        result = self.evaluate(factor_name, df)
-        result['walk_forward'] = {
-            'windows': wf_rows,
-            'wf_ic_mean': round(wf_mean, 6),
-            'wf_icir': round(wf_icir, 4),
-            'n_windows': len(windows),
-        }
-        logger.info('[WF] %s: %d windows, IC=%.4f, ICIR=%.2f', factor_name, len(windows), wf_mean, wf_icir)
-        return result
 
     # ── Walk-Forward 滚动外推验证 ──
 

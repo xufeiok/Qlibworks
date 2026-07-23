@@ -91,7 +91,8 @@ def _load_all_factors_from_repo():
     repo = str(Path(__file__).resolve().parents[4] / "Qlibworks" / "factor_data" / "factor_library")
     files = [
         "price_volume_factors", "quality_factors", "style_factors",
-        "risk_factors", "sentiment_factors", "other_factors"
+        "risk_factors", "sentiment_factors", "other_factors",
+        "reversal_momentum_factors",
     ]
     all_factors = []
     for f in files:

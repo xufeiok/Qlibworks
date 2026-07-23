@@ -1,0 +1,21 @@
+[20488:MainThread](2026-07-15 21:31:24,977) INFO - qlib.Initialization - [config.py:452] - default_conf: client.
+[20488:MainThread](2026-07-15 21:31:25,021) INFO - qlib.Initialization - [__init__.py:75] - qlib successfully initialized based on client settings.
+[20488:MainThread](2026-07-15 21:31:25,025) INFO - qlib.Initialization - [__init__.py:77] - data_path={'__DEFAULT_FREQ': WindowsPath('E:/Quant/Qlibworks/qlib_data')}
+[20488:MainThread](2026-07-15 21:37:18,271) ERROR - qlib.workflow - [utils.py:41] - An exception has been raised[KeyboardInterrupt: ].
+  File "e:\Quant\Qlibworks\_run_training_wrapper.py", line 16, in <module>
+    tfs.main()
+  File "e:\Quant\Qlibworks\scripts\training\train_from_selected.py", line 596, in main
+    global_feature_cache = build_custom_feature_cache(
+                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "e:\Quant\Qlibworks\src\qlworks\features\dataset.py", line 496, in build_custom_feature_cache
+    warehouse_df = _build_static_warehouse_frame(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "e:\Quant\Qlibworks\src\qlworks\features\dataset.py", line 343, in _build_static_warehouse_frame
+    ordered = frame.sort_values(["datetime", "instrument"], kind="mergesort")
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "E:\Conda_env\Qlib_env\Lib\site-packages\pandas\core\frame.py", line 7205, in sort_values
+    indexer = lexsort_indexer(
+              ^^^^^^^^^^^^^^^^
+  File "E:\Conda_env\Qlib_env\Lib\site-packages\pandas\core\sorting.py", line 366, in lexsort_indexer
+    return np.lexsort(labels[::-1])
+           ^^^^^^^^^^^^^^^^^^^^^^^^

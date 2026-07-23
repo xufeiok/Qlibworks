@@ -2,6 +2,7 @@
 dataset 模块测试
 """
 import unittest
+from unittest.mock import patch
 import pandas as pd
 
 from qlworks.features.dataset import (
@@ -15,6 +16,45 @@ from qlworks.features.dataset import (
 
 
 class TestDataset(unittest.TestCase):
+    def test_build_static_warehouse_frame_avoids_full_dataframe_sort(self):
+        idx = pd.MultiIndex.from_tuples(
+            [
+                ("000002.SZ", pd.Timestamp("2020-01-02")),
+                ("000001.SZ", pd.Timestamp("2020-01-01")),
+                ("000001.SZ", pd.Timestamp("2020-01-02")),
+            ],
+            names=["instrument", "datetime"],
+        )
+        loaded_factors = {
+            "f1": pd.Series([3.0, 1.0, 2.0], index=idx),
+            "f2": pd.Series([30.0, 10.0, 20.0], index=idx),
+        }
+
+        original_sort_index = pd.DataFrame.sort_index
+
+        def guarded_sort_index(self, *args, **kwargs):
+            raise AssertionError("不应对整张 warehouse_df 执行 DataFrame.sort_index()")
+
+        with patch.object(pd.DataFrame, "sort_index", new=guarded_sort_index):
+            result = _build_static_warehouse_frame(
+                loaded_factors,
+                start_time="2020-01-01",
+                end_time="2020-01-02",
+                instruments=["000001.SZ", "000002.SZ"],
+            )
+
+        expected_index = pd.MultiIndex.from_tuples(
+            [
+                (pd.Timestamp("2020-01-01"), "000001.sz"),
+                (pd.Timestamp("2020-01-02"), "000001.sz"),
+                (pd.Timestamp("2020-01-02"), "000002.sz"),
+            ],
+            names=["datetime", "instrument"],
+        )
+
+        self.assertTrue(result.index.equals(expected_index))
+        self.assertEqual(result.loc[(pd.Timestamp("2020-01-02"), "000002.sz"), ("feature", "f1")], 3.0)
+
     def test_build_static_warehouse_frame_filters_date_and_instruments(self):
         idx = pd.MultiIndex.from_tuples(
             [
@@ -39,8 +79,8 @@ class TestDataset(unittest.TestCase):
 
         expected_index = pd.MultiIndex.from_tuples(
             [
-                (pd.Timestamp("2020-01-02"), "000001.SZ"),
-                (pd.Timestamp("2020-01-02"), "000002.SZ"),
+                (pd.Timestamp("2020-01-02"), "000001.sz"),
+                (pd.Timestamp("2020-01-02"), "000002.sz"),
             ],
             names=["datetime", "instrument"],
         )
@@ -50,8 +90,8 @@ class TestDataset(unittest.TestCase):
 
         self.assertTrue(result.index.equals(expected_index))
         self.assertTrue(result.columns.equals(expected_columns))
-        self.assertEqual(result.loc[(pd.Timestamp("2020-01-02"), "000001.SZ"), ("feature", "f1")], 2.0)
-        self.assertEqual(result.loc[(pd.Timestamp("2020-01-02"), "000002.SZ"), ("feature", "f2")], 30.0)
+        self.assertEqual(result.loc[(pd.Timestamp("2020-01-02"), "000001.sz"), ("feature", "f1")], 2.0)
+        self.assertEqual(result.loc[(pd.Timestamp("2020-01-02"), "000002.sz"), ("feature", "f2")], 30.0)
 
     def test_slice_feature_cache_filters_columns_and_date_range(self):
         idx = pd.MultiIndex.from_tuples(

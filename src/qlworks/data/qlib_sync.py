@@ -12,6 +12,7 @@ Qlib 数据同步模块
 from __future__ import annotations
 
 import os
+import struct
 import shutil
 import math
 import json
@@ -494,19 +495,39 @@ class QlibSynchronizer:
         success_count = 0
         failed_count = 0
 
-        # [Goldman Sachs 架构师] 强制从本地 day.txt 读取日历，确保 100% 对齐
+        # 强制从本地 day.txt 读取日历，确保 100% 对齐
         local_cal_path = self.calendars_dir / "day.txt"
         if local_cal_path.exists():
             with open(local_cal_path, 'r') as f:
                 local_cal = [d.strip() for d in f.read().splitlines() if d.strip()]
-            if len(local_cal) != len(calendar_list):
-                print(f"  [INFO] calendar_map ({len(calendar_list)}) 与 day.txt ({len(local_cal)}) 不一致，" + 
-                      f"强制从 day.txt 重建日历映射")
+            
+            # 追加模式：将 CH 中 day.txt 之后的新日期合并进来
+            if append:
+                existing_set = set(local_cal)
+                new_dates = [d for d in calendar_list 
+                            if d not in existing_set and d >= local_cal[-1]]
+                if new_dates:
+                    calendar_list = local_cal + new_dates
+                    calendar_map = {d: i for i, d in enumerate(calendar_list)}
+                    # 保存更新后的日历
+                    with open(local_cal_path, 'w') as f:
+                        for d in calendar_list:
+                            f.write(d + '\n')
+                    print(f"  [APPEND] 日历追加 {len(new_dates)} 天: "
+                          f"{new_dates[0]} ~ {new_dates[-1]}，"
+                          f"共 {len(calendar_list)} 天")
+                else:
+                    calendar_list = local_cal
+                    calendar_map = {d: i for i, d in enumerate(calendar_list)}
+                    print(f"  [APPEND] 日历已是最新: {len(local_cal)} 天")
             else:
-                print(f"  [INFO] 使用 day.txt 日历映射: {len(local_cal)} 天")
-            # 始终从 day.txt 读取，确保与已写入的日历年完美对齐
-            calendar_list = local_cal
-            calendar_map = {d: i for i, d in enumerate(calendar_list)}
+                if len(local_cal) != len(calendar_list):
+                    print(f"  [INFO] calendar_map ({len(calendar_list)}) 与 day.txt ({len(local_cal)}) 不一致，" + 
+                          f"强制从 day.txt 重建日历映射")
+                else:
+                    print(f"  [INFO] 使用 day.txt 日历映射: {len(local_cal)} 天")
+                calendar_list = local_cal
+                calendar_map = {d: i for i, d in enumerate(calendar_list)}
 
 
         BATCH_SIZE = 50
@@ -569,7 +590,32 @@ class QlibSynchronizer:
                                 _arr = np.full(_valid[-1][0] - _valid[0][0] + 1, np.nan, dtype=np.float32)
                                 for idx, val in _valid:
                                     _arr[idx - _valid[0][0]] = val
-                                self._write_bin(stock_dir / f"{qlib_field}.day.bin", _valid[0][0], _arr)
+
+                                bin_path = stock_dir / f"{qlib_field}.day.bin"
+                                # 追加模式：合并已有数据
+                                if append and bin_path.exists():
+                                    try:
+                                        with open(bin_path, "rb") as f:
+                                            raw = f.read()
+                                        old_si = int(struct.unpack("<f", raw[:4])[0])
+                                        old_data = np.frombuffer(raw, dtype="<f4")[1:]
+                                        new_si = _valid[0][0]
+                                        new_data = _arr
+                                        # 合并：取最小索引为起始，构建完整数组
+                                        merge_si = min(old_si, new_si)
+                                        merge_end = max(old_si + len(old_data), new_si + len(new_data))
+                                        merge_arr = np.full(merge_end - merge_si, np.nan, dtype=np.float32)
+                                        # 填入旧数据
+                                        merge_arr[old_si - merge_si:old_si - merge_si + len(old_data)] = old_data
+                                        # 填入新数据（覆盖旧数据）
+                                        for idx, val in _valid:
+                                            merge_arr[idx - merge_si] = val
+                                        self._write_bin(bin_path, merge_si, merge_arr)
+                                    except Exception as e:
+                                        tqdm.write(f"    {stock_code} {qlib_field} 追加写入失败: {e}，回退到覆盖写入")
+                                        self._write_bin(bin_path, _valid[0][0], _arr)
+                                else:
+                                    self._write_bin(bin_path, _valid[0][0], _arr)
 
                         success_count += 1
                     except Exception as e:

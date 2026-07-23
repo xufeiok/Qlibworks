@@ -453,7 +453,9 @@ def main():
             duckdb_expr = f.get("duckdb_expr", "")
             try:
                 if args.append and not is_insert_mode:
-                    n = store.append_to_warehouse(name, expr, compute_start, duckdb_expr=duckdb_expr)
+                    # append 模式传 None 让 warehouse 自动从最后日期+1天开始
+                    # 避免从 2010-01-01 重算导致旧年份行数波动出现负数
+                    n = store.append_to_warehouse(name, expr, start_date=None, duckdb_expr=duckdb_expr)
                     status = f"+{n}行" if n else "已最新"
                     print(f"  [{i}/{len(factors)}] {name:25s} {status}")
                     total_ok += 1

@@ -1,0 +1,61 @@
+{
+  "events": [
+    {
+      "factor_name": "roe_ttm",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=39.9",
+      "timestamp": "2026-07-05 18:48:55.388440"
+    },
+    {
+      "factor_name": "grossprofit_margin",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=40.9",
+      "timestamp": "2026-07-05 18:50:19.624483"
+    },
+    {
+      "factor_name": "netprofit_margin",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=38.7",
+      "timestamp": "2026-07-05 18:51:02.740974"
+    },
+    {
+      "factor_name": "netprofit_yoy",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=41.0",
+      "timestamp": "2026-07-05 18:51:44.665730"
+    },
+    {
+      "factor_name": "tr_yoy",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=57.4",
+      "timestamp": "2026-07-05 18:52:26.653960"
+    },
+    {
+      "factor_name": "basic_eps_yoy",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=40.4",
+      "timestamp": "2026-07-05 18:53:08.642173"
+    },
+    {
+      "factor_name": "debt_to_assets",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=49.0",
+      "timestamp": "2026-07-05 18:53:50.628682"
+    },
+    {
+      "factor_name": "ocf_to_netprofit",
+      "from_stage": "exploration",
+      "to_stage": "archived",
+      "reason": "等级=archive, 评分=49.0",
+      "timestamp": "2026-07-05 18:55:57.478087"
+    }
+  ],
+  "last_updated": "2026-07-05 18:55:57.478087"
+}

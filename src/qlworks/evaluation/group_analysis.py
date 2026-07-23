@@ -6,6 +6,11 @@ import numpy as np
 import pandas as pd
 from typing import Optional
 
+# ── 默认参数（可统一修改） ──
+_N_GROUPS: int = 10          # 分层回测组数
+_QR_WINDOW: int = 5          # 分层收益计算窗口
+_QR_MIN_OBS: int = 20        # 每组最小观测数
+
 
 def safe_quantile_assign(series, n=5):
     """用 rank 分位数替代 pd.qcut，避免重复边界报错。"""
@@ -14,11 +19,70 @@ def safe_quantile_assign(series, n=5):
     return result
 
 
+# ──────────── Q1 vs Q10 差异显著性检验 ────────────
+
+def calc_q1_q10_significance(q_df: pd.DataFrame, label_col: str = "mean") -> dict:
+    """检验 Q1（最低组）与 Q10（最高组）的收益率差异是否显著。
+
+    使用两种方法：
+      1. Welch's t-test：两组均值差异的 t 检验（不假设方差齐性）
+      2. Mann-Whitney U 检验：非参数秩和检验（不假设正态分布）
+
+    如果两者都显著（p < 0.05），说明因子的分层能力是统计显著的，
+    不是随机噪声。
+
+    Args:
+        q_df: 分层回测结果（含 datetime, quantile, mean）
+        label_col: 收益列名（默认 mean）
+
+    Returns:
+        dict: t_stat, t_pvalue, mw_stat, mw_pvalue,
+              q1_mean, q10_mean, diff_mean,
+              t_significant, mw_significant
+    """
+    from scipy import stats
+
+    if q_df.empty or "quantile" not in q_df.columns:
+        return {"note": "数据为空", "t_significant": False, "mw_significant": False}
+
+    q_min = int(q_df["quantile"].min())
+    q_max = int(q_df["quantile"].max())
+
+    q1 = q_df[q_df["quantile"] == q_min][label_col].dropna().values
+    q10 = q_df[q_df["quantile"] == q_max][label_col].dropna().values
+
+    if len(q1) < 5 or len(q10) < 5:
+        return {"note": "样本不足", "t_significant": False, "mw_significant": False,
+                "q1_n": len(q1), "q10_n": len(q10)}
+
+    # Welch's t-test
+    t_stat, t_pvalue = stats.ttest_ind(q1, q10, equal_var=False)
+
+    # Mann-Whitney U
+    mw_stat, mw_pvalue = stats.mannwhitneyu(q1, q10, alternative="two-sided")
+
+    return {
+        "q1_mean": round(float(np.mean(q1)), 6),
+        "q10_mean": round(float(np.mean(q10)), 6),
+        "diff_mean": round(float(np.mean(q1) - np.mean(q10)), 6),
+        "q1_std": round(float(np.std(q1, ddof=1)), 6),
+        "q10_std": round(float(np.std(q10, ddof=1)), 6),
+        "t_stat": round(float(t_stat), 4),
+        "t_pvalue": round(float(t_pvalue), 6),
+        "t_significant": bool(t_pvalue < 0.05),
+        "mw_stat": round(float(mw_stat), 4),
+        "mw_pvalue": round(float(mw_pvalue), 6),
+        "mw_significant": bool(mw_pvalue < 0.05),
+        "q1_n": int(len(q1)),
+        "q10_n": int(len(q10)),
+    }
+
+
 def quantile_returns(
     df: pd.DataFrame,
     factor_col: str,
     label_col: str,
-    quantiles: int = 5,
+    quantiles: int = _N_GROUPS,
     group_col: Optional[str] = None,
 ) -> pd.DataFrame:
     """每日分层收益率（使用 rank 分位数，更稳定）。
@@ -85,7 +149,7 @@ def calc_monotonicity_score(q_df: pd.DataFrame) -> float:
 
 def long_short_returns(
     q_df: pd.DataFrame,
-    long_quantile: int = 4,
+    long_quantile: int = _N_GROUPS - 1,
     short_quantile: int = 0,
     cost: float = 0.0,
 ) -> pd.DataFrame:
@@ -233,6 +297,9 @@ def calc_group_cumulative_returns(q_df: pd.DataFrame) -> pd.DataFrame:
     # 将多期标签收益转为日频等效（与 calc_ls_stats 保持一致）
     # 从已有的 label_horizon 无法获取，这里保守不缩放，用原始 cumprod
     # 因为报告显示的是相对趋势而非绝对年化，不影响分层分化判断
+    # 关键：用 fillna(0) 替代 dropna()，避免尾部因 label_horizon 产生的 NaN 导致大量数据被丢弃
+    # 若某天某分组无成分股（mean=NaN），视同当日收益为 0，不中断累计净值
+    piv = piv.fillna(0.0)
     cum = (1 + piv).cumprod()
     cum.columns = [f"G{int(c)+1}" for c in cum.columns]
     return cum
