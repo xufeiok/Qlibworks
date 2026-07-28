@@ -17,11 +17,25 @@ factor_files:
 factor_cache_names: []
 
 # 预处理开关（树模型：截面分位数化 + 不中性化）
+# [AQR修正] 树模型不推荐特征中性化：可通过特征交互自动学习行业/市值效应
 normalize_features: true
 neutralize_features: false
 renormalize_features_after_neutralize: false
+# [Bloomberg-Dimensional 修正] 标签归一化统一由 Processor 管线控制，每个 fold 独立执行截面 rank
 normalize_labels: true
 neutralize_labels: false
+
+# 标签可交易性过滤 + 预测置信度阈值
+filter_untradeable_labels: true
+prediction_confidence_threshold: 0.2
+
+# [Renaissance 标准] 多空非对称配置
+long_short_ratio:
+  long_pct: 0.30
+  short_pct: 0.10
+
+# 窗口级标签缓存（消除 5 次重复 D.features() 调用）
+cache_window_labels: true
 
 # 动态过滤 + ST/次新过滤
 use_dynamic_filter: true
@@ -31,7 +45,7 @@ filter_st: true
 # 运行期质量闸门
 window_quality_gate:
   enabled: true
-  min_valid_samples: 30
+  min_valid_samples: 100  # [修复] 30→100，至少覆盖约3个交易日
   min_healthy_models: 2
 
 # 滚动窗口 (Walk-Forward Optimization, 训练→验证→测试 间隔 10 天 Embargo)
@@ -80,6 +94,12 @@ icir_stability_check:
   enabled: true
   rolling_window: 60
   keep_ratio: 0.8
+
+# [Point72 标准] Purged K-Fold 交叉验证
+purged_kfold:
+  enabled: true
+  n_splits: 3
+  purge_days: 11
 
 # 特征选择细节
 feature_selection:

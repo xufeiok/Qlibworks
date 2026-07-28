@@ -29,10 +29,10 @@ FACTOR_CACHE_EXPRESSIONS = {
 class CustomFeatureCache:
     """缓存底层特征表，供同一窗口内重复切列/切时间范围复用。
 
-    warehouse_df 和 factor_series_list 互斥：
+    warehouse_df 和 factor_parquet_meta 互斥：
     - warehouse_df: 合并后的宽表（传统模式，因子数少时使用）
-    - factor_series_list: 未合并的因子序列列表（惰性模式，因子数多时使用，
-      仅在 _slice_feature_cache 按需合并选定因子以节省内存）
+    - factor_parquet_meta: parquet 文件路径元信息（惰性模式，因子数多时使用，
+      仅在 get_warehouse_df 按需读取选定因子以节省内存）
     """
 
     warehouse_df: pd.DataFrame
@@ -42,8 +42,77 @@ class CustomFeatureCache:
     freq: str
     feature_order: List[str]
     resolved_instruments: Optional[List[str]] = None
-    # [惰性合并] 因子序列列表，未合并前 warehouse_df 为空 DataFrame
-    factor_series_list: Optional[List[pd.Series]] = None
+    # [惰性按需加载] 因子 parquet 文件元信息，未合并前 warehouse_df 为空 DataFrame
+    factor_parquet_meta: Optional[Dict[str, dict]] = None
+
+    @property
+    def factor_names(self) -> List[str]:
+        """惰性模式下可用的因子名列表"""
+        if self.factor_parquet_meta:
+            return list(self.factor_parquet_meta.keys())
+        return []
+
+    @staticmethod
+    def _load_single_factor_from_parquet(
+        meta: dict,
+        factor_name: str,
+        start_time=None,
+        end_time=None,
+        instruments: Optional[set] = None,
+    ) -> Optional[pd.Series]:
+        """从 parquet 文件加载单个因子数据，返回 (instrument, datetime) MultiIndex Series。"""
+        dfs = []
+        for file_path in meta["files"]:
+            try:
+                df = pd.read_parquet(file_path)
+            except Exception as e:
+                print(f"    [警告] 读取 {file_path} 失败：{e}")
+                continue
+            # 规范化列
+            if {"instrument", "datetime"}.issubset(df.index.names):
+                df = df.reset_index()
+            if 'datetime' in df.columns and df['datetime'].dtype != 'datetime64[ns]':
+                df['datetime'] = pd.to_datetime(df['datetime'])
+            # 时间过滤
+            if start_time is not None:
+                start_ts = pd.Timestamp(start_time)
+                df = df[df['datetime'] >= start_ts]
+            if end_time is not None:
+                end_ts = pd.Timestamp(end_time)
+                df = df[df['datetime'] <= end_ts]
+            if df.empty:
+                continue
+            # 股票过滤（统一小写后再比较）
+            if instruments is not None and 'instrument' in df.columns:
+                df['instrument'] = df['instrument'].str.lower()
+                df = df[df['instrument'].isin(instruments)]
+            if df.empty:
+                continue
+            dfs.append(df)
+
+        if not dfs:
+            return None
+
+        df = pd.concat(dfs, ignore_index=True)
+        value_col = meta["value_col_name"]
+        if value_col not in df.columns:
+            return None
+
+        # 去重
+        dup_mask = df.duplicated(subset=['instrument', 'datetime'], keep='last')
+        if dup_mask.any():
+            df = df.loc[~dup_mask]
+
+        # 构建 MultiIndex Series
+        series = df.set_index(['instrument', 'datetime'])[value_col].sort_index()
+        # 统一小写
+        instruments_lower = series.index.get_level_values('instrument').str.lower()
+        series.index = pd.MultiIndex.from_arrays(
+            [instruments_lower, series.index.get_level_values('datetime')],
+            names=['instrument', 'datetime']
+        )
+        series.name = factor_name
+        return series
 
     def get_warehouse_df(
         self,
@@ -51,10 +120,10 @@ class CustomFeatureCache:
         start_time=None,
         end_time=None,
     ) -> pd.DataFrame:
-        """按需从因子序列列表合并选定列；若已合并则直接返回。
+        """按需从 parquet 文件加载选定因子列；若已合并则直接返回。
 
-        selected_names 为 None 时合并全部因子（仅用于因子筛选阶段）。
-        时间过滤在合并前对单因子序列执行，避免先合并全时段再切片导致的内存峰值。
+        selected_names 为 None 时加载全部因子（仅用于因子筛选阶段）。
+        时间过滤在加载时执行，避免先加载全时段再切片导致的内存峰值。
         """
         # 已有合并好的 DataFrame，直接返回
         if not self.warehouse_df.empty:
@@ -65,42 +134,49 @@ class CustomFeatureCache:
                 df = df.loc[start_ts:end_ts]
             return df
 
-        # 从惰性序列合并
-        if not self.factor_series_list:
+        # 从 parquet 按需加载
+        if not self.factor_parquet_meta:
             return pd.DataFrame()
 
-        start_ts = pd.Timestamp(start_time) if start_time else None
-        end_ts = pd.Timestamp(end_time) if end_time else None
+        # 准备股票过滤集合
+        instr_set = None
+        if self.resolved_instruments is not None:
+            instr_set = {str(inst).lower() for inst in self.resolved_instruments}
 
-        series_list = self.factor_series_list
+        # 确定要加载的因子列表
+        meta_items = list(self.factor_parquet_meta.items())
         if selected_names is not None:
-            series_list = [s for s in series_list if s.name in selected_names]
-            if not series_list:
+            meta_items = [(n, m) for n, m in meta_items if n in selected_names]
+            if not meta_items:
                 return pd.DataFrame()
 
-        # 构建联合索引（仅选定时段的 join key，大幅降低内存）
+        # 按需加载每个因子
+        series_list = []
+        for name, meta in meta_items:
+            s = self._load_single_factor_from_parquet(
+                meta, name, start_time=start_time, end_time=end_time, instruments=instr_set
+            )
+            if s is not None and not s.empty:
+                series_list.append(s)
+
+        if not series_list:
+            return pd.DataFrame()
+
+        # 构建联合索引并合并
         index_parts = []
         for s in series_list:
             idx_df = s.index.to_frame(index=False)
-            if start_ts is not None:
-                idx_df = idx_df[idx_df["datetime"] >= start_ts]
-            if end_ts is not None:
-                idx_df = idx_df[idx_df["datetime"] <= end_ts]
-            if not idx_df.empty:
-                index_parts.append(idx_df)
-
-        if not index_parts:
-            return pd.DataFrame()
+            index_parts.append(idx_df)
 
         index_frame = (
             pd.concat(index_parts, ignore_index=True)
             .drop_duplicates()
-            .sort_values(["datetime", "instrument"], kind="mergesort")
+            .sort_values(["instrument", "datetime"], kind="mergesort")
         )
         target_index = pd.MultiIndex.from_frame(index_frame)
 
         df = pd.concat(series_list, axis=1, sort=False).reindex(target_index)
-        df.index.names = ["datetime", "instrument"]
+        df.index.names = ["instrument", "datetime"]
         df.columns = pd.MultiIndex.from_product([["feature"], df.columns])
         if not df.index.is_monotonic_increasing:
             df = df.sort_index()
@@ -194,94 +270,85 @@ def wrap_dataset_with_cached_train_frame(
 
 def _load_factors_from_warehouse(feature_bundle, start_time, end_time):
     """
-    尝试从 warehouse 加载因子数据。
+    发现 warehouse 中可用的 parquet 因子文件（不加载数据到内存）。
 
     返回：
-    - loaded_factors: {因子名: MultiIndex Series}
+    - factor_parquet_meta: {因子名: {"files": [Path, ...], "has_value_col": bool, "value_col_name": str}}
     - remaining_factors: warehouse 缺失的因子名列表
     """
     from pathlib import Path
     from qlworks.config import WAREHOUSE_DIR
     
     warehouse_base = Path(WAREHOUSE_DIR)
-    loaded_factors = {}
+    factor_parquet_meta = {}
     remaining_factors = []
     
-    # 遍历所有需要加载的因子（从 names 获取因子名）
     for field_name in feature_bundle.names:
         factor_dir = warehouse_base / field_name
+        if not factor_dir.exists():
+            remaining_factors.append(field_name)
+            continue
         
-        # 检查 warehouse 中是否有该因子的 parquet 文件
-        if factor_dir.exists():
-            parquet_files = sorted(factor_dir.glob("*.parquet"))
-            if parquet_files:
-                # 有 parquet 文件，尝试加载
-                dfs = []
-                for file in parquet_files:
-                    # 根据文件名判断年份是否在时间范围内
-                    try:
-                        file_year = int(file.stem)
-                        if start_time and file_year < int(start_time[:4]):
-                            continue
-                        if end_time and file_year > int(end_time[:4]):
-                            continue
-                    except ValueError:
-                        pass  # 非年份文件名，直接加载
-                    
-                    try:
-                        df = pd.read_parquet(file)
-                        if {"instrument", "datetime"}.issubset(df.index.names):
-                            df = df.reset_index()
-                        dfs.append(df)
-                    except Exception as e:
-                        print(f"    [警告] 读取 {file} 失败：{e}")
-                
-                if dfs:
-                    df = pd.concat(dfs, ignore_index=True)
-                    if "datetime" not in df.columns and {"instrument", "datetime"}.issubset(df.index.names):
-                        df = df.reset_index()
-                    if 'datetime' in df.columns:
-                        df['datetime'] = pd.to_datetime(df['datetime'])
-                    else:
-                        print(f"    [警告] {field_name} 的 warehouse 数据缺少 datetime 字段，回退到 Qlib 表达式")
-                        remaining_factors.append(field_name)
-                        continue
-                    if start_time:
-                        df = df[df['datetime'] >= pd.Timestamp(start_time)]
-                    if end_time:
-                        df = df[df['datetime'] <= pd.Timestamp(end_time)]
-                    value_col = None
-                    if 'value' in df.columns:
-                        value_col = 'value'
-                    elif field_name in df.columns:
-                        value_col = field_name
-                    elif {'instrument', 'datetime'}.issubset(df.columns):
-                        candidate_cols = [col for col in df.columns if col not in {'instrument', 'datetime'}]
-                        if len(candidate_cols) == 1:
-                            value_col = candidate_cols[0]
-                    if not df.empty and value_col is not None and {'instrument', 'datetime'}.issubset(df.columns):
-                        dup_mask = df.duplicated(subset=['instrument', 'datetime'], keep='last')
-                        dup_count = int(dup_mask.sum())
-                        if dup_count:
-                            dup_keys = int(df.loc[dup_mask, ['instrument', 'datetime']].drop_duplicates().shape[0])
-                            print(f"    [warehouse 去重] {field_name}: 删除 {dup_count:,} 行重复记录，涉及 {dup_keys:,} 个键")
-                            df = df.loc[~dup_mask].copy()
-                        series = df.set_index(['instrument', 'datetime'])[value_col].sort_index()
-                        # [统一小写] warehouse 中 instrument 可能在 parquet 中为大写，需统一
-                        instruments_lower = series.index.get_level_values('instrument').str.lower()
-                        new_idx = pd.MultiIndex.from_arrays(
-                            [instruments_lower, series.index.get_level_values('datetime')],
-                            names=['instrument', 'datetime']
-                        )
-                        series.index = new_idx
-                        loaded_factors[field_name] = series
-                        print(f"    [warehouse 直载] {field_name}: {len(series):,} 条记录")
-                        continue
+        parquet_files = sorted(factor_dir.glob("*.parquet"))
+        if not parquet_files:
+            remaining_factors.append(field_name)
+            continue
         
-        # warehouse 中没有，需要后续用表达式构建
-        remaining_factors.append(field_name)
+        # 按年份过滤文件
+        filtered_files = []
+        for file in parquet_files:
+            try:
+                file_year = int(file.stem)
+                if start_time and file_year < int(start_time[:4]):
+                    continue
+                if end_time and file_year > int(end_time[:4]):
+                    continue
+            except ValueError:
+                pass  # 非年份文件名，保留
+            filtered_files.append(file)
+        
+        if not filtered_files:
+            remaining_factors.append(field_name)
+            continue
+        
+        # 读取第一个文件探测列结构
+        value_col_name = None
+        has_value_col = False
+        try:
+            _probe = pd.read_parquet(filtered_files[0], columns=None)
+            # 只读前几行做列探测
+            if hasattr(_probe, 'head'):
+                # 判断 value 列
+                if 'value' in _probe.columns:
+                    value_col_name = 'value'
+                    has_value_col = True
+                elif field_name in _probe.columns:
+                    value_col_name = field_name
+                    has_value_col = True
+                else:
+                    candidate_cols = [col for col in _probe.columns if col not in {'instrument', 'datetime'}]
+                    if len(candidate_cols) == 1:
+                        value_col_name = candidate_cols[0]
+                        has_value_col = True
+            del _probe
+        except Exception as e:
+            print(f"    [警告] 探测 {field_name} 列结构失败：{e}")
+            remaining_factors.append(field_name)
+            continue
+        
+        if not has_value_col:
+            print(f"    [警告] {field_name} 缺少 value 列，回退到 Qlib 表达式")
+            remaining_factors.append(field_name)
+            continue
+        
+        factor_parquet_meta[field_name] = {
+            "files": filtered_files,
+            "has_value_col": has_value_col,
+            "value_col_name": value_col_name,
+        }
+        print(f"    [warehouse 就绪] {field_name}: {len(filtered_files)} 个 parquet 文件")
     
-    return loaded_factors, remaining_factors
+    return factor_parquet_meta, remaining_factors
 
 
 def _resolve_static_instruments(instruments, start_time=None, end_time=None, verbose=True, filter_pipe=None):
@@ -291,13 +358,20 @@ def _resolve_static_instruments(instruments, start_time=None, end_time=None, ver
     if instruments is None:
         return None
     if filter_pipe is not None:
-        # filter_pipe 现在是 list[ExpressionDFilter]（来自 get_tradeable_filter），
-        # 拆分后每个条件独立求值，避免 Qlib 表达式引擎合并空格导致 SyntaxError
-        inst = D.instruments(market=instruments, filter_pipe=filter_pipe if isinstance(filter_pipe, list) else [filter_pipe])
-        resolved = D.list_instruments(inst, start_time=start_time, end_time=end_time, as_list=True)
-        if verbose:
-            print(f"    [动态池过滤] {instruments} (filter_pipe x{len(filter_pipe) if isinstance(filter_pipe, list) else 1}): {len(resolved):,} 只股票")
-        return resolved
+        # [Windows 修复] ExpressionDFilter + D.list_instruments 内部使用 ParallelExt，
+        # Windows 下会死锁。改用文件直读获取全量股票，动态过滤（流动性、涨跌停）
+        # 留待后续 dataset processor pipeline 中处理。
+        if isinstance(instruments, str):
+            if verbose:
+                print(f"    [动态池过滤-直读模式] {instruments} (filter_pipe 留待 processor 管线处理)")
+            # 直接走下方文件直读分支
+            pass
+        else:
+            # 非字符串类型（如 dict/list），回退到 Qlib 解析（无 filter_pipe）
+            resolved = D.list_instruments(instruments, start_time=start_time, end_time=end_time, as_list=True)
+            if verbose:
+                print(f"    [动态池过滤] {instruments}: {len(resolved):,} 只股票")
+            return resolved
     if isinstance(instruments, str):
         # [Renaissance 改进] 直接读取 instruments/*.txt 文件，绕过 Qlib 有 Bug 的内置解析器。
         # Qlib 的 D.instruments("csi500") 无法正确解析 PIT 格式（code\tentry_date\texit_date），
@@ -399,44 +473,16 @@ def _filter_by_pit_date(warehouse_df: pd.DataFrame, pit_map: dict) -> pd.DataFra
     return warehouse_df.loc[warehouse_df.index.isin(_filtered_idx)]
 
 
-def _build_static_warehouse_frame(loaded_factors, start_time=None, end_time=None, instruments=None, pit_map=None):
-    """裁剪并过滤 warehouse 因子序列，返回未合并的序列列表以节省内存。
+def _build_static_warehouse_frame(factor_parquet_meta, start_time=None, end_time=None, instruments=None, pit_map=None):
+    """记录因子 parquet 元信息（不加载数据），留待 get_warehouse_df 按需读取。
 
-    合并操作延迟到 _slice_feature_cache 按需执行，仅合并选定的因子列。
+    返回：
+    - warehouse_df: 始终为空 DataFrame（惰性模式下数据按需加载）
+    - factor_parquet_meta: 透传的元信息字典
     """
-    if not loaded_factors:
+    if not factor_parquet_meta:
         return pd.DataFrame(), None
-
-    filtered_series = []
-    resolved_instruments = instruments
-    if resolved_instruments is not None:
-        resolved_instruments = {str(inst).lower() for inst in resolved_instruments}
-
-    start_ts = pd.Timestamp(start_time) if start_time else None
-    end_ts = pd.Timestamp(end_time) if end_time else None
-
-    for name, series in loaded_factors.items():
-        frame = series.rename(name).reset_index()
-        # warehouse 直载因子 instrument 已为小写（在 _load_factors_from_warehouse
-        # 中经 .lower() 处理），跳过 .str.lower() 避免 160 因子 × 7M 行累积 OOM
-        if start_ts is not None:
-            frame = frame[frame["datetime"] >= start_ts]
-        if end_ts is not None:
-            frame = frame[frame["datetime"] <= end_ts]
-        if resolved_instruments is not None:
-            frame = frame[frame["instrument"].isin(resolved_instruments)]
-        if frame.empty:
-            continue
-        ordered = frame.sort_values(["datetime", "instrument"], kind="mergesort")
-        filtered_series.append(
-            ordered.set_index(["datetime", "instrument"])[name].rename(name)
-        )
-
-    if not filtered_series:
-        return pd.DataFrame(), None
-
-    # [PIT 过滤] 从第一个参数返回空 DataFrame（历史遗留），实际数据在 factor_series_list 中
-    return pd.DataFrame(), filtered_series
+    return pd.DataFrame(), factor_parquet_meta
 
 
 def _slice_feature_cache(
@@ -447,7 +493,7 @@ def _slice_feature_cache(
 ):
     """从缓存中按因子和时间范围裁剪特征。
 
-    支持惰性合并：当 factor_series_list 非空时，仅合并 selected_feature_names
+    支持惰性加载：当 factor_parquet_meta 非空时，按需从 parquet 读取选定因子
     中的因子，避免一次性合并全部因子导致内存溢出。
     """
     selected_names = list(selected_feature_names or feature_cache.feature_order)
@@ -514,13 +560,12 @@ def build_custom_feature_cache(
     feature_order = []
 
     if feature_bundle is not None:
-        loaded_factors, _ = _load_factors_from_warehouse(feature_bundle, start_time, end_time)
+        factor_parquet_meta, _ = _load_factors_from_warehouse(feature_bundle, start_time, end_time)
         expr_map = dict(zip(feature_bundle.names, feature_bundle.fields))
         for field_name in feature_bundle.names:
             feature_order.append(field_name)
-            if field_name in loaded_factors:
-                print(f"    [使用 warehouse] {field_name}")
-                continue
+            if factor_parquet_meta and field_name in factor_parquet_meta:
+                continue  # warehouse 就绪，无需 Qlib 回退
             expr = expr_map.get(field_name)
             if expr is None:
                 print(f"    [警告] 因子 {field_name} 缺少表达式定义")
@@ -528,6 +573,7 @@ def build_custom_feature_cache(
             qlib_feature_expr_map[field_name] = expr
             print(f"    [Qlib 回退] {field_name}: {expr}")
     else:
+        factor_parquet_meta = {}
         feature_order = list(all_feature_names)
         qlib_feature_expr_map = dict(zip(all_feature_names, all_feature_exprs))
 
@@ -552,15 +598,15 @@ def build_custom_feature_cache(
     )
     # [Renaissance 改进] 加载 PIT 映射表用于逐日过滤，仅对字符串索引名有效（如 "csi500"）
     _pit_map = _load_pit_map(instruments) if isinstance(instruments, str) else None
-    warehouse_df, factor_series_list = _build_static_warehouse_frame(
-        loaded_factors,
+    warehouse_df, factor_parquet_meta_out = _build_static_warehouse_frame(
+        factor_parquet_meta,
         start_time=start_time,
         end_time=end_time,
         instruments=resolved_instruments,
         pit_map=_pit_map,
     )
 
-    # [TODO] PIT 过滤暂不支持惰性模式（factor_series_list），仅对已合并的 warehouse_df 生效
+    # PIT 过滤仅对已合并的 warehouse_df 生效（惰性模式 warehouse_df 为空，跳过）
     if _pit_map is not None and not warehouse_df.empty:
         _before = len(warehouse_df)
         warehouse_df = _filter_by_pit_date(warehouse_df, _pit_map)
@@ -581,7 +627,7 @@ def build_custom_feature_cache(
         freq=freq,
         feature_order=feature_order,
         resolved_instruments=resolved_instruments,
-        factor_series_list=factor_series_list,
+        factor_parquet_meta=factor_parquet_meta_out,
     )
 
 
@@ -669,15 +715,41 @@ def _build_mixed_loader_config(
             },
         }
 
+    # [修复] 标签始终通过 D.features() 预计算并注入 warehouse_df。
+    # NestedDataLoader 合并 QlibDataLoader 输出的标签时，因索引对齐问题导致
+    # 标签全部为 NaN（QlibDataLoader 的标签加载与 warehouse 特征索引用大小写或
+    # 日期格式不一致），因此统一走 D.features() → warehouse 注入路径。
+    from qlib.data import D
+    _insts = feature_cache.resolved_instruments
+    if not _insts:
+        _insts = D.instruments("all")
+    _label_raw = D.features(_insts, label_exprs, start_time, end_time)
+    if not _label_raw.empty:
+        if isinstance(_label_raw.columns, pd.MultiIndex):
+            _label_raw.columns = _label_raw.columns.droplevel(1)
+        _label_raw = _label_raw.rename(columns=dict(zip(_label_raw.columns, label_names)))
+        if isinstance(_label_raw.index, pd.MultiIndex) and 'instrument' in _label_raw.index.names:
+            _label_flat = _label_raw.reset_index()
+            _label_flat['instrument'] = _label_flat['instrument'].str.lower()
+            _label_flat = _label_flat.set_index(['instrument', 'datetime'])
+            _label_flat = _label_flat.sort_index()
+        else:
+            _label_flat = _label_raw
+        # 添加标签列到 warehouse_df，使用 ("label", col) MultiIndex 格式
+        # 标签保持原始收益率值，rank 归一化由 Processor 管线的 normalize_labels 统一控制
+        for _col in label_names:
+            warehouse_df[("label", _col)] = _label_flat[_col]
+    else:
+        raise ValueError(f"标签 {label_exprs} 在 Qlib 中计算为空，无法进行训练！")
+
     loaders = [{
         "class": "InstrumentAwareStaticDataLoader",
         "module_path": "qlworks.features.dataset",
         "kwargs": {"config": warehouse_df, "default_instruments": feature_cache.resolved_instruments},
     }]
-    qlib_config = {}
     if feature_exprs:
-        qlib_config["feature"] = (feature_exprs, feature_names)
-        qlib_config["label"] = (label_exprs, label_names)
+        # 仅用 QlibDataLoader 加载 Qlib 特征（行业、市值等），标签已注入 warehouse_df
+        qlib_config = {"feature": (feature_exprs, feature_names)}
         loaders.append({
             "class": "QlibDataLoader",
             "module_path": "qlib.data.dataset.loader",
@@ -689,38 +761,6 @@ def _build_mixed_loader_config(
             "kwargs": {"dataloader_l": loaders},
         }
     else:
-        # [Renaissance 修复] 所有特征已从 warehouse 加载，只有标签需 Qlib 求值。
-        # QlibDataLoader 不允许空特征列表，因此预计算标签并注入 warehouse_df。
-        from qlib.data import D
-        _insts = feature_cache.resolved_instruments
-        if not _insts:
-            _insts = D.instruments("all")
-        _label_raw = D.features(_insts, label_exprs, start_time, end_time)
-        if not _label_raw.empty:
-            if isinstance(_label_raw.columns, pd.MultiIndex):
-                _label_raw.columns = _label_raw.columns.droplevel(1)
-            _label_raw = _label_raw.rename(columns=dict(zip(_label_raw.columns, label_names)))
-            # [Renaissance 修复] D.features 返回的 index 结构与 warehouse_df 不一致：
-            #   _label_raw.index  : ['instrument', 'datetime']  (instrument 在前)
-            #   warehouse_df.index: ['datetime', 'instrument']  (datetime 在前)
-            # 此外 D.features 返回的 instrument 可能为大写（000001.SZ），
-            # 而 warehouse_df 统一使用小写（000001.sz）。
-            # 直接 index 对齐（pandas 按 tuple 匹配）因顺序/大小写不同会导致全量 label NaN  →
-            # DropnaLabel 删除所有行 → 0 samples 训练失败。
-            # 修复方式：将 _label_raw 展开为扁平 DataFrame，统一 index 格式后再赋值。
-            if isinstance(_label_raw.index, pd.MultiIndex) and 'instrument' in _label_raw.index.names:
-                _label_flat = _label_raw.reset_index()
-                _label_flat['instrument'] = _label_flat['instrument'].str.lower()
-                _label_flat = _label_flat.set_index(['datetime', 'instrument'])
-                if isinstance(_label_flat.index, pd.MultiIndex):
-                    _label_flat = _label_flat.sort_index()
-            else:
-                _label_flat = _label_raw
-            # 添加标签列到 warehouse_df，使用 ("label", col) MultiIndex 格式
-            for _col in label_names:
-                warehouse_df[("label", _col)] = _label_flat[_col]
-        else:
-            raise ValueError(f"标签 {label_exprs} 在 Qlib 中计算为空，无法进行训练！")
         return {
             "class": "InstrumentAwareStaticDataLoader",
             "module_path": "qlworks.features.dataset",
@@ -757,8 +797,8 @@ def _build_processors(
     """
     model_norm_map = {
         "tree": "CSQuantileNorm(特征横截面分位数化)",
-        "linear": "RobustZScoreNorm(特征稳健ZScore标准化)",
-        "nn": "RobustZScoreNorm(特征稳健ZScore标准化)",
+        "linear": "CSQuantileGaussNorm(特征分位数高斯正态化)",
+        "nn": "CSQuantileGaussNorm(特征分位数高斯正态化)",
     }
     if not normalize_features:
         recommended = model_norm_map.get(model_type, "按模型选择合适的特征标准化方式")
@@ -799,7 +839,11 @@ def _build_processors(
         base_infer.append(norm_cfg)
         base_learn.append(norm_cfg)
     else:
-        norm_cfg = {"class": "RobustZScoreNorm", "kwargs": {"fields_group": "feature", "clip_outlier": True}}
+        norm_cfg = {
+            "class": "CSQuantileGaussNorm",
+            "module_path": "qlworks.processors.quantile_norm",
+            "kwargs": {"fields_group": "feature"},
+        }
         base_infer.append(norm_cfg)
         base_learn.append(norm_cfg)
 

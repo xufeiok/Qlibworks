@@ -43,6 +43,7 @@ from qlworks.models.training import (
     train_lgb_model, train_xgb_model, train_catboost_model,
     predict_ensemble_models, compute_ic, compute_ic_ewma,
 )
+from qlworks.factors.filter_utils import filter_codes_post, apply_label_filter
 from qlworks.config import QLIB_DATA_DIR
 import qlib
 
@@ -188,7 +189,18 @@ LOCAL_CONFIG = {
     "normalize_labels": True,
     # 当前本地数据未补行业字段，默认关闭标签中性化，避免依赖缺失导致训练失败。
     "neutralize_labels": False,
-    "use_dynamic_filter": True,
+    "use_dynamic_filter": True,  # 启用流动性过滤（成交量+成交额）
+    "filter_new_stocks": True,   # 过滤上市不满 250 日次新股
+    "filter_st": True,           # 过滤 ST 股票
+
+    # 标签可交易性过滤（剔除涨跌停无法买入的样本）
+    "filter_untradeable_labels": True,
+
+    # 预测置信度阈值（弱信号日降低无效交易）
+    "prediction_confidence_threshold": 0.2,  # 设为 None 或 0 则关闭
+
+    # [Renaissance 标准] 多空非对称配置
+    "long_short_ratio": {"long_pct": 0.30, "short_pct": 0.10},
 
     # [Renaissance] 各窗口间 train→valid→test 均保留 ≥12 天 embargo 防止标签泄露
     # 窗口定义保持不变（已有天然 12d 间隔）
@@ -221,7 +233,7 @@ LOCAL_CONFIG = {
     },
 
     # 精选因子 CSV 路径（select_factors.py 的输出文件）
-    "factor_list": "selected_factors_tree.txt",
+    "factor_list": "selected_factors_20260723_230934_selected.csv",
 
     # 输出路径：None 自动生成 score_tree_selected.csv
     "output": None,
@@ -231,11 +243,28 @@ LOCAL_CONFIG = {
     # 运行期质量闸门：用于剔除标签/数据异常导致的坏窗口，避免污染最终选股结果。
     "window_quality_gate": {
         "enabled": True,
-        "min_valid_samples": 30,
+        "min_valid_samples": 100,  # 至少覆盖约3个交易日
         "max_train_rmse": 5.0,
         "max_valid_rmse": 5.0,
         "min_healthy_models": 2,
     },
+
+    # Purged K-Fold 交叉验证
+    # [TODO] 当前脚本未实现 _purged_kfold_train，待训练循环重构后启用
+    "purged_kfold": {
+        "enabled": False,
+        "n_splits": 3,
+        "purge_days": 11,
+    },
+
+    # P2: 增强评估配置
+    "evaluation": {
+        "ic_decay_horizons": [1, 3, 5, 10, 20],
+        "industry_exposure_check": True,
+        "marketcap_group_ic": True,
+    },
+    # 标签窗口级缓存
+    "cache_window_labels": True,
 }
 
 
@@ -556,6 +585,174 @@ def log_model_diagnostics(window_name: str, diagnostics: list[dict], model_weigh
         print(f"      >> 集成权重 (EWMA-IC, 归一化): {[f'{w:.3f}' for w in model_weights]}")
 
 
+# ==============================================================================
+# [P1 辅助函数] IC 衰减分析
+# ==============================================================================
+
+def _compute_ic_decay(feature_cache, selected_factors, instruments, train_start, train_end, horizons):
+    """计算因子在不同前瞻周期下的 IC 衰减曲线。
+
+    参数:
+    - feature_cache: 特征缓存
+    - selected_factors: 因子名列表
+    - instruments: 股票列表
+    - train_start, train_end: 训练期
+    - horizons: IC 衰减分析的时间跨度列表
+    """
+    from qlib.data import D
+
+    print(f"\n    [IC 衰减分析] horizons={horizons}")
+    factor_df = feature_cache.get_warehouse_df(selected_factors, start_time=train_start, end_time=train_end)
+    if factor_df.empty:
+        return pd.DataFrame()
+
+    if isinstance(factor_df.columns, pd.MultiIndex):
+        factor_df.columns = factor_df.columns.get_level_values(1)
+
+    decay_results = {}
+    for horizon in horizons:
+        label_expr = f"Ref($close, -{horizon}) / Ref($open, -1) - 1"
+        try:
+            label_frames = []
+            for i in range(0, len(instruments), 500):
+                batch_inst = instruments[i:i+500]
+                _df = D.features(batch_inst, [label_expr], start_time=train_start, end_time=train_end, freq="day")
+                if _df is not None and not _df.empty:
+                    label_frames.append(_df)
+
+            if not label_frames:
+                continue
+
+            label_df = pd.concat(label_frames)
+            label_series = label_df[label_df.columns[0]].sort_index()
+
+            horizon_ic = {}
+            for col in selected_factors:
+                if col not in factor_df.columns:
+                    continue
+                feat = factor_df[col].dropna()
+                lab = label_series.reindex(feat.index).dropna()
+                common = feat.index.intersection(lab.index)
+                if len(common) >= 50:
+                    ic_val = compute_ic(feat.loc[common], lab.loc[common])
+                    horizon_ic[col] = ic_val
+                else:
+                    horizon_ic[col] = np.nan
+
+            decay_results[f"H{horizon}"] = horizon_ic
+            print(f"      H{horizon}: mean|IC|={np.nanmean(np.abs(list(horizon_ic.values()))):.4f}")
+
+        except Exception as e:
+            print(f"      H{horizon}: 计算失败 ({e})")
+
+    if decay_results:
+        return pd.DataFrame(decay_results).T
+    return pd.DataFrame()
+
+
+# ==============================================================================
+# [P2 辅助函数] 行业/市值分组 IC
+# ==============================================================================
+
+def _compute_group_ic(predictions_df, actual_label_series, analysis_type="industry"):
+    """计算行业或市值分组 IC。"""
+    from qlib.data import D
+
+    if predictions_df.empty or actual_label_series.empty:
+        return {}
+
+    all_instruments = list(set(
+        list(predictions_df.index.get_level_values("instrument").unique()) +
+        list(actual_label_series.index.get_level_values("instrument").unique())
+    ))
+
+    sample_dates = sorted(predictions_df.index.get_level_values("datetime").unique())
+    if len(sample_dates) > 10:
+        sample_dates = sample_dates[::max(1, len(sample_dates) // 10)]
+
+    group_ics = {}
+
+    if analysis_type == "industry":
+        try:
+            ref_date = str(sample_dates[-1].date()) if len(sample_dates) > 0 else "2024-12-31"
+            ind_frames = []
+            for i in range(0, len(all_instruments), 500):
+                batch_inst = all_instruments[i:i+500]
+                try:
+                    _df = D.features(batch_inst, ['$sw_l1'], start_time=ref_date, end_time=ref_date)
+                    if _df is not None and not _df.empty:
+                        ind_frames.append(_df)
+                except Exception:
+                    continue
+
+            if ind_frames:
+                ind_df = pd.concat(ind_frames)
+                if isinstance(ind_df.columns, pd.MultiIndex):
+                    ind_df.columns = ind_df.columns.droplevel(1)
+                ind_map = ind_df[ind_df.columns[0]].to_dict()
+
+                aligned = predictions_df.copy()
+                inst_col = aligned.index.get_level_values("instrument")
+                aligned["industry"] = inst_col.map(ind_map)
+                aligned["actual"] = actual_label_series.reindex(aligned.index)
+
+                for industry_name, group in aligned.groupby("industry"):
+                    if len(group) < 30:
+                        continue
+                    valid = group.dropna(subset=["score", "actual"])
+                    if len(valid) < 20:
+                        continue
+                    ic_val = compute_ic(valid["score"], valid["actual"])
+                    group_ics[str(industry_name)] = ic_val
+
+        except Exception as e:
+            print(f"    [行业分析] 失败: {e}")
+
+    elif analysis_type == "marketcap":
+        try:
+            mkt_frames = []
+            for i in range(0, len(all_instruments), 500):
+                batch_inst = all_instruments[i:i+500]
+                try:
+                    ref_d = str(sample_dates[0].date()) if sample_dates else "2024-01-01"
+                    _df = D.features(
+                        batch_inst, ['$market_cap'],
+                        start_time=ref_d,
+                        end_time=str(sample_dates[-1].date()) if sample_dates else "2024-12-31"
+                    )
+                    if _df is not None and not _df.empty:
+                        mkt_frames.append(_df)
+                except Exception:
+                    continue
+
+            if mkt_frames:
+                mkt_df = pd.concat(mkt_frames)
+                if isinstance(mkt_df.columns, pd.MultiIndex):
+                    mkt_df.columns = mkt_df.columns.droplevel(1)
+                mkt_col = mkt_df.columns[0]
+                mkt_cap = mkt_df[mkt_col].groupby(level="datetime").transform(
+                    lambda x: pd.qcut(x.rank(method='first'), 3, labels=['小市值', '中市值', '大市值'])
+                )
+
+                aligned = predictions_df.copy()
+                aligned["mkt_group"] = mkt_cap.reindex(aligned.index)
+                aligned["actual"] = actual_label_series.reindex(aligned.index)
+
+                for mkt_group, group in aligned.groupby("mkt_group"):
+                    if len(group) < 30:
+                        continue
+                    valid = group.dropna(subset=["score", "actual"])
+                    if len(valid) < 20:
+                        continue
+                    ic_val = compute_ic(valid["score"], valid["actual"])
+                    group_ics[str(mkt_group)] = ic_val
+
+        except Exception as e:
+            print(f"    [市值分析] 失败: {e}")
+
+    return group_ics
+
+
 def main():
     CONFIG = build_effective_local_config(LOCAL_CONFIG)
 
@@ -643,10 +840,24 @@ def main():
         train_frame_full = dataset_sub.prepare("train")
         print(f"    >>> 训练集: {train_frame_full.shape[0]} 行 × {train_frame_full.shape[1]} 列")
 
+        # [Virtu-Renaissance 修复] 标签可交易性过滤：剔除涨跌停/一字板无法买入样本
+        if CONFIG.get("filter_untradeable_labels", False):
+            _train_inst = train_frame_full.index.get_level_values("instrument").unique().tolist()
+            train_frame_full = apply_label_filter(
+                train_frame_full, _train_inst,
+                segments["train"][0], segments["train"][1], bundle_all.label_names
+            )
+
         valid_frame = None
         try:
             valid_frame = dataset_sub.prepare("valid")
             print(f"    >>> 验证集: {valid_frame.shape[0]} 行")
+            if CONFIG.get("filter_untradeable_labels", False) and valid_frame is not None:
+                _valid_inst = valid_frame.index.get_level_values("instrument").unique().tolist()
+                valid_frame = apply_label_filter(
+                    valid_frame, _valid_inst,
+                    segments["valid"][0], segments["valid"][1], bundle_all.label_names
+                )
         except Exception:
             print(f"    [警告] 验证集为空，跳过早停和 IC 加权")
 
@@ -721,7 +932,38 @@ def main():
             predictions = predictions.to_frame("score")
 
         predictions = predictions.dropna(subset=["score"])
-        predictions["score"] = predictions.groupby(level="datetime")["score"].rank(pct=True, na_option="keep")
+
+        # 保存原始预测（用于后续评估）
+        predictions["raw_score"] = predictions["score"]
+
+        # 截面分位数排名
+        predictions["score"] = predictions.groupby(
+            level="datetime"
+        )["score"].rank(pct=True, na_option="keep")
+
+        # [P1修复] 置信度阈值：弱信号衰减至中性 0.5
+        conf_threshold = CONFIG.get("prediction_confidence_threshold")
+        if conf_threshold is not None and conf_threshold > 0:
+            raw_ranked = predictions["score"].copy()
+            signal_strength = (raw_ranked - 0.5).abs()
+            daily_median_strength = signal_strength.groupby(level="datetime").transform("median")
+            weak_signal = signal_strength < daily_median_strength * conf_threshold
+            n_weak = weak_signal.sum()
+            if n_weak > 0:
+                predictions.loc[weak_signal, "score"] = 0.5
+                print(f"    [置信度衰减] {n_weak} 个弱信号衰减至中性 "
+                      f"({100*n_weak/max(len(predictions),1):.1f}%)")
+
+        # [Renaissance 标准] 多空非对称处理
+        ls_ratio = CONFIG.get("long_short_ratio", {"long_pct": 0.30, "short_pct": 0.10})
+        long_cutoff = 1.0 - ls_ratio["long_pct"]
+        short_cutoff = ls_ratio["short_pct"]
+        middle_mask = (predictions["score"] > short_cutoff) & (predictions["score"] < long_cutoff)
+        n_middle = middle_mask.sum()
+        if n_middle > 0:
+            predictions.loc[middle_mask, "score"] = 0.5
+            print(f"    [多空非对称] {n_middle} 个中性信号衰减 (long_top={ls_ratio['long_pct']:.0%}, "
+                  f"short_bottom={ls_ratio['short_pct']:.0%})")
 
         print(f"  >>> {window_name} 预测完成！共产生 {len(predictions)} 条测试集打分。")
         all_predictions.append(predictions)
@@ -735,6 +977,84 @@ def main():
         raise RuntimeError("所有滚动窗口均被质量闸门剔除，未生成可用预测结果。")
     final_predictions = pd.concat(all_predictions)
     final_predictions.sort_index(level=["datetime", "instrument"], inplace=True)
+
+    # PIT 后置过滤: main_board + 退市 + ST + 次新股
+    try:
+        before = len(final_predictions)
+        _inst_path = Path(QLIB_DATA_DIR) / "instruments" / "main_board.txt"
+        _board_stocks = set()
+        if _inst_path.exists():
+            with open(_inst_path) as _f:
+                for _l in _f:
+                    _l = _l.strip()
+                    if not _l:
+                        continue
+                    _parts = _l.split()
+                    if _parts:
+                        _board_stocks.add(_parts[0].lower())
+
+        _all_path = Path(QLIB_DATA_DIR) / "instruments" / "all.txt"
+        _delist_pit = {}
+        if _all_path.exists():
+            with open(_all_path) as _f:
+                for _l in _f:
+                    _l = _l.strip()
+                    if not _l:
+                        continue
+                    _parts = _l.split('\t')
+                    if len(_parts) >= 3:
+                        _code, _list_d, _delist_d = _parts[0].lower(), _parts[1], _parts[2]
+                        if _delist_d != '9999-12-31':
+                            _delist_pit[_code] = _delist_d
+
+        _filter_new = CONFIG.get("filter_new_stocks", True)
+        _filter_st = CONFIG.get("filter_st", True)
+        _filtered_parts = []
+        _total_st_removed = 0
+
+        for _date, _day_df in final_predictions.groupby(level="datetime"):
+            _dt_str = str(_date)[:10]
+            _day_insts = _day_df.index.get_level_values("instrument").str.lower()
+            if _board_stocks:
+                _in_board = np.asarray(_day_insts.isin(_board_stocks))
+            else:
+                _in_board = np.ones(len(_day_insts), dtype=bool)
+            _not_delisted = _day_insts.map(
+                lambda x: _delist_pit.get(x, "9999-12-31") >= _dt_str
+            )
+            _day_df = _day_df[_in_board & np.asarray(_not_delisted)]
+
+            if _day_df.empty:
+                continue
+
+            _codes = _day_df.index.get_level_values("instrument").unique().tolist()
+            _filtered_codes = filter_codes_post(
+                _codes, _dt_str,
+                filter_new_stocks=_filter_new,
+                filter_st=_filter_st,
+            )
+            _total_st_removed += len(_codes) - len(_filtered_codes)
+
+            _filtered_set = set(_filtered_codes)
+            _keep = _day_df.index.get_level_values("instrument").str.lower().isin(_filtered_set)
+            _day_df = _day_df[_keep]
+            if not _day_df.empty:
+                _filtered_parts.append(_day_df)
+
+        if _filtered_parts:
+            final_predictions = pd.concat(_filtered_parts)
+            final_predictions.sort_index(level=["datetime", "instrument"], inplace=True)
+        else:
+            final_predictions = final_predictions.iloc[0:0]
+
+        after = len(final_predictions)
+        print(f"\n  [PIT 过滤] {before} → {after} (剔除 {before-after} 条: 非主板/已退市/ST/次新, "
+              f"其中 ST/次新 {_total_st_removed} 条)")
+    except Exception as e:
+        print(f"  [警告] 后置过滤异常: {e}，跳过")
+
+    if final_predictions.empty:
+        raise RuntimeError("后置过滤后无有效预测，请检查数据质量")
 
     print(f"  >>> 合并完成！总测试集跨度: {final_predictions.index.get_level_values('datetime').min().date()} "
           f"至 {final_predictions.index.get_level_values('datetime').max().date()}")
@@ -756,6 +1076,70 @@ def main():
     print(f"  训练模型: {selected_models}")
     print(f"  总预测记录: {len(final_predictions):,}")
     print("=" * 60)
+
+    # =========================================================================
+    # [P2 增强] 综合评估报告
+    # =========================================================================
+    print(f"\n{'='*60}")
+    print("=== [综合评估] IC 衰减 & 分组分析 ===")
+    print(f"{'='*60}")
+
+    # IC 衰减分析（使用最后一个窗口训练期数据）
+    eval_conf = CONFIG.get("evaluation", {})
+    if eval_conf.get("ic_decay_horizons") and len(selected_factor_names) > 0:
+        last_window = CONFIG["rolling_windows"][-1]
+        try:
+            decay_df = _compute_ic_decay(
+                global_feature_cache,
+                selected_factor_names[:min(20, len(selected_factor_names))],
+                global_feature_cache.resolved_instruments,
+                last_window["train"][0], last_window["train"][1],
+                eval_conf["ic_decay_horizons"],
+            )
+            if not decay_df.empty:
+                print(f"  IC 衰减曲线 (基于前 {min(20, len(selected_factor_names))} 个因子):")
+                for horizon, row in decay_df.iterrows():
+                    valid_vals = row.dropna()
+                    if len(valid_vals) > 0:
+                        print(f"    {horizon}: mean|IC|={np.mean(np.abs(valid_vals)):.4f} "
+                              f"(基于 {len(valid_vals)} 个因子)")
+        except Exception as e:
+            print(f"  IC 衰减分析失败: {e}")
+
+    # 行业/市值分组 IC
+    if eval_conf.get("industry_exposure_check") and len(all_predictions) > 0:
+        last_preds = all_predictions[-1]
+        if not last_preds.empty and 'score' in last_preds.columns:
+            try:
+                from qlib.data import D
+                last_window = CONFIG["rolling_windows"][-1]
+                label_frames = []
+                for i in range(0, len(global_feature_cache.resolved_instruments), 500):
+                    batch_inst = global_feature_cache.resolved_instruments[i:i+500]
+                    _df = D.features(batch_inst, [CONFIG["label_fields"][0]],
+                                     start_time=last_window["test"][0],
+                                     end_time=last_window["test"][1], freq="day")
+                    if _df is not None and not _df.empty:
+                        label_frames.append(_df)
+                if label_frames:
+                    test_label_s = pd.concat(label_frames)
+                    if isinstance(test_label_s.columns, pd.MultiIndex):
+                        test_label_s.columns = test_label_s.columns.droplevel(1)
+                    test_label_s = test_label_s[test_label_s.columns[0]].sort_index()
+
+                    ind_ics = _compute_group_ic(last_preds, test_label_s, analysis_type="industry")
+                    if ind_ics:
+                        print(f"\n  行业 IC 分布 (Top 10 |IC|):")
+                        for ind_name, ic_val in sorted(ind_ics.items(), key=lambda x: abs(x[1]), reverse=True)[:10]:
+                            print(f"    {ind_name}: IC={ic_val:.4f}")
+                    if eval_conf.get("marketcap_group_ic"):
+                        mkt_ics = _compute_group_ic(last_preds, test_label_s, analysis_type="marketcap")
+                        if mkt_ics:
+                            print(f"  市值分组 IC:")
+                            for mkt_name, ic_val in sorted(mkt_ics.items()):
+                                print(f"    {mkt_name}: IC={ic_val:.4f}")
+            except Exception as e:
+                print(f"  分组 IC 分析失败: {e}")
 
 
 if __name__ == "__main__":

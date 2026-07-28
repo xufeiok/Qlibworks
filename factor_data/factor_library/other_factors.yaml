@@ -8,4 +8,4 @@ analysis:
   pros: 作为灵活扩展区，适合定制化、另类因子的独立存放。
   cons: 无。
   optimization_direction: 遇到成熟因子后可再次归类至主要类别中。
-factors:
+factors: []

@@ -1,4 +1,4 @@
-﻿"""
+"""
 统一过滤工具模块
 
 为 Qlib 各环节提供统一的动态股票池过滤配置。
@@ -24,6 +24,7 @@
     - 过滤集中于数据加载层，不修改 warehouse 数据（计算与消费分离）
 """
 
+import functools
 import logging
 from pathlib import Path
 from typing import List, Optional, Set
@@ -93,6 +94,7 @@ def get_tradeable_filter() -> "list":
     return [ExpressionDFilter(rule_expression=r, keep=False) for r in rules]
 
 
+@functools.lru_cache(maxsize=4)
 def _load_stock_name_map(data_dir: Optional[Path] = None) -> dict:
     """加载股票名称映射表（code -> name）。
 
@@ -124,6 +126,63 @@ def _load_stock_name_map(data_dir: Optional[Path] = None) -> dict:
                 result[code] = (entry_date, exit_date)
     return result
 
+@functools.lru_cache(maxsize=1)
+def _load_st_periods(data_dir: Optional[Path] = None) -> dict:
+    """Load ST stock periods {code: [(start_date, end_date), ...]} from local cache or tushare."""
+    if data_dir is None:
+        data_dir = _resolve_data_dir()
+
+    cache_path = data_dir / "instruments" / "st_periods.csv"
+    if cache_path.exists():
+        import csv
+        result = {}
+        with open(cache_path, "r", encoding="utf-8") as f_st:
+            reader = csv.reader(f_st)
+            next(reader, None)
+            for row in reader:
+                if len(row) >= 3:
+                    code, start, end = row[0].strip(), row[1].strip(), row[2].strip()
+                    result.setdefault(code, []).append((start, end))
+        if result:
+            return result
+
+    try:
+        import tushare as ts
+        import os
+        token = os.environ.get("TUSHARE_TOKEN", "")
+        if not token:
+            token_path = Path.home() / ".tushare" / "token.conf"
+            if token_path.exists():
+                token = token_path.read_text().strip()
+        if not token:
+            return {}
+        ts.set_token(token)
+        pro = ts.pro_api()
+        df = pro.namechange(fields="ts_code,name,start_date,end_date,change_reason")
+        if df is None or df.empty:
+            return {}
+        st_mask = df["name"].str.contains("ST", na=False)
+        st_df = df[st_mask].copy()
+        if st_df.empty:
+            return {}
+        result = {}
+        for _, row in st_df.iterrows():
+            code = row["ts_code"].split(".")[0].lower()
+            start = str(row["start_date"]) if pd.notna(row["start_date"]) else "19000101"
+            end = str(row["end_date"]) if pd.notna(row["end_date"]) else "20991231"
+            result.setdefault(code, []).append((start, end))
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8", newline="") as f_st:
+            import csv
+            writer = csv.writer(f_st)
+            writer.writerow(["code", "start_date", "end_date"])
+            for code, periods in result.items():
+                for s, e in periods:
+                    writer.writerow([code, s, e])
+        return result
+    except Exception:
+        return {}
+
 
 def _filter_st_stocks(codes: List[str]) -> List[str]:
     """基于代码规则过滤 ST 股票。
@@ -153,6 +212,28 @@ def _filter_st_stocks(codes: List[str]) -> List[str]:
         valid.append(c)
     return valid
 
+
+def _filter_st_stocks_by_date(codes: List[str], date: str, data_dir: Optional[Path] = None) -> List[str]:
+    """Filter stocks that are in ST status on the given date."""
+    st_periods = _load_st_periods(data_dir)
+    if not st_periods:
+        return _filter_st_stocks(codes)
+
+    date_int = int(date.replace("-", ""))
+    result = []
+    for c in codes:
+        c_str = str(c).lower().strip().replace(".sh", "").replace(".sz", "")
+        if not c_str or len(c_str) < 6:
+            continue
+        periods = st_periods.get(c_str, [])
+        is_st = False
+        for s, e in periods:
+            if int(s) <= date_int <= int(e):
+                is_st = True
+                break
+        if not is_st:
+            result.append(c)
+    return result
 
 def _filter_new_stocks(
     codes: List[str],
@@ -271,9 +352,140 @@ def filter_codes_post(
     filtered = list(codes)
 
     if filter_st:
-        filtered = _filter_st_stocks(filtered)
+        filtered = _filter_st_stocks_by_date(filtered, date, data_dir=data_dir)
 
     if filter_new_stocks and date:
         filtered = _filter_new_stocks(filtered, date, data_dir=data_dir)
 
     return filtered
+
+
+# ==============================================================================
+# 标签可交易性过滤
+# ==============================================================================
+
+def _check_qlib_available():
+    """检查 qlib 是否可用。"""
+    if not _HAS_QLIB:
+        raise RuntimeError("qlib 未安装，无法执行标签可交易性过滤")
+
+
+def filter_untradeable_labels(label_df, instruments, start_time, end_time):
+    """剔除无法买入的标签样本（涨跌停 / 一字板）。
+
+    根据策略 T+1 开盘买入、T+5 收盘卖出的执行规则，检查 T+1 开盘时
+    是否涨跌停无法成交或出现一字板跳空，将无法执行交易的样本标签设为 NaN。
+
+    检测逻辑：
+    1. 跳空检测：T+1 开盘相对 T 收盘涨跌幅 ≥ ±9%
+    2. 一字板检测：T+1 全天 high==low（无成交/无对手盘）
+
+    参数：
+    - label_df: 标签 DataFrame，MultiIndex(datetime, instrument) 或 plain index
+    - instruments: Qlib 股票列表
+    - start_time: 起始时间 YYYY-MM-DD
+    - end_time: 结束时间 YYYY-MM-DD
+
+    返回:
+    - 清洗后的标签 DataFrame（不可交易样本标签为 NaN）
+    """
+    _check_qlib_available()
+
+    label_df_clean = label_df.copy()
+    if label_df_clean.empty:
+        return label_df_clean
+
+    label_name = label_df_clean.columns[0]
+
+    # 加载 T+1 开盘价与 T 收盘价
+    entry_gap_expr = "Ref($open, -1) / $close - 1"
+    price_df = D.features(
+        instruments, [entry_gap_expr],
+        start_time=start_time, end_time=end_time, freq="day",
+    )
+
+    if price_df is None or price_df.empty:
+        return label_df_clean
+
+    if isinstance(price_df.columns, pd.MultiIndex):
+        price_df.columns = price_df.columns.droplevel(1)
+
+    gap_col = price_df.columns[0]
+
+    # 对齐 MultiIndex
+    if isinstance(label_df_clean.index, pd.MultiIndex):
+        price_df = price_df.reindex(label_df_clean.index)
+        untradeable_mask = label_df_clean.index.isin(price_df.index)
+    else:
+        price_df = price_df.reindex(label_df_clean.index)
+        untradeable_mask = pd.Series(True, index=label_df_clean.index)
+
+    # 跳空检测：T+1 open / T close - 1 ≥ ±9%
+    gap_val = price_df[gap_col]
+    untradeable = (gap_val >= 0.09) | (gap_val <= -0.09)
+
+    # 一字板检测：T+1 全天一字板时 open≈close，gap 可能 < 9%，
+    # 但实际无成交/无对手盘，无法买入。用 Ref($high,-1)==Ref($low,-1) 取 T+1 日数据。
+    try:
+        one_liner = D.features(
+            instruments, ["Ref($high, -1) == Ref($low, -1)"],
+            start_time=start_time, end_time=end_time, freq="day",
+        )
+        if one_liner is not None and not one_liner.empty:
+            if isinstance(one_liner.columns, pd.MultiIndex):
+                one_liner.columns = one_liner.columns.droplevel(1)
+            one_liner = one_liner.reindex(price_df.index, fill_value=False)
+            untradeable = untradeable | (one_liner[one_liner.columns[0]] == True)
+    except Exception:
+        pass  # 一字板检测失败不影响主流程
+
+    # 标注不可交易
+    label_df_clean.loc[untradeable[untradeable].index, label_name] = float("nan")
+    removed = untradeable.sum()
+    if removed > 0:
+        print(f"      [标签过滤] 剔除 {removed} 个不可交易样本 "
+              f"({start_time} ~ {end_time}, 总 {len(label_df_clean)})")
+
+    return label_df_clean
+
+
+def apply_label_filter(frame: pd.DataFrame, instruments, start_time, end_time,
+                       label_names) -> pd.DataFrame:
+    """对已 prepared 的训练/验证帧应用标签可交易性过滤。
+
+    从 MultiIndex 列结构中提取标签列 → 过滤 → 写回帧。
+    涨跌停股的特征列保持不动，仅标签标 NaN。
+
+    参数：
+    - frame: Qlib DataHandlerLP.prepare() 输出的 DataFrame
+    - instruments: Qlib 股票列表
+    - start_time, end_time: 时间范围
+    - label_names: 标签列名列表，如 ["LABEL_5D"]
+
+    返回：
+    - 过滤后的 DataFrame
+    """
+    if frame.empty:
+        return frame
+
+    result = frame.copy()
+    for label_name in label_names:
+        # 兼容 MultiIndex 列和 flat 列
+        if isinstance(result.columns, pd.MultiIndex):
+            col_key = ("label", label_name)
+            if col_key not in result.columns:
+                continue
+            label_series = result[col_key]
+        else:
+            col_key = label_name
+            if col_key not in result.columns:
+                continue
+            label_series = result[col_key]
+
+        label_df = label_series.to_frame(label_name)
+        label_df_clean = filter_untradeable_labels(
+            label_df, instruments, start_time, end_time
+        )
+        result[col_key] = label_df_clean[label_name]
+
+    return result

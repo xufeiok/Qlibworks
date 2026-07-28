@@ -48,12 +48,19 @@ _USE_GPU = _detect_gpu()
 
 def _filter_finite_feature_label_frame(df: pd.DataFrame) -> pd.DataFrame:
     """
-    过滤特征/标签中的无效样本，避免 XGBoost 等模型因 NaN/inf 标签直接崩溃。
+    过滤特征/标签中的无效样本，避免 XGBoost/CatBoost 等模型因 NaN/inf 崩溃。
+
+    策略：
+    - 特征列：NaN→0，inf→大有限值（np.nan_to_num），不删行，最大程度保留训练样本
+    - 标签列：严格过滤，有 NaN/inf 则整行删除（标签无效则无法训练）
+    - 始终返回 MultiIndex 列结构（feature/label），兼容 Qlib 内部接口
     """
     if df.empty:
         return df
 
-    if isinstance(df.columns, pd.MultiIndex):
+    _input_has_multiindex = isinstance(df.columns, pd.MultiIndex)
+
+    if _input_has_multiindex:
         label_df = df["label"] if "label" in df.columns.get_level_values(0) else pd.DataFrame(index=df.index)
         feature_df = df["feature"] if "feature" in df.columns.get_level_values(0) else pd.DataFrame(index=df.index)
     else:
@@ -62,12 +69,47 @@ def _filter_finite_feature_label_frame(df: pd.DataFrame) -> pd.DataFrame:
         label_df = df[label_cols]
         feature_df = df[feature_cols]
 
-    label_mask = np.isfinite(label_df.to_numpy()).all(axis=1) if not label_df.empty else np.ones(len(df), dtype=bool)
-    feature_mask = np.isfinite(feature_df.to_numpy()).all(axis=1) if not feature_df.empty else np.ones(len(df), dtype=bool)
-    valid_mask = label_mask & feature_mask
-    if valid_mask.all():
+    # 标签：严格过滤 NaN/inf（标签无效无法训练）
+    if not label_df.empty:
+        label_arr = label_df.to_numpy()
+        label_mask = np.isfinite(label_arr).all(axis=1)
+        _nan_count = (~label_mask).sum()
+        if _nan_count == len(label_arr):
+            print(f"    [警告] _filter_finite_feature_label_frame: 所有 {len(label_arr)} 条标签均为 NaN/inf！")
+            print(f"           标签列: {label_df.columns.tolist() if hasattr(label_df.columns, 'tolist') else list(label_df.columns)}")
+            print(f"           标签样例: {label_df.iloc[:5].to_numpy().ravel()[:5] if len(label_df) > 0 else 'empty'}")
+    else:
+        label_mask = np.ones(len(df), dtype=bool)
+
+    # 特征：替换 NaN→0, inf→大有限值，不删行
+    if not feature_df.empty:
+        feat_arr = feature_df.to_numpy().astype(np.float64, copy=True)
+        feat_arr = np.nan_to_num(feat_arr, nan=0.0, posinf=1e10, neginf=-1e10)
+        feature_df = pd.DataFrame(feat_arr, index=feature_df.index, columns=feature_df.columns)
+
+    # 仅按标签有效性过滤行
+    if not label_mask.all():
+        df = df.loc[label_mask].copy()
+        if not feature_df.empty:
+            feature_df = feature_df.loc[label_mask]
+        if not label_df.empty:
+            label_df = label_df.loc[label_mask]
+
+    # 将 flat columns 统一转为 MultiIndex (feature/label)，兼容 Qlib XGBModel/CatBoost
+    if not _input_has_multiindex:
+        result_parts = {}
+        if not feature_df.empty:
+            result_parts["feature"] = feature_df
+        if not label_df.empty:
+            result_parts["label"] = label_df
+        if result_parts:
+            df = pd.concat(result_parts, axis=1)
         return df
-    return df.loc[valid_mask].copy()
+
+    # MultiIndex 输入：将处理后的特征值写回
+    if not feature_df.empty:
+        df.loc[:, "feature"] = feature_df.values
+    return df
 
 
 def prepare_split_frames(dataset) -> Dict[str, pd.DataFrame]:
@@ -104,6 +146,7 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
     - 训练完成的 Qlib 模型对象。
     """
     from qlib.contrib.model.gbdt import LGBModel
+    from qlib.data.dataset.handler import DataHandlerLP
 
     base_params = {
         "loss": "mse",
@@ -123,16 +166,36 @@ def train_lgb_model(dataset, params: Dict[str, object] = None):
     if params:
         base_params.update({k: v for k, v in params.items() if k not in fit_params})
         fit_params.update({k: v for k, v in params.items() if k in fit_params})
+
+    # [调试] 在 LGB 训练前检查标签
+    try:
+        _df_train_dbg, _df_valid_dbg = dataset.prepare(
+            ["train", "valid"], col_set=["feature", "label"], data_key=DataHandlerLP.DK_L
+        )
+        _yv = _df_train_dbg["label"].values.ravel()
+        _vyv = _df_valid_dbg["label"].values.ravel()
+        print(f"    [LGB] 训练标签: valid={len(_yv[~np.isnan(_yv)])}/{len(_yv)}, "
+              f"mean={np.nanmean(_yv):.6f}, std={np.nanstd(_yv):.6f}")
+        print(f"    [LGB] 验证标签: valid={len(_vyv[~np.isnan(_vyv)])}/{len(_vyv)}, "
+              f"mean={np.nanmean(_vyv):.6f}, std={np.nanstd(_vyv):.6f}")
+    except Exception as _e:
+        print(f"    [LGB] 标签检查跳过: {_e}")
+
     model = LGBModel(**base_params)
     model.fit(dataset, **fit_params)
     return model
 
 
-def train_xgb_model(dataset, params: Dict[str, object] = None):
+def train_xgb_model(dataset, params: Dict[str, object] = None,
+                    train_df: pd.DataFrame = None, valid_df: pd.DataFrame = None):
     """
     功能概述：
     - 使用 Qlib 的 `XGBModel` 训练。XGBoost 对噪声的容忍度较高，与 LGBM 是经典的集成搭档。
     - GPU 自动检测：有 GPU 时使用 CUDA 加速，否则回退 CPU。
+    输入：
+    - dataset: Qlib 数据集对象（用于兼容 Qlib 内部接口）
+    - train_df/valid_df: 预准备好的训练/验证 DataFrame（若提供则跳过 dataset.prepare()，
+      避免重复触发 processor 流水线导致数据损坏）
     """
     from qlib.contrib.model.xgboost import XGBModel
     from qlib.data.dataset.handler import DataHandlerLP
@@ -160,19 +223,39 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
             params["num_boost_round"] = params.pop("n_estimators")
         base_params.update({k: v for k, v in params.items() if k not in fit_params})
         fit_params.update({k: v for k, v in params.items() if k in fit_params})
-    cached_results = {}
-    for segment in ("train", "valid"):
-        try:
-            frame = dataset.prepare(segment, col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
-        except Exception:
-            continue
-        cleaned = _filter_finite_feature_label_frame(frame)
-        dropped = len(frame) - len(cleaned)
-        if dropped > 0:
-            print(f"    [XGB 清洗] {segment}: 删除 {dropped} 条含 NaN/inf 的样本")
-        cached_results[(segment, ("feature", "label"), DataHandlerLP.DK_L)] = cleaned
-        if "feature" in cleaned.columns.get_level_values(0):
-            cached_results[(segment, "feature", DataHandlerLP.DK_L)] = cleaned["feature"]
+
+    # 优先使用预准备数据，避免重复触发 processor 流水线
+    if train_df is not None and valid_df is not None:
+        cleaned_train = _filter_finite_feature_label_frame(train_df)
+        cleaned_valid = _filter_finite_feature_label_frame(valid_df)
+        dropped_train = len(train_df) - len(cleaned_train)
+        dropped_valid = len(valid_df) - len(cleaned_valid)
+        if dropped_train > 0:
+            print(f"    [XGB 清洗] train: 删除 {dropped_train} 条含 NaN/inf 的样本")
+        if dropped_valid > 0:
+            print(f"    [XGB 清洗] valid: 删除 {dropped_valid} 条含 NaN/inf 的样本")
+        cached_results = {
+            ("train", ("feature", "label"), DataHandlerLP.DK_L): cleaned_train,
+            ("valid", ("feature", "label"), DataHandlerLP.DK_L): cleaned_valid,
+        }
+        if "feature" in cleaned_train.columns.get_level_values(0):
+            cached_results[("train", "feature", DataHandlerLP.DK_L)] = cleaned_train["feature"]
+        if "feature" in cleaned_valid.columns.get_level_values(0):
+            cached_results[("valid", "feature", DataHandlerLP.DK_L)] = cleaned_valid["feature"]
+    else:
+        cached_results = {}
+        for segment in ("train", "valid"):
+            try:
+                frame = dataset.prepare(segment, col_set=["feature", "label"], data_key=DataHandlerLP.DK_L)
+            except Exception:
+                continue
+            cleaned = _filter_finite_feature_label_frame(frame)
+            dropped = len(frame) - len(cleaned)
+            if dropped > 0:
+                print(f"    [XGB 清洗] {segment}: 删除 {dropped} 条含 NaN/inf 的样本")
+            cached_results[(segment, ("feature", "label"), DataHandlerLP.DK_L)] = cleaned
+            if "feature" in cleaned.columns.get_level_values(0):
+                cached_results[(segment, "feature", DataHandlerLP.DK_L)] = cleaned["feature"]
 
     wrapped_dataset = PreparedDatasetView(dataset, cached_prepare_results=cached_results)
     model = XGBModel(**base_params)
@@ -180,11 +263,16 @@ def train_xgb_model(dataset, params: Dict[str, object] = None):
     return model
 
 
-def train_catboost_model(dataset, params: Dict[str, object] = None):
+def train_catboost_model(dataset, params: Dict[str, object] = None,
+                         train_df: pd.DataFrame = None, valid_df: pd.DataFrame = None):
     """
     功能概述：
-    - 使用 Qlib 的 `CatBoostModel` 训练。CatBoost 能更好地处理类别特征，且在金融数据上通常抗过拟合能力较强。
+    - 使用 CatBoost 训练。CatBoost 能更好地处理类别特征，且在金融数据上通常抗过拟合能力较强。
     - GPU 自动检测：有 GPU 时使用 GPU 训练，否则回退 CPU。
+    输入：
+    - dataset: Qlib 数据集对象（用于兼容 Qlib 内部接口）
+    - train_df/valid_df: 预准备好的训练/验证 DataFrame（若提供则跳过 dataset.prepare()，
+      避免重复触发 processor 流水线导致数据损坏）
     """
     from catboost import CatBoostRegressor, Pool
     from qlib.data.dataset.handler import DataHandlerLP
@@ -193,6 +281,11 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
         "loss_function": "RMSE",
         "learning_rate": 0.1,
         "depth": 6,
+        "bootstrap_type": "Bernoulli",
+        "subsample": 0.8,
+        "random_seed": 42,
+        "verbose": 20,
+        "allow_writing_files": False,
         "thread_count": 4,
     }
     fit_params = {
@@ -211,13 +304,19 @@ def train_catboost_model(dataset, params: Dict[str, object] = None):
     if task_type not in {"CPU", "GPU"}:
         raise ValueError(f"CatBoost task_type 仅支持 CPU/GPU，当前为: {task_type}")
 
-    df_train, df_valid = dataset.prepare(
-        ["train", "valid"],
-        col_set=["feature", "label"],
-        data_key=DataHandlerLP.DK_L,
-    )
-    df_train = _filter_finite_feature_label_frame(df_train)
-    df_valid = _filter_finite_feature_label_frame(df_valid)
+    # 优先使用预准备数据，避免重复触发 processor 流水线
+    if train_df is not None and valid_df is not None:
+        df_train = _filter_finite_feature_label_frame(train_df)
+        df_valid = _filter_finite_feature_label_frame(valid_df)
+    else:
+        df_train, df_valid = dataset.prepare(
+            ["train", "valid"],
+            col_set=["feature", "label"],
+            data_key=DataHandlerLP.DK_L,
+        )
+        df_train = _filter_finite_feature_label_frame(df_train)
+        df_valid = _filter_finite_feature_label_frame(df_valid)
+
     if df_train.empty or df_valid.empty:
         raise ValueError("Empty data from dataset, please check your dataset config.")
 
@@ -308,6 +407,9 @@ def compute_ic(predicted: pd.Series, actual: pd.Series) -> float:
     from scipy.stats import spearmanr
     combined = pd.DataFrame({"pred": predicted, "actual": actual}).dropna()
     if len(combined) < 10:
+        return 0.0
+    # 常数数组 spearmanr 无定义，静默返回 0.0（避免 ConstantInputWarning 噪音）
+    if combined["pred"].nunique() == 1 or combined["actual"].nunique() == 1:
         return 0.0
     return float(spearmanr(combined["pred"], combined["actual"])[0])
 

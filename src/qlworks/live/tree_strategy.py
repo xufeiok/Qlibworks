@@ -28,7 +28,7 @@ LIVE_STRATEGY_PROFILES: dict[str, dict] = {
         "stop_type": "ATR",
         "stop_loss_pct": 0.05,
         "atr_period": 14,
-        "atr_multiplier": 2.0,
+        "atr_multiplier": 3.0,
         "trailing_stop": True,
         "score_drop_threshold": 0.3,
         "industry_neutral": True,

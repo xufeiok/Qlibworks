@@ -32,8 +32,8 @@ STRATEGY_CLASS = EnhancedQlibStrategy     # 回测策略类（内置风控+选�
 
 # — 过滤开关 —
 SKIP_ST_FILTER = False                    # True=跳过 ST 过滤（默认开启）
-ADMISSION_BUFFER = 3                      # 准入预过滤缓冲系数：每天保留 top_k × buffer 只候选股
-                                          # 例: top_k=10, buffer=3 → 每天保留 30 只
+ADMISSION_BUFFER = 5                      # 准入预过滤缓冲系数：每天保留 top_k × buffer 只候选股
+                                          # 优化: 3→5，行业约束后从 ~20→~35 只，给策略真正选择空间
 
 # ==============================================================================
 

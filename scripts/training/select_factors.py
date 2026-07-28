@@ -5,7 +5,7 @@
 [AQR/Citadel/Renaissance 改进]
   - 滚动窗口因子筛选，消除前瞻偏差
   - 与 train_from_selected.py 统一的股票池、动态过滤、ST/次新过滤
-  - 截面排名标准化 (CSRankNorm)，与训练阶段数据处理一致
+  - 截面排名标准化 (CSQuantileNorm)，与训练阶段数据处理一致
 
 用法：
   修改文件顶部 CONFIG 字典中的参数，然后直接运行：
@@ -45,6 +45,7 @@ from qlworks.features.builder import FeatureBundle
 from qlworks.features.dataset import build_custom_feature_cache
 from qlworks.factors.filter_utils import filter_codes_post
 from qlworks.models import cached_select_features
+from qlworks.processors.quantile_norm import CSQuantileNorm
 from qlworks.config import QLIB_DATA_DIR
 import qlib
 from qlib.data import D
@@ -70,7 +71,7 @@ ACTIVE_FACTOR_FILES = [
 # ==============================================================================
 CONFIG = {
     # 因子文件列表（从 ACTIVE_FACTOR_FILES 派生，排除 price_volume_factors）
-    "factor_files": [f for f in ACTIVE_FACTOR_FILES if f != "price_volume_factors"],
+    "factor_files": [f for f in ACTIVE_FACTOR_FILES ],
 
     # 特征选择参数
     "top_k": 2,
@@ -214,8 +215,11 @@ def _vectorized_daily_ic(train_frame: pd.DataFrame, factor_cols: List[str], labe
 
 def _apply_cs_rank_norm(df: pd.DataFrame) -> pd.DataFrame:
     """
-    截面排名标准化 (CSRankNorm)：对每个交易日截面，特征值转为 [0,1] 分位数，
-    缺失值填充为 0.5（中位数）。等价于树模型场景下的 CSQuantileNorm。
+    截面排名标准化 (CSQuantileNorm)：对每个交易日截面，特征值转为 [0,1] 分位数，
+    缺失值填充为 0.5（中位数）。
+
+    基于 qlworks.processors.quantile_norm.CSQuantileNorm 实现，支持大截面
+    分块处理 (CS_QUANTILE_DATE_CHUNK_SIZE=256)，降低峰值内存。
 
     输入:
     - df: MultiIndex (datetime, instrument) × 因子列
@@ -223,7 +227,7 @@ def _apply_cs_rank_norm(df: pd.DataFrame) -> pd.DataFrame:
     输出:
     - 标准化后的 DataFrame，同 shape
     """
-    result = df.groupby(level="datetime").rank(pct=True, na_option="keep")
+    result = CSQuantileNorm().transform(df)
     result = result.fillna(0.5)
     return result
 
@@ -501,18 +505,22 @@ def _prepare_window_data(
 
     返回: (x_train, y_train)
     """
-    # 1. 从缓存切片特征数据
-    warehouse_df = global_feature_cache.warehouse_df.copy()
-    warehouse_df.columns = warehouse_df.columns.droplevel(0)
-    if isinstance(warehouse_df.index, pd.MultiIndex):
-        warehouse_df.index = warehouse_df.index.set_levels(
-            warehouse_df.index.levels[1].str.lower(), level=1
-        )
-
-    # 时间切片
-    start_ts = pd.Timestamp(train_start)
-    end_ts = pd.Timestamp(train_end)
-    warehouse_df = warehouse_df.loc[start_ts:end_ts]
+    # 1. 从缓存切片特征数据（按需惰性合并）
+    warehouse_df = global_feature_cache.get_warehouse_df(
+        selected_names=all_factor_names,
+        start_time=train_start,
+        end_time=train_end,
+    )
+    if warehouse_df.empty:
+        return pd.DataFrame(), pd.Series(dtype="float64")
+    # 合并后 warehouse_df 列有 MultiIndex ("feature", factor_name)，降为单层
+    if isinstance(warehouse_df.columns, pd.MultiIndex):
+        warehouse_df.columns = warehouse_df.columns.droplevel(0)
+    # get_warehouse_df 返回的索引是 ["instrument", "datetime"] 顺序，
+    # 调整为 ["datetime", "instrument"] 以匹配后续 join 的 label 数据
+    if isinstance(warehouse_df.index, pd.MultiIndex) and warehouse_df.index.names == ["instrument", "datetime"]:
+        warehouse_df = warehouse_df.swaplevel().sort_index()
+        warehouse_df.index.names = ["datetime", "instrument"]
 
     # 2. 获取标签数据
     label_raw = D.features(
@@ -531,7 +539,6 @@ def _prepare_window_data(
 
     # 3. 合并特征与标签
     full_train_frame = warehouse_df.join(label_flat, how='inner')
-    before = len(full_train_frame)
     full_train_frame = full_train_frame.dropna(subset=[label_name])
 
     # 4. 后置过滤：ST / 次新股
@@ -638,6 +645,10 @@ def main():
             )
         except ValueError as e:
             print(f"    [跳过] 窗口数据准备失败: {e}")
+            continue
+
+        if x_train.empty or y_train.empty:
+            print(f"    [跳过] 窗口数据为空（无有效样本）")
             continue
 
         print(f"    >>> 准备就绪: {x_train.shape[0]} 行, {x_train.shape[1]} 个特征")

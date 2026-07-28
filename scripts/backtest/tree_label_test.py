@@ -21,7 +21,7 @@ from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD
 MODEL_NAME = "linear_label"                 # 模型名（用于日志和输出目录）
 MODEL_LABEL = "线性模型-T+1标签一致性验证"     # 中文标签
 
-SCORE_FILE = "score_tree_selected.csv"             # 训练脚本输出的预测文件名
+SCORE_FILE = "score_tree.csv"             # 训练脚本输出的预测文件名
 
 # — 回测引擎参数 —
 INITIAL_CASH = 1000000.0                  # 初始资金
@@ -324,9 +324,9 @@ def _load_forward_adjusted_prices(api, instruments, start_date, end_date):
 
 def main():
     parser = argparse.ArgumentParser(description="标签一致性回测")
-    parser.add_argument("--universe", type=str, default="csi500",
+    parser.add_argument("--universe", type=str, default="main_board",
                         choices=["csi500", "main_board", "none"],
-                        help="回测股票池: csi500=中证500成分股(默认), main_board=沪深主板, none=不过滤")
+                        help="回测股票池: csi500=中证500成分股, main_board=沪深主板(默认), none=不过滤")
     parser.add_argument("--no-st-filter", action="store_true",
                         help="跳过 ST 股票过滤（默认开启过滤）")
     args = parser.parse_args()
