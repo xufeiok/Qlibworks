@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$CMD\" | grep -qE '^npm (install|add|remove)'; then echo '⚠ 禁止擅自新增第三方依赖，如需引入必须先向用户说明理由并获得确认。'; fi",
+            "description": "检查第三方依赖变更"
+          },
+          {
+            "type": "command",
+            "command": "if echo \"$CMD\" | grep -qE '^git push'; then echo '⚠ 推送前请确认没有硬编码密钥/凭证。'; fi",
+            "description": "推送前检查密钥"
+          }
+        ]
+      }
+    ]
+  },
+  "env": {},
+  "custom": {
+    "language": "zh-cn",
+    "workflow": "6A",
+    "principles": [
+      "先思考再编码",
+      "简单优先",
+      "精确改动",
+      "目标驱动"
+    ]
+  }
+}

@@ -1,0 +1,81 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# 调试与临时脚本
+_debug*.py
+_debug*.log
+_diag*.py
+_test_*.py
+_check_*.py
+_verify_*.py
+_find_*.py
+_clear_*.py
+_run_bt.py
+_run_*.py
+_sp2.py
+_subprocess_runner.py
+_temp_*.py
+
+# 运行日志
+*.log
+err.log
+_bt_*.txt
+_bt_*.log
+_train_*.txt
+_tree_*.txt
+debug_output.json
+
+# 训练中间输出
+batch_factor_ic.csv
+batch_selected_factors.csv
+train_tree_batch_*.csv
+train_tree_daily_ic_series_*.csv
+
+# 模型训练缓存
+catboost_info/
+mlruns/
+
+# 临时输出目录
+backtrader_superplot/
+
+
+# 非核心目录
+Myfreqtrade/
+PineScript_study/
+Qlibworks_draft/
+Quant_Tushare/
+RealtimeTrader/
+TradingAgents-CN/
+articles/
+local-mcp-server/
+my_tool/
+xf_draft/
+量化学习/
+
+# 杂项脚本
+generate_chart.py
+generate_qlib_instruments.py
+loader.py
+preview_plotly.py
+run_chart_generation.bat
+run_training_launcher.py
+run_xaut_okx.py
+temp_scan_sw.py
+
+# 部署指南（非代码）
+DEPLOY_GUIDE.md
+
+# GitHub
+.github/instructions/codacy.instructions.md
