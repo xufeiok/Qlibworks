@@ -1,0 +1,1733 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "description": "多因子准入候选池 — 由 evaluate() 和 admit_to_multifactor.py 共同维护",
+    "updated_at": "2026-07-05 20:41:15.835065",
+    "admit_thresholds": {
+      "max_correlation_existing": 0.7,
+      "min_oos_icir": 0.5,
+      "min_recent_3y_ic_positive_ratio": 0.6,
+      "direction_consistency_required": true
+    }
+  },
+  "factors": [
+    {
+      "name": "EXTREME_REV",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 14.1514,
+      "admitted_at": "2026-07-05 20:31:59.031497",
+      "_metrics": {
+        "ic_mean": 0.039207,
+        "ic_positive_ratio": 0.8193,
+        "ir": 14.1514,
+        "ic_std": 0.043981,
+        "sharpe": 0.5225,
+        "monotonicity": 0.0598,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0440 > 0.03",
+              "夏普 0.52 < 1.25",
+              "单调性 0.06 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "STR_20d",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 7.7055,
+      "admitted_at": "2026-07-05 20:29:00.650644",
+      "_metrics": {
+        "ic_mean": 0.066485,
+        "ic_positive_ratio": 0.7059,
+        "ir": 7.7055,
+        "ic_std": 0.136969,
+        "sharpe": 0.2642,
+        "monotonicity": 0.0794,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1370 > 0.03",
+              "夏普 0.26 < 1.25",
+              "单调性 0.08 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "STR_5d",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 5.8945,
+      "admitted_at": "2026-07-05 20:29:54.414366",
+      "_metrics": {
+        "ic_mean": 0.041048,
+        "ic_positive_ratio": 0.6387,
+        "ir": 5.8945,
+        "ic_std": 0.110546,
+        "sharpe": -0.3499,
+        "monotonicity": 0.0448,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1105 > 0.03",
+              "夏普 -0.35 < 1.25",
+              "单调性 0.04 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "illiquidity_amihud",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 4.4196,
+      "admitted_at": "2026-07-05 20:41:01.216998",
+      "_metrics": {
+        "ic_mean": 0.040858,
+        "ic_positive_ratio": 0.6008,
+        "ir": 4.4196,
+        "ic_std": 0.146753,
+        "sharpe": 0.2712,
+        "monotonicity": 0.0887,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1468 > 0.03",
+              "夏普 0.27 < 1.25",
+              "单调性 0.09 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "LTR_12m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 3.6134,
+      "admitted_at": "2026-07-05 20:30:34.435013",
+      "_metrics": {
+        "ic_mean": 0.029738,
+        "ic_positive_ratio": 0.6092,
+        "ir": 3.6134,
+        "ic_std": 0.130645,
+        "sharpe": -1.3423,
+        "monotonicity": 0.0299,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0297 < 0.03"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1306 > 0.03",
+              "夏普 -1.34 < 1.25",
+              "单调性 0.03 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "VOL_REV",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 2.3156,
+      "admitted_at": "2026-07-05 20:31:26.242496",
+      "_metrics": {
+        "ic_mean": 0.029336,
+        "ic_positive_ratio": 0.5924,
+        "ir": 2.3156,
+        "ic_std": 0.201109,
+        "sharpe": -1.8586,
+        "monotonicity": -0.1018,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0293 < 0.03"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.2011 > 0.03",
+              "夏普 -1.86 < 1.25",
+              "单调性 -0.10 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "tr_yoy",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 2.302,
+      "admitted_at": "2026-07-05 20:25:26.049464",
+      "_metrics": {
+        "ic_mean": 0.013568,
+        "ic_positive_ratio": 0.5961,
+        "ir": 2.302,
+        "ic_std": 0.093567,
+        "sharpe": -2.2169,
+        "monotonicity": 0.0203,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0136 < 0.03"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0936 > 0.03",
+              "夏普 -2.22 < 1.25",
+              "单调性 0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "beta",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 2.0044,
+      "admitted_at": "2026-07-05 20:37:07.435025",
+      "_metrics": {
+        "ic_mean": 0.026792,
+        "ic_positive_ratio": 0.542,
+        "ir": 2.0044,
+        "ic_std": 0.21219,
+        "sharpe": 0.4505,
+        "monotonicity": 0.1055,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0268 < 0.03",
+              "IC 胜率 54.2% < 55%"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.2122 > 0.03",
+              "夏普 0.45 < 1.25",
+              "单调性 0.11 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "inv_turn",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 1.2117,
+      "admitted_at": "2026-07-05 20:27:37.795655",
+      "_metrics": {
+        "ic_mean": 0.007054,
+        "ic_positive_ratio": 0.4828,
+        "ir": 1.2117,
+        "ic_std": 0.092414,
+        "sharpe": -1.3865,
+        "monotonicity": -0.0137,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0071 < 0.03",
+              "IC 胜率 48.3% < 55%"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0924 > 0.03",
+              "夏普 -1.39 < 1.25",
+              "单调性 -0.01 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "MOM_ACCEL",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.5623,
+      "admitted_at": "2026-07-05 20:35:34.590597",
+      "_metrics": {
+        "ic_mean": 0.004697,
+        "ic_positive_ratio": 0.5336,
+        "ir": 0.5623,
+        "ic_std": 0.132597,
+        "sharpe": -1.8092,
+        "monotonicity": -0.0411,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0047 < 0.03",
+              "IC 胜率 53.4% < 55%"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1326 > 0.03",
+              "夏普 -1.81 < 1.25",
+              "单调性 -0.04 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "roe_ttm",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.1217,
+      "admitted_at": "2026-07-05 20:23:01.044205",
+      "_metrics": {
+        "ic_mean": 0.001016,
+        "ic_positive_ratio": 0.5369,
+        "ir": 0.1217,
+        "ic_std": 0.132552,
+        "sharpe": -2.8217,
+        "monotonicity": -0.0597,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0010 < 0.03",
+              "IC 胜率 53.7% < 55%",
+              "IR 0.12 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1326 > 0.03",
+              "夏普 -2.82 < 1.25",
+              "单调性 -0.06 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "roa_ttm",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0229,
+      "admitted_at": "2026-07-05 20:23:30.050080",
+      "_metrics": {
+        "ic_mean": 0.000167,
+        "ic_positive_ratio": 0.532,
+        "ir": 0.0229,
+        "ic_std": 0.115749,
+        "sharpe": -3.2395,
+        "monotonicity": -0.0181,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0002 < 0.03",
+              "IC 胜率 53.2% < 55%",
+              "IR 0.02 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1157 > 0.03",
+              "夏普 -3.24 < 1.25",
+              "单调性 -0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "circ_mv",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:39:56.158075",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "shareholder_change",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:37:20.884403",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "pe_ttm",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:38:18.655294",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "pb_lf",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:38:34.086154",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "ps_ttm",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:39:01.899356",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "dv_ttm",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:39:17.112302",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "turnover_rate_1m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:40:10.556751",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "total_mv_log",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": 0.0,
+      "admitted_at": "2026-07-05 20:41:15.835065",
+      "_metrics": {
+        "ic_mean": 0.0,
+        "ic_positive_ratio": 0.5,
+        "ir": 0.0,
+        "ic_std": 0.0,
+        "sharpe": 0.0,
+        "monotonicity": 0.0,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0000 < 0.03",
+              "IC 胜率 50.0% < 55%",
+              "IR 0.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "夏普 0.00 < 1.25",
+              "单调性 0.00 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "netprofit_margin",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.0912,
+      "admitted_at": "2026-07-05 20:24:28.059237",
+      "_metrics": {
+        "ic_mean": 0.000771,
+        "ic_positive_ratio": 0.5419,
+        "ir": -0.0912,
+        "ic_std": 0.134189,
+        "sharpe": -3.3429,
+        "monotonicity": -0.0597,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0008 < 0.03",
+              "IC 胜率 54.2% < 55%",
+              "IR -0.09 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1342 > 0.03",
+              "夏普 -3.34 < 1.25",
+              "单调性 -0.06 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "grossprofit_margin",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.1282,
+      "admitted_at": "2026-07-05 20:23:59.204647",
+      "_metrics": {
+        "ic_mean": 0.00065,
+        "ic_positive_ratio": 0.4729,
+        "ir": -0.1282,
+        "ic_std": 0.080483,
+        "sharpe": -2.7033,
+        "monotonicity": -0.0224,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0006 < 0.03",
+              "IC 胜率 47.3% < 55%",
+              "IR -0.13 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0805 > 0.03",
+              "夏普 -2.70 < 1.25",
+              "单调性 -0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "basic_eps_yoy",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.2572,
+      "admitted_at": "2026-07-05 20:25:54.680485",
+      "_metrics": {
+        "ic_mean": 0.001346,
+        "ic_positive_ratio": 0.5468,
+        "ir": -0.2572,
+        "ic_std": 0.083077,
+        "sharpe": -2.6801,
+        "monotonicity": 0.0279,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0013 < 0.03",
+              "IC 胜率 54.7% < 55%",
+              "IR -0.26 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0831 > 0.03",
+              "夏普 -2.68 < 1.25",
+              "单调性 0.03 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "netprofit_yoy",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.315,
+      "admitted_at": "2026-07-05 20:24:57.073602",
+      "_metrics": {
+        "ic_mean": 0.001687,
+        "ic_positive_ratio": 0.5567,
+        "ir": -0.315,
+        "ic_std": 0.085022,
+        "sharpe": -2.5738,
+        "monotonicity": 0.0246,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0017 < 0.03",
+              "IR -0.32 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0850 > 0.03",
+              "夏普 -2.57 < 1.25",
+              "单调性 0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "pledge_ratio",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.4478,
+      "admitted_at": "2026-07-05 20:38:02.113695",
+      "_metrics": {
+        "ic_mean": 0.001287,
+        "ic_positive_ratio": 0.4286,
+        "ir": -0.4478,
+        "ic_std": 0.045628,
+        "sharpe": -1.903,
+        "monotonicity": 0.0279,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0013 < 0.03",
+              "IC 胜率 42.9% < 55%",
+              "IR -0.45 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0456 > 0.03",
+              "夏普 -1.90 < 1.25",
+              "单调性 0.03 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "current_ratio",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -0.5003,
+      "admitted_at": "2026-07-05 20:27:07.975554",
+      "_metrics": {
+        "ic_mean": 0.002382,
+        "ic_positive_ratio": 0.5123,
+        "ir": -0.5003,
+        "ic_std": 0.075577,
+        "sharpe": -2.4787,
+        "monotonicity": -0.0082,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0024 < 0.03",
+              "IC 胜率 51.2% < 55%",
+              "IR -0.50 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0756 > 0.03",
+              "夏普 -2.48 < 1.25",
+              "单调性 -0.01 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "debt_to_assets",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -1.0016,
+      "admitted_at": "2026-07-05 20:26:38.550582",
+      "_metrics": {
+        "ic_mean": 0.003853,
+        "ic_positive_ratio": 0.4729,
+        "ir": -1.0016,
+        "ic_std": 0.061073,
+        "sharpe": -2.3674,
+        "monotonicity": 0.017,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0039 < 0.03",
+              "IC 胜率 47.3% < 55%",
+              "IR -1.00 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0611 > 0.03",
+              "夏普 -2.37 < 1.25",
+              "单调性 0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "ocf_to_netprofit",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -2.5459,
+      "admitted_at": "2026-07-05 20:28:20.085355",
+      "_metrics": {
+        "ic_mean": 0.009076,
+        "ic_positive_ratio": 0.4877,
+        "ir": -2.5459,
+        "ic_std": 0.056592,
+        "sharpe": -3.9889,
+        "monotonicity": -0.0246,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 均值 0.0091 < 0.03",
+              "IC 胜率 48.8% < 55%",
+              "IR -2.55 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0566 > 0.03",
+              "夏普 -3.99 < 1.25",
+              "单调性 -0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "MOM_skip1m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -4.1979,
+      "admitted_at": "2026-07-05 20:34:08.848698",
+      "_metrics": {
+        "ic_mean": 0.034313,
+        "ic_positive_ratio": 0.3739,
+        "ir": -4.1979,
+        "ic_std": 0.129755,
+        "sharpe": -1.6288,
+        "monotonicity": 0.0458,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 胜率 37.4% < 55%",
+              "IR -4.20 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1298 > 0.03",
+              "夏普 -1.63 < 1.25",
+              "单调性 0.05 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "volatility_1m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -4.7837,
+      "admitted_at": "2026-07-05 20:36:14.325306",
+      "_metrics": {
+        "ic_mean": 0.051298,
+        "ic_positive_ratio": 0.3729,
+        "ir": -4.7837,
+        "ic_std": 0.17023,
+        "sharpe": -1.4019,
+        "monotonicity": 0.0386,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 胜率 37.3% < 55%",
+              "IR -4.78 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1702 > 0.03",
+              "夏普 -1.40 < 1.25",
+              "单调性 0.04 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "MOM_6m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -5.5591,
+      "admitted_at": "2026-07-05 20:32:32.861939",
+      "_metrics": {
+        "ic_mean": 0.048007,
+        "ic_positive_ratio": 0.3445,
+        "ir": -5.5591,
+        "ic_std": 0.137088,
+        "sharpe": -2.1768,
+        "monotonicity": 0.028,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 胜率 34.4% < 55%",
+              "IR -5.56 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1371 > 0.03",
+              "夏普 -2.18 < 1.25",
+              "单调性 0.03 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "MOM_12m",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -5.8465,
+      "admitted_at": "2026-07-05 20:33:20.389146",
+      "_metrics": {
+        "ic_mean": 0.04621,
+        "ic_positive_ratio": 0.3571,
+        "ir": -5.8465,
+        "ic_std": 0.125469,
+        "sharpe": -2.0819,
+        "monotonicity": 0.0056,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 胜率 35.7% < 55%",
+              "IR -5.85 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.1255 > 0.03",
+              "夏普 -2.08 < 1.25",
+              "单调性 0.01 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    },
+    {
+      "name": "IND_NEUT_MOM",
+      "tier": "core",
+      "category": "",
+      "sub_category": "",
+      "meaning": "",
+      "source_file": "",
+      "latest_icir": -6.8831,
+      "admitted_at": "2026-07-05 20:34:48.573025",
+      "_metrics": {
+        "ic_mean": 0.038556,
+        "ic_positive_ratio": 0.3361,
+        "ir": -6.8831,
+        "ic_std": 0.088921,
+        "sharpe": -2.8041,
+        "monotonicity": 0.0196,
+        "missing_rate": 0.0,
+        "n_years": 5.0,
+        "valid_pct": 1.0
+      },
+      "_screening": {
+        "passed": false,
+        "stage_results": [
+          {
+            "stage": 1,
+            "name": "数据质量",
+            "passed": true,
+            "reasons": []
+          },
+          {
+            "stage": 2,
+            "name": "预测能力",
+            "passed": false,
+            "reasons": [
+              "IC 胜率 33.6% < 55%",
+              "IR -6.88 < 0.5"
+            ]
+          },
+          {
+            "stage": 3,
+            "name": "稳定性",
+            "passed": false,
+            "reasons": [
+              "IC 标准差 0.0889 > 0.03",
+              "夏普 -2.80 < 1.25",
+              "单调性 0.02 < 0.8"
+            ]
+          }
+        ],
+        "composite_score": 100.0
+      }
+    }
+  ],
+  "rejected": [],
+  "stats": {
+    "total_candidates": 0,
+    "admitted": 33,
+    "rejected_corr": 0,
+    "rejected_marginal": 0,
+    "rejected_direction": 0
+  }
+}

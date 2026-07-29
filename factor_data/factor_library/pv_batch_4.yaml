@@ -1,0 +1,828 @@
+name: pv_batch_4
+version: '2.0'
+strategy_type: 价量因子批次4 (共5批)
+description: price_volume_factors 拆分第4批，共41个因子
+factors:
+- name: SUMD30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($close-Ref($close, 1), 0), 30)-Sum(Greater(Ref($close, 1)-$close,
+      0), 30))/(Sum(Abs($close-Ref($close, 1)), 30)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    多空收益差占比 (Sum Difference)：过去30天中多头与空头收益绝对量之和的差值占比。反映区间内多空绝对力量的净差。
+
+
+    【运行原理】
+
+    涨跌拆解：在N天窗口内，计算每一天的价格变化绝对值，并区分出上涨日的变化量总和与下跌日的变化量总和；
+
+    多空轧差：将上涨总和减去下跌总和，得到多空双方博弈后的“净动能”；
+
+    基准归一化：将净动能除以这N天内所有价格变化绝对值的总和；
+
+    净势能输出：结果在-1到1之间，类似于 RSI 的变体，正值代表多头主导的上涨趋势，负值代表空头主导的下跌趋势。'
+  usage_scenario: 微观动量与买卖意愿度量（类似 RSI 的逻辑），刻画过去30天的绝对多空力量对比。
+  strategy_hint: 相比于简单的区间收益率，这类因子揭示了上涨/下跌的过程（是缓慢爬升还是单日暴涨）。SUMD 越高说明多头推升力量越强且越稳定。
+- name: SUMD60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($close-Ref($close, 1), 0), 60)-Sum(Greater(Ref($close, 1)-$close,
+      0), 60))/(Sum(Abs($close-Ref($close, 1)), 60)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    多空收益差占比 (Sum Difference)：过去60天中多头与空头收益绝对量之和的差值占比。反映区间内多空绝对力量的净差。
+
+
+    【运行原理】
+
+    涨跌拆解：在N天窗口内，计算每一天的价格变化绝对值，并区分出上涨日的变化量总和与下跌日的变化量总和；
+
+    多空轧差：将上涨总和减去下跌总和，得到多空双方博弈后的“净动能”；
+
+    基准归一化：将净动能除以这N天内所有价格变化绝对值的总和；
+
+    净势能输出：结果在-1到1之间，类似于 RSI 的变体，正值代表多头主导的上涨趋势，负值代表空头主导的下跌趋势。'
+  usage_scenario: 微观动量与买卖意愿度量（类似 RSI 的逻辑），刻画过去60天的绝对多空力量对比。
+  strategy_hint: 相比于简单的区间收益率，这类因子揭示了上涨/下跌的过程（是缓慢爬升还是单日暴涨）。SUMD 越高说明多头推升力量越强且越稳定。
+- name: VMA5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Mean($volume, 5)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量移动平均 (Volume MA)：过去5天的成交量移动平均相对当前成交量的比值。反映成交量的近期均值回归状态。
+
+
+    【运行原理】
+
+    成交量聚合：在设定的N天时间窗口内，收集每一天的成交量(volume)；
+
+    均量计算：对窗口内的所有成交量求简单算术平均数(Mean)，得到该周期的平均换手水平；
+
+    放缩量换算：将计算出的移动平均成交量除以当前的最新成交量（分母加极小值防报错）；
+
+    量能异动评估：结果若远小于1，说明当日剧烈放量；若大于1，说明当日缩量。用于判断当前交投活跃度相较于历史均值的异动情况。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VMA10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Mean($volume, 10)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量移动平均 (Volume MA)：过去10天的成交量移动平均相对当前成交量的比值。反映成交量的近期均值回归状态。
+
+
+    【运行原理】
+
+    成交量聚合：在设定的N天时间窗口内，收集每一天的成交量(volume)；
+
+    均量计算：对窗口内的所有成交量求简单算术平均数(Mean)，得到该周期的平均换手水平；
+
+    放缩量换算：将计算出的移动平均成交量除以当前的最新成交量（分母加极小值防报错）；
+
+    量能异动评估：结果若远小于1，说明当日剧烈放量；若大于1，说明当日缩量。用于判断当前交投活跃度相较于历史均值的异动情况。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VMA20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Mean($volume, 20)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量移动平均 (Volume MA)：过去20天的成交量移动平均相对当前成交量的比值。反映成交量的近期均值回归状态。
+
+
+    【运行原理】
+
+    成交量聚合：在设定的N天时间窗口内，收集每一天的成交量(volume)；
+
+    均量计算：对窗口内的所有成交量求简单算术平均数(Mean)，得到该周期的平均换手水平；
+
+    放缩量换算：将计算出的移动平均成交量除以当前的最新成交量（分母加极小值防报错）；
+
+    量能异动评估：结果若远小于1，说明当日剧烈放量；若大于1，说明当日缩量。用于判断当前交投活跃度相较于历史均值的异动情况。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VMA30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Mean($volume, 30)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量移动平均 (Volume MA)：过去30天的成交量移动平均相对当前成交量的比值。反映成交量的近期均值回归状态。
+
+
+    【运行原理】
+
+    成交量聚合：在设定的N天时间窗口内，收集每一天的成交量(volume)；
+
+    均量计算：对窗口内的所有成交量求简单算术平均数(Mean)，得到该周期的平均换手水平；
+
+    放缩量换算：将计算出的移动平均成交量除以当前的最新成交量（分母加极小值防报错）；
+
+    量能异动评估：结果若远小于1，说明当日剧烈放量；若大于1，说明当日缩量。用于判断当前交投活跃度相较于历史均值的异动情况。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VMA60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Mean($volume, 60)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量移动平均 (Volume MA)：过去60天的成交量移动平均相对当前成交量的比值。反映成交量的近期均值回归状态。
+
+
+    【运行原理】
+
+    成交量聚合：在设定的N天时间窗口内，收集每一天的成交量(volume)；
+
+    均量计算：对窗口内的所有成交量求简单算术平均数(Mean)，得到该周期的平均换手水平；
+
+    放缩量换算：将计算出的移动平均成交量除以当前的最新成交量（分母加极小值防报错）；
+
+    量能异动评估：结果若远小于1，说明当日剧烈放量；若大于1，说明当日缩量。用于判断当前交投活跃度相较于历史均值的异动情况。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSTD5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std($volume, 5)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量波动率 (Volume STD)：过去5天成交量的相对标准差。衡量交投活跃度的稳定性。
+
+
+    【运行原理】
+
+    量能波动提取：在N天的滑动窗口内，计算每日成交量序列的标准差(Std)，衡量资金参与热度的极热极冷切换频率；
+
+    波动归一化：将计算出的成交量绝对标准差除以当前的最新成交量；
+
+    筹码稳定性刻画：数值越大，说明近期时而极度缩量时而放出天量，筹码极不稳定；数值越小，说明每日成交量均匀平稳，资金运作有条短不紊。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSTD10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std($volume, 10)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量波动率 (Volume STD)：过去10天成交量的相对标准差。衡量交投活跃度的稳定性。
+
+
+    【运行原理】
+
+    量能波动提取：在N天的滑动窗口内，计算每日成交量序列的标准差(Std)，衡量资金参与热度的极热极冷切换频率；
+
+    波动归一化：将计算出的成交量绝对标准差除以当前的最新成交量；
+
+    筹码稳定性刻画：数值越大，说明近期时而极度缩量时而放出天量，筹码极不稳定；数值越小，说明每日成交量均匀平稳，资金运作有条短不紊。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSTD20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std($volume, 20)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量波动率 (Volume STD)：过去20天成交量的相对标准差。衡量交投活跃度的稳定性。
+
+
+    【运行原理】
+
+    量能波动提取：在N天的滑动窗口内，计算每日成交量序列的标准差(Std)，衡量资金参与热度的极热极冷切换频率；
+
+    波动归一化：将计算出的成交量绝对标准差除以当前的最新成交量；
+
+    筹码稳定性刻画：数值越大，说明近期时而极度缩量时而放出天量，筹码极不稳定；数值越小，说明每日成交量均匀平稳，资金运作有条短不紊。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSTD30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std($volume, 30)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量波动率 (Volume STD)：过去30天成交量的相对标准差。衡量交投活跃度的稳定性。
+
+
+    【运行原理】
+
+    量能波动提取：在N天的滑动窗口内，计算每日成交量序列的标准差(Std)，衡量资金参与热度的极热极冷切换频率；
+
+    波动归一化：将计算出的成交量绝对标准差除以当前的最新成交量；
+
+    筹码稳定性刻画：数值越大，说明近期时而极度缩量时而放出天量，筹码极不稳定；数值越小，说明每日成交量均匀平稳，资金运作有条短不紊。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSTD60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std($volume, 60)/($volume+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    成交量波动率 (Volume STD)：过去60天成交量的相对标准差。衡量交投活跃度的稳定性。
+
+
+    【运行原理】
+
+    量能波动提取：在N天的滑动窗口内，计算每日成交量序列的标准差(Std)，衡量资金参与热度的极热极冷切换频率；
+
+    波动归一化：将计算出的成交量绝对标准差除以当前的最新成交量；
+
+    筹码稳定性刻画：数值越大，说明近期时而极度缩量时而放出天量，筹码极不稳定；数值越小，说明每日成交量均匀平稳，资金运作有条短不紊。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: WVMA5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std(Abs($close/Ref($close, 1)-1)*$volume, 5)/(Mean(Abs($close/Ref($close,
+      1)-1)*$volume, 5)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    波动加权成交量均值 (Weighted VMA)：过去5天以价格波动绝对值加权的成交量相对均值。反映大幅波动时的异常成交量特征。
+
+
+    【运行原理】
+
+    动能权重赋值：在N天滑动窗口内，先计算每日的价格绝对变化率（如：Abs(今日收盘/昨日收盘-1)），以此作为当日行情的“动能权重”；
+
+    量能加权：将该动能权重乘上当日的成交量，得到“价格波动加权的成交量”序列；
+
+    波动率计算：计算该加权成交量序列的标准差，并除以其均值进行无量纲化；
+
+    极端行情捕捉：该指标能极其敏感地捕捉到“巨幅震荡且伴随天量”的极端变盘日，是识别市场情绪顶底的利器。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: WVMA10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std(Abs($close/Ref($close, 1)-1)*$volume, 10)/(Mean(Abs($close/Ref($close,
+      1)-1)*$volume, 10)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    波动加权成交量均值 (Weighted VMA)：过去10天以价格波动绝对值加权的成交量相对均值。反映大幅波动时的异常成交量特征。
+
+
+    【运行原理】
+
+    动能权重赋值：在N天滑动窗口内，先计算每日的价格绝对变化率（如：Abs(今日收盘/昨日收盘-1)），以此作为当日行情的“动能权重”；
+
+    量能加权：将该动能权重乘上当日的成交量，得到“价格波动加权的成交量”序列；
+
+    波动率计算：计算该加权成交量序列的标准差，并除以其均值进行无量纲化；
+
+    极端行情捕捉：该指标能极其敏感地捕捉到“巨幅震荡且伴随天量”的极端变盘日，是识别市场情绪顶底的利器。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: WVMA20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std(Abs($close/Ref($close, 1)-1)*$volume, 20)/(Mean(Abs($close/Ref($close,
+      1)-1)*$volume, 20)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    波动加权成交量均值 (Weighted VMA)：过去20天以价格波动绝对值加权的成交量相对均值。反映大幅波动时的异常成交量特征。
+
+
+    【运行原理】
+
+    动能权重赋值：在N天滑动窗口内，先计算每日的价格绝对变化率（如：Abs(今日收盘/昨日收盘-1)），以此作为当日行情的“动能权重”；
+
+    量能加权：将该动能权重乘上当日的成交量，得到“价格波动加权的成交量”序列；
+
+    波动率计算：计算该加权成交量序列的标准差，并除以其均值进行无量纲化；
+
+    极端行情捕捉：该指标能极其敏感地捕捉到“巨幅震荡且伴随天量”的极端变盘日，是识别市场情绪顶底的利器。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: WVMA30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std(Abs($close/Ref($close, 1)-1)*$volume, 30)/(Mean(Abs($close/Ref($close,
+      1)-1)*$volume, 30)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    波动加权成交量均值 (Weighted VMA)：过去30天以价格波动绝对值加权的成交量相对均值。反映大幅波动时的异常成交量特征。
+
+
+    【运行原理】
+
+    动能权重赋值：在N天滑动窗口内，先计算每日的价格绝对变化率（如：Abs(今日收盘/昨日收盘-1)），以此作为当日行情的“动能权重”；
+
+    量能加权：将该动能权重乘上当日的成交量，得到“价格波动加权的成交量”序列；
+
+    波动率计算：计算该加权成交量序列的标准差，并除以其均值进行无量纲化；
+
+    极端行情捕捉：该指标能极其敏感地捕捉到“巨幅震荡且伴随天量”的极端变盘日，是识别市场情绪顶底的利器。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: WVMA60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Std(Abs($close/Ref($close, 1)-1)*$volume, 60)/(Mean(Abs($close/Ref($close,
+      1)-1)*$volume, 60)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    波动加权成交量均值 (Weighted VMA)：过去60天以价格波动绝对值加权的成交量相对均值。反映大幅波动时的异常成交量特征。
+
+
+    【运行原理】
+
+    动能权重赋值：在N天滑动窗口内，先计算每日的价格绝对变化率（如：Abs(今日收盘/昨日收盘-1)），以此作为当日行情的“动能权重”；
+
+    量能加权：将该动能权重乘上当日的成交量，得到“价格波动加权的成交量”序列；
+
+    波动率计算：计算该加权成交量序列的标准差，并除以其均值进行无量纲化；
+
+    极端行情捕捉：该指标能极其敏感地捕捉到“巨幅震荡且伴随天量”的极端变盘日，是识别市场情绪顶底的利器。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMP5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater($volume-Ref($volume, 1), 0), 5)/(Sum(Abs($volume-Ref($volume,
+      1)), 5)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放量绝对值占比 (Volume Sum Positive)：过去5天中成交量增加部分的绝对量占比。
+
+
+    【运行原理】
+
+    追涨量剥离：在N天窗口内，专门筛选出股价上涨当天的成交量变化量；
+
+    多头量能累加：将符合条件的追涨量能进行加总；
+
+    总基准归一化：将总的多头量能除以这N天内所有的成交量绝对变化之和；
+
+    资金抢筹评估：数值越大，说明该区间内的波动主要由资金积极入场抢筹的放量上涨所主导，是判断底部建仓或主升浪的重要依据。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMP10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater($volume-Ref($volume, 1), 0), 10)/(Sum(Abs($volume-Ref($volume,
+      1)), 10)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放量绝对值占比 (Volume Sum Positive)：过去10天中成交量增加部分的绝对量占比。
+
+
+    【运行原理】
+
+    追涨量剥离：在N天窗口内，专门筛选出股价上涨当天的成交量变化量；
+
+    多头量能累加：将符合条件的追涨量能进行加总；
+
+    总基准归一化：将总的多头量能除以这N天内所有的成交量绝对变化之和；
+
+    资金抢筹评估：数值越大，说明该区间内的波动主要由资金积极入场抢筹的放量上涨所主导，是判断底部建仓或主升浪的重要依据。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMP20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater($volume-Ref($volume, 1), 0), 20)/(Sum(Abs($volume-Ref($volume,
+      1)), 20)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放量绝对值占比 (Volume Sum Positive)：过去20天中成交量增加部分的绝对量占比。
+
+
+    【运行原理】
+
+    追涨量剥离：在N天窗口内，专门筛选出股价上涨当天的成交量变化量；
+
+    多头量能累加：将符合条件的追涨量能进行加总；
+
+    总基准归一化：将总的多头量能除以这N天内所有的成交量绝对变化之和；
+
+    资金抢筹评估：数值越大，说明该区间内的波动主要由资金积极入场抢筹的放量上涨所主导，是判断底部建仓或主升浪的重要依据。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMP30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater($volume-Ref($volume, 1), 0), 30)/(Sum(Abs($volume-Ref($volume,
+      1)), 30)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放量绝对值占比 (Volume Sum Positive)：过去30天中成交量增加部分的绝对量占比。
+
+
+    【运行原理】
+
+    追涨量剥离：在N天窗口内，专门筛选出股价上涨当天的成交量变化量；
+
+    多头量能累加：将符合条件的追涨量能进行加总；
+
+    总基准归一化：将总的多头量能除以这N天内所有的成交量绝对变化之和；
+
+    资金抢筹评估：数值越大，说明该区间内的波动主要由资金积极入场抢筹的放量上涨所主导，是判断底部建仓或主升浪的重要依据。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMP60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater($volume-Ref($volume, 1), 0), 60)/(Sum(Abs($volume-Ref($volume,
+      1)), 60)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放量绝对值占比 (Volume Sum Positive)：过去60天中成交量增加部分的绝对量占比。
+
+
+    【运行原理】
+
+    追涨量剥离：在N天窗口内，专门筛选出股价上涨当天的成交量变化量；
+
+    多头量能累加：将符合条件的追涨量能进行加总；
+
+    总基准归一化：将总的多头量能除以这N天内所有的成交量绝对变化之和；
+
+    资金抢筹评估：数值越大，说明该区间内的波动主要由资金积极入场抢筹的放量上涨所主导，是判断底部建仓或主升浪的重要依据。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMN5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater(Ref($volume, 1)-$volume, 0), 5)/(Sum(Abs($volume-Ref($volume,
+      1)), 5)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    缩量绝对值占比 (Volume Sum Negative)：过去5天中成交量减少部分的绝对量占比。
+
+
+    【运行原理】
+
+    杀跌量剥离：在N天窗口内，专门筛选出股价下跌当天的成交量变化量（若比前一日缩量则取差值，具体视公式而定）；
+
+    空头量能累加：将符合条件的下跌量能进行加总；
+
+    总基准归一化：将总的空头量能除以这N天内所有的成交量绝对变化之和；
+
+    恐慌抛盘评估：数值越大，说明该区间内的波动主要由恐慌性的放量杀跌所主导。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMN10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater(Ref($volume, 1)-$volume, 0), 10)/(Sum(Abs($volume-Ref($volume,
+      1)), 10)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    缩量绝对值占比 (Volume Sum Negative)：过去10天中成交量减少部分的绝对量占比。
+
+
+    【运行原理】
+
+    杀跌量剥离：在N天窗口内，专门筛选出股价下跌当天的成交量变化量（若比前一日缩量则取差值，具体视公式而定）；
+
+    空头量能累加：将符合条件的下跌量能进行加总；
+
+    总基准归一化：将总的空头量能除以这N天内所有的成交量绝对变化之和；
+
+    恐慌抛盘评估：数值越大，说明该区间内的波动主要由恐慌性的放量杀跌所主导。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMN20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater(Ref($volume, 1)-$volume, 0), 20)/(Sum(Abs($volume-Ref($volume,
+      1)), 20)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    缩量绝对值占比 (Volume Sum Negative)：过去20天中成交量减少部分的绝对量占比。
+
+
+    【运行原理】
+
+    杀跌量剥离：在N天窗口内，专门筛选出股价下跌当天的成交量变化量（若比前一日缩量则取差值，具体视公式而定）；
+
+    空头量能累加：将符合条件的下跌量能进行加总；
+
+    总基准归一化：将总的空头量能除以这N天内所有的成交量绝对变化之和；
+
+    恐慌抛盘评估：数值越大，说明该区间内的波动主要由恐慌性的放量杀跌所主导。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMN30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater(Ref($volume, 1)-$volume, 0), 30)/(Sum(Abs($volume-Ref($volume,
+      1)), 30)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    缩量绝对值占比 (Volume Sum Negative)：过去30天中成交量减少部分的绝对量占比。
+
+
+    【运行原理】
+
+    杀跌量剥离：在N天窗口内，专门筛选出股价下跌当天的成交量变化量（若比前一日缩量则取差值，具体视公式而定）；
+
+    空头量能累加：将符合条件的下跌量能进行加总；
+
+    总基准归一化：将总的空头量能除以这N天内所有的成交量绝对变化之和；
+
+    恐慌抛盘评估：数值越大，说明该区间内的波动主要由恐慌性的放量杀跌所主导。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMN60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: Sum(Greater(Ref($volume, 1)-$volume, 0), 60)/(Sum(Abs($volume-Ref($volume,
+      1)), 60)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    缩量绝对值占比 (Volume Sum Negative)：过去60天中成交量减少部分的绝对量占比。
+
+
+    【运行原理】
+
+    杀跌量剥离：在N天窗口内，专门筛选出股价下跌当天的成交量变化量（若比前一日缩量则取差值，具体视公式而定）；
+
+    空头量能累加：将符合条件的下跌量能进行加总；
+
+    总基准归一化：将总的空头量能除以这N天内所有的成交量绝对变化之和；
+
+    恐慌抛盘评估：数值越大，说明该区间内的波动主要由恐慌性的放量杀跌所主导。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMD5
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($volume-Ref($volume, 1), 0), 5)-Sum(Greater(Ref($volume, 1)-$volume,
+      0), 5))/(Sum(Abs($volume-Ref($volume, 1)), 5)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放缩量净差占比 (Volume Sum Difference)：过去5天成交量增加与减少部分的净差占比。
+
+
+    【运行原理】
+
+    量能多空拆解：在N天窗口内，根据当日股价的涨跌，将成交量变化拆分为“伴随上涨的增量”与“伴随下跌的增量”；
+
+    量能轧差：计算上涨增量总和与下跌增量总和的差值，得到资金追涨杀跌的“净量能”；
+
+    总基准归一化：将净量能除以这N天内所有成交量绝对变化的整体和；
+
+    资金净推力：正值代表放量上涨的良性推力，负值代表放量下跌的恶性砸盘，用于甄别资金的真实意图。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去5天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMD10
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($volume-Ref($volume, 1), 0), 10)-Sum(Greater(Ref($volume, 1)-$volume,
+      0), 10))/(Sum(Abs($volume-Ref($volume, 1)), 10)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放缩量净差占比 (Volume Sum Difference)：过去10天成交量增加与减少部分的净差占比。
+
+
+    【运行原理】
+
+    量能多空拆解：在N天窗口内，根据当日股价的涨跌，将成交量变化拆分为“伴随上涨的增量”与“伴随下跌的增量”；
+
+    量能轧差：计算上涨增量总和与下跌增量总和的差值，得到资金追涨杀跌的“净量能”；
+
+    总基准归一化：将净量能除以这N天内所有成交量绝对变化的整体和；
+
+    资金净推力：正值代表放量上涨的良性推力，负值代表放量下跌的恶性砸盘，用于甄别资金的真实意图。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去10天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMD20
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($volume-Ref($volume, 1), 0), 20)-Sum(Greater(Ref($volume, 1)-$volume,
+      0), 20))/(Sum(Abs($volume-Ref($volume, 1)), 20)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放缩量净差占比 (Volume Sum Difference)：过去20天成交量增加与减少部分的净差占比。
+
+
+    【运行原理】
+
+    量能多空拆解：在N天窗口内，根据当日股价的涨跌，将成交量变化拆分为“伴随上涨的增量”与“伴随下跌的增量”；
+
+    量能轧差：计算上涨增量总和与下跌增量总和的差值，得到资金追涨杀跌的“净量能”；
+
+    总基准归一化：将净量能除以这N天内所有成交量绝对变化的整体和；
+
+    资金净推力：正值代表放量上涨的良性推力，负值代表放量下跌的恶性砸盘，用于甄别资金的真实意图。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去20天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMD30
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($volume-Ref($volume, 1), 0), 30)-Sum(Greater(Ref($volume, 1)-$volume,
+      0), 30))/(Sum(Abs($volume-Ref($volume, 1)), 30)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放缩量净差占比 (Volume Sum Difference)：过去30天成交量增加与减少部分的净差占比。
+
+
+    【运行原理】
+
+    量能多空拆解：在N天窗口内，根据当日股价的涨跌，将成交量变化拆分为“伴随上涨的增量”与“伴随下跌的增量”；
+
+    量能轧差：计算上涨增量总和与下跌增量总和的差值，得到资金追涨杀跌的“净量能”；
+
+    总基准归一化：将净量能除以这N天内所有成交量绝对变化的整体和；
+
+    资金净推力：正值代表放量上涨的良性推力，负值代表放量下跌的恶性砸盘，用于甄别资金的真实意图。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去30天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: VSUMD60
+  category: 滚动时间窗口 (Rolling)
+  expression:
+    qlib: (Sum(Greater($volume-Ref($volume, 1), 0), 60)-Sum(Greater(Ref($volume, 1)-$volume,
+      0), 60))/(Sum(Abs($volume-Ref($volume, 1)), 60)+1e-12)
+    duckdb: DuckDB暂未实现完整的Alpha158对应逻辑
+  meaning: '【核心含义】
+
+    放缩量净差占比 (Volume Sum Difference)：过去60天成交量增加与减少部分的净差占比。
+
+
+    【运行原理】
+
+    量能多空拆解：在N天窗口内，根据当日股价的涨跌，将成交量变化拆分为“伴随上涨的增量”与“伴随下跌的增量”；
+
+    量能轧差：计算上涨增量总和与下跌增量总和的差值，得到资金追涨杀跌的“净量能”；
+
+    总基准归一化：将净量能除以这N天内所有成交量绝对变化的整体和；
+
+    资金净推力：正值代表放量上涨的良性推力，负值代表放量下跌的恶性砸盘，用于甄别资金的真实意图。'
+  usage_scenario: 成交量异常波动与资金活跃度跟踪（过去60天）。
+  strategy_hint: 量能是价格的先行指标。成交量骤增（VMA偏离）或波动率放大（VSTD）常意味着资金异动，需结合价格动量（如ROC）一起作为交叉特征输入。
+- name: Alpha3
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: Sum(If($close == Ref($close,1), 0, If($close > Ref($close,1), $close - Less($low,
+      Ref($close,1)), $close - Greater($high, Ref($close,1)))), 6)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    SUM((CLOSE=DELAY(CLOSE,1)?0:CLOSE-(CLOSE>DELAY(CLOSE,1)?MIN(LOW,DELAY(CLOSE,1)):MAX(HIGH,DELAY(CLOSE,1)))),6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha3 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha4
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If((((Sum($close,8)/8)+Std($close,8))<(Sum($close,2)/2)), (-1*1), If(((Sum($close,2)/2)<((Sum($close,8)/8)-Std($close,8))),
+      1, If(((1<($volume/Mean($volume,20))) | (($volume/Mean($volume,20))==1)), 1,
+      (-1*1))))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    ((((SUM(CLOSE,8)/8)+STD(CLOSE,8))<(SUM(CLOSE,2)/2))?(-1*1):(((SUM(CLOSE,2)/2)<((SUM(CLOSE,8)/8)-STD(CLOSE,8)))?1:(((1<(VOLUME/MEAN(VOLUME,20)))||((VOLUME/MEAN(VOLUME,20))==1))?1:(-1*1))))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha4 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha11
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: (Sum((($close-$low)-($high-$close))/($high-$low)*$volume,6))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (SUM(((CLOSE-LOW)-(HIGH-CLOSE))./(HIGH-LOW).*VOLUME,6)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha11 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha14
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $close-Ref($close,5)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    CLOSE-DELAY(CLOSE,5)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha14 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha15
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $open/Ref($close,1)-1
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    OPEN/DELAY(CLOSE,1)-1
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha15 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha18
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: $close/Ref($close,5)
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    CLOSE/DELAY(CLOSE,5)
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha18 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha19
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: If($close<Ref($close,5), ($close-Ref($close,5))/Ref($close,5), If($close==Ref($close,5),
+      0, ($close-Ref($close,5))/$close))
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE<DELAY(CLOSE,5)?(CLOSE-DELAY(CLOSE,5))/DELAY(CLOSE,5):(CLOSE=DELAY(CLOSE,5)?0:(CLOSE-DELAY(CLOSE,5))/CLOSE))
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha19 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha20
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,6))/Ref($close,6)*100
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,6))/DELAY(CLOSE,6)*100
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha20 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。
+- name: Alpha29
+  category: 量价综合 (Price-Volume Synthetic)
+  expression:
+    qlib: ($close-Ref($close,6))/Ref($close,6)*$volume
+    duckdb: DuckDB暂未实现完整的GTJA191对应逻辑
+  meaning: '【原始公式】
+
+    (CLOSE-DELAY(CLOSE,6))/DELAY(CLOSE,6)*VOLUME
+
+
+    【核心含义】
+
+    国泰君安191因子体系中的 Alpha29 因子。具体业务含义参考原始研报公式解析。'
+  usage_scenario: 短周期多空博弈、量价背离与动量反转。
+  strategy_hint: 高频与中频量价特征。建议作为 LightGBM / CatBoost 等树模型的特征集。

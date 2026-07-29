@@ -1,0 +1,87 @@
+﻿============================================================
+  基于精选因子的模型训练与选股
+============================================================
+
+[1] 加载精选因子列表: selected_factors_tree.txt
+  源文件: ['price_volume_factors', 'reversal_momentum_factors', 'selected_good_factors']
+  因子数量: 15
+  因子列表: ['VOL_REV', 'ROC30', 'BETA20', 'QTLD60', 'VSUMN30', 'BETA5', 'SUMN5', 'STD60', 'pb_lf', 'STR_20d', 'QTLD20', 'Alpha168', 'illiquidity_amihud', 'VSUMN60', 'ROC20']
+
+[2] 初始化 Qlib 环境...
+python.exe : [22316:MainThread](2026-07-15 22:22:06,998) INFO - qlib.Initializa
+tion - [config.py:452] - default_conf: client.
+所在位置 E:\Quant\Qlibworks\_run_ps.ps1:1 字符: 1
++ & "E:\Conda_env\Qlib_env\python.exe" "e:\Quant\Qlibworks\scripts\trai ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([22316:MainThre...t_conf: client. 
+   :String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[22316:MainThread](2026-07-15 22:22:07,014) INFO - qlib.Initialization - [__ini
+t__.py:75] - qlib successfully initialized based on client settings.
+[22316:MainThread](2026-07-15 22:22:07,015) INFO - qlib.Initialization - [__ini
+t__.py:77] - data_path={'__DEFAULT_FREQ': WindowsPath('E:/Quant/Qlibworks/qlib_
+data')}
+
+[3] 读取因子库 (Factor Library)...
+[警告] 发现重名因子 'Alpha168' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'BETA20' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'BETA5' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'QTLD20' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'QTLD60' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'ROC20' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'ROC30' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'STD60' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'STR_20d' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'SUMN5' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'VOL_REV' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'VSUMN30' (位于 selected_good_factors.yaml 中)，已跳过合并。
+[警告] 发现重名因子 'VSUMN60' (位于 selected_good_factors.yaml 中)，已跳过合并。
+  >>> 成功加载 15 个精选因子
+
+============================================================
+=== 正在处理滚动窗口: Test_2023 ===
+    [训练集]: 2020-01-01 到 2021-12-20
+    [验证集]: 2022-01-01 到 2022-12-20
+    [测试集]: 2023-01-01 到 2023-12-31
+============================================================
+
+[4.0 - Test_2023] 特征缓存...
+    [warehouse 去重] VOL_REV: 删除 2,900 行重复记录，涉及 2,900 个键
+    [warehouse 直载] VOL_REV: 7,618,031 条记录
+    [warehouse 去重] ROC30: 删除 2,720 行重复记录，涉及 2,720 个键
+    [warehouse 直载] ROC30: 6,537,384 条记录
+    [warehouse 直载] BETA20: 4,747,934 条记录
+    [warehouse 直载] QTLD60: 4,748,433 条记录
+    [warehouse 直载] VSUMN30: 4,783,729 条记录
+    [warehouse 直载] BETA5: 4,745,294 条记录
+    [warehouse 直载] SUMN5: 4,760,572 条记录
+    [warehouse 去重] STD60: 删除 2,888 行重复记录，涉及 2,888 个键
+    [warehouse 直载] STD60: 7,593,270 条记录
+    [warehouse 去重] pb_lf: 删除 486 行重复记录，涉及 486 个键
+    [warehouse 直载] pb_lf: 963,920 条记录
+    [warehouse 去重] STR_20d: 删除 2,900 行重复记录，涉及 2,900 个键
+    [warehouse 直载] STR_20d: 7,611,222 条记录
+    [warehouse 直载] QTLD20: 4,748,433 条记录
+    [warehouse 直载] Alpha168: 5,856,985 条记录
+    [warehouse 去重] illiquidity_amihud: 删除 2,900 行重复记录，涉及 2,900 个键
+    [warehouse 直载] illiquidity_amihud: 7,617,998 条记录
+    [warehouse 直载] VSUMN60: 4,783,957 条记录
+    [warehouse 去重] ROC20: 删除 2,780 行重复记录，涉及 2,780 个键
+    [warehouse 直载] ROC20: 6,892,961 条记录
+    [使用 warehouse] VOL_REV
+    [使用 warehouse] ROC30
+    [使用 warehouse] BETA20
+    [使用 warehouse] QTLD60
+    [使用 warehouse] VSUMN30
+    [使用 warehouse] BETA5
+    [使用 warehouse] SUMN5
+    [使用 warehouse] STD60
+    [使用 warehouse] pb_lf
+    [使用 warehouse] STR_20d
+    [使用 warehouse] QTLD20
+    [使用 warehouse] Alpha168
+    [使用 warehouse] illiquidity_amihud
+    [使用 warehouse] VSUMN60
+    [使用 warehouse] ROC20
+    [静态池过滤-文件直读] main_board.txt: 3,371 只股票 (PIT格式)

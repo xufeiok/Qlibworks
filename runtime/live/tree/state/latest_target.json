@@ -1,0 +1,10 @@
+{
+  "model_name": "tree",
+  "trade_date": "2025-12-31",
+  "signal_file": "E:\\Quant\\Qlibworks\\runtime\\live\\tree\\signals\\daily\\target_positions_20251231.csv",
+  "signal_count": 20,
+  "industry_neutral": true,
+  "top_k": 20,
+  "score_threshold": 0.7,
+  "buy_pct": 0.95
+}

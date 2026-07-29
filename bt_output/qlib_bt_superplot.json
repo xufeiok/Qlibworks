@@ -1,0 +1,4090 @@
+{
+  "strategy_data": {
+    "name": "EnhancedQlibStrategy",
+    "timeframe": "1d",
+    "description": "\n    增强版的 Qlib 截面回测策略。\n    结合了定期（如每周）根据 score 进行排序的截面多因子逻辑，\n    以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。\n    ",
+    "chart_config": {},
+    "code": "class EnhancedQlibStrategy(bt.Strategy):\n    \"\"\"\n    增强版的 Qlib 截面回测策略。\n    结合了定期（如每周）根据 score 进行排序的截面多因子逻辑，\n    以及个股级别的止盈止损（ATR/固定比例、移动止盈）等时间序列风控逻辑。\n    \"\"\"\n    params = dict(\n        top_k=5,             # 持仓数量\n        rebalance_days=5,    # 调仓周期（天）\n        buy_pct=0.95,        # 最大资金使用率\n        log_enabled=True,\n        \n        # --- 止盈止损风控参数 ---\n        use_risk_control=True,      # 是否启用风控增强模式\n        stop_type='ATR',            # 止损类型: 'ATR' 或 'FIXED'\n        stop_loss_pct=0.05,         # 固定止损比例 (5%)，仅在 stop_type='FIXED' 时有效\n        atr_period=14,              # ATR 周期\n        atr_multiplier=2.0,         # ATR 止损倍数\n        \n        trailing_stop=True,         # 是否启用移动止盈\n        trailing_start_pct=0.10,    # 盈利超过 10% 启动移动止盈\n        trailing_callback_pct=0.02, # 回撤 2% 止盈\n        take_profit_pct=1.0,        # 触发止盈时的平仓比例 (1.0为全平，0.5为平一半)\n        \n        # --- 市场冲击与容量限制 ---\n        volume_limit_pct=0.10       # [Virtu 改进] 单笔订单不能超过当日成交量的10%，防止吃不掉流动性\n    )\n\n    def __init__(self):\n        self.days_since_rebalance = 0\n        self.instruments = [d for d in self.datas if getattr(d, '_name', '') != 'benchmark']\n        self.all_orders = []\n        \n        # 记录每只股票的交易状态\n        self.trade_states = {}\n        \n        # 为每个数据源计算 ATR\n        self.atrs = {}\n        if self.p.use_risk_control and self.p.stop_type == 'ATR':\n            for d in self.instruments:\n                self.atrs[d] = bt.indicators.ATR(d, period=self.p.atr_period)\n\n    def notify_order(self, order):\n        if order.status in [order.Submitted, order.Accepted]:\n            return\n            \n        if order.status == order.Completed:\n            d = order.data\n            price = order.executed.price\n            size = order.executed.size\n            \n            if order.isbuy():\n                self.log(f\"买入成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'buy',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 初始化或更新持仓状态 (忽略加仓造成的复杂成本计算，以最新买入价为准)\n                if d not in self.trade_states or self.getposition(d).size == size:\n                    stop_price = 0.0\n                    if self.p.use_risk_control:\n                        if self.p.stop_type == 'ATR':\n                            # 注意：如果历史数据不足，ATR可能为NaN\n                            atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (price * 0.05)\n                            stop_dist = atr_val * self.p.atr_multiplier\n                            stop_price = price - stop_dist\n                        else:\n                            stop_price = price * (1.0 - self.p.stop_loss_pct)\n                            \n                        # [Two Sigma & Virtu 改进] 发送真实的止损委托单到交易所（撮合引擎）\n                        # 确保日内极端行情下能被 Low 价格刺穿并及时成交，而不是等收盘\n                        stop_order = self.sell(data=d, size=size, exectype=bt.Order.Stop, price=stop_price)\n                        \n                        self.trade_states[d] = {\n                            'entry_price': price,\n                            'max_high': price,\n                            'stop_loss': stop_price,\n                            'stop_order': stop_order,\n                            'tp_triggered': False,\n                        }\n                        self.log(f\"  [{d._name}] 建立风控追踪 | 真实止损单挂单价: {stop_price:.4f}\")\n                        \n            elif order.issell():\n                self.log(f\"卖出成交 | {d._name} | 价格: {price:.4f} | 数量: {size:.2f}\")\n                \n                self.all_orders.append({\n                    'datetime': self.datetime.datetime().isoformat(),\n                    'type': 'sell',\n                    'price': price,\n                    'size': size,\n                    'comm': order.executed.comm,\n                    'value': order.executed.value,\n                    'pos_size': self.getposition(d).size,\n                    'cash': self.broker.getcash(),\n                    'total_value': self.broker.getvalue(),\n                    'stock_code': d._name,\n                    'stock_name': d._name\n                })\n                \n                # 如果平仓完了，移除追踪\n                if self.getposition(d).size == 0:\n                    if d in self.trade_states:\n                        del self.trade_states[d]\n                        \n        elif order.status in [order.Canceled, order.Margin, order.Rejected]:\n            self.log(f\"订单异常 | {order.data._name} | Status: {order.status}\")\n\n    def next(self):\n        # 1. 每日风控检查 (止盈止损)\n        if self.p.use_risk_control:\n            self.check_risk_control()\n            \n        self.days_since_rebalance += 1\n        # 2. 检查是否到达调仓日\n        if self.days_since_rebalance >= self.p.rebalance_days:\n            self.days_since_rebalance = 0\n            self.rebalance()\n\n    def check_risk_control(self):\n        for d in self.instruments:\n            pos = self.getposition(d)\n            if pos.size > 0 and d in self.trade_states:\n                state = self.trade_states[d]\n                current_price = d.close[0]\n                high_price = d.high[0]\n                \n                # 更新最高价\n                if high_price > state['max_high']:\n                    state['max_high'] = high_price\n                    \n                # 真实的止损现在由 Broker 底层撮合引擎（盘中 Low 刺穿 Stop 价格）自动执行。\n                # 所以我们不再需要在 next() 的收盘后手动触发止损。\n                # 但我们需要更新移动止盈/追踪止损的订单。\n                    \n                # 检查移动止盈\n                if self.p.trailing_stop:\n                    current_profit_pct = (current_price - state['entry_price']) / state['entry_price']\n                    current_pullback = (state['max_high'] - current_price) / state['max_high']\n                    \n                    if current_profit_pct > self.p.trailing_start_pct and current_pullback > self.p.trailing_callback_pct:\n                        if not state['tp_triggered']:\n                            sell_size = pos.size * self.p.take_profit_pct\n                            if self.p.take_profit_pct >= 1.0:\n                                # 取消原来的止损单\n                                if state.get('stop_order'):\n                                    self.cancel(state['stop_order'])\n                                self.close(d)\n                                self.log(f\"!!! [{d._name}] 触发100%止盈 !!! 当前价 {current_price:.4f} (回撤 {current_pullback*100:.1f}%)\")\n                                del self.trade_states[d]\n                                continue\n                            else:\n                                if state.get('stop_order'):\n                                    self.cancel(state['stop_order'])\n                                self.sell(data=d, size=sell_size)\n                                state['tp_triggered'] = True\n                                # 重置止损为保本或更紧的ATR垫\n                                if self.p.stop_type == 'ATR':\n                                    atr_val = self.atrs[d][0] if not np.isnan(self.atrs[d][0]) else (current_price * 0.05)\n                                    new_stop = current_price - atr_val * self.p.atr_multiplier\n                                else:\n                                    new_stop = state['entry_price'] # 至少保本\n                                state['stop_loss'] = max(state['stop_loss'], new_stop)\n                                \n                                # 挂出新的止损单\n                                new_stop_order = self.sell(data=d, size=pos.size - sell_size, exectype=bt.Order.Stop, price=state['stop_loss'])\n                                state['stop_order'] = new_stop_order\n                                \n                                self.log(f\"!!! [{d._name}] 触发部分止盈 !!! 卖出比例 {self.p.take_profit_pct} | 新止损单挂单价: {state['stop_loss']:.4f}\")\n\n    def rebalance(self):\n        # 获取当前所有有效股票的 score\n        scores = []\n        for d in self.instruments:\n            if len(d) > 0 and not np.isnan(d.score[0]):\n                scores.append((d._name, d, d.score[0]))\n        \n        # 按 score 降序排列\n        scores.sort(key=lambda x: x[2], reverse=True)\n        \n        # 选出 Top K\n        top_k_feeds = [x[1] for x in scores[:self.p.top_k]]\n        top_k_names = [x[0] for x in scores[:self.p.top_k]]\n        \n        # 平掉不在 Top K 中的仓位\n        for d in self.instruments:\n            if self.getposition(d).size != 0 and d not in top_k_feeds:\n                if d in self.trade_states and self.trade_states[d].get('stop_order'):\n                    self.cancel(self.trade_states[d]['stop_order'])\n                self.close(d)\n                self.log(f\"调仓平仓: {d._name}\")\n        \n        # 对 Top K 分配权重\n        if top_k_feeds:\n            target_weight = self.p.buy_pct / len(top_k_feeds)\n            for d in top_k_feeds:\n                # [Virtu 改进] 检查成交量容量\n                # 预估目标持仓所需资金\n                target_value = self.broker.getvalue() * target_weight\n                current_value = self.getposition(d).size * d.close[0]\n                delta_value = target_value - current_value\n                \n                # 如果是买入，检查是否超过成交量限制\n                if delta_value > 0:\n                    # 简化处理：假设今日成交量作为可用流动性参考 (实盘应取过去 N 日均量)\n                    available_volume = d.volume[0] if not np.isnan(d.volume[0]) else 0\n                    max_allowed_shares = available_volume * self.p.volume_limit_pct\n                    max_allowed_value = max_allowed_shares * d.close[0]\n                    \n                    if delta_value > max_allowed_value:\n                        self.log(f\"  [容量受限] {d._name} 目标买入金额 {delta_value:.2f} 超过容量上限 {max_allowed_value:.2f}\")\n                        # 降级：只买入最大允许量\n                        adjusted_target_weight = (current_value + max_allowed_value) / self.broker.getvalue()\n                        self.order_target_percent(d, target=adjusted_target_weight)\n                        continue\n                        \n                self.order_target_percent(d, target=target_weight)\n                \n        self.log(f\"调仓完成. 当前 Top {self.p.top_k}: {top_k_names}\")\n\n    def log(self, txt, dt=None):\n        if self.p.log_enabled:\n            dt = dt or self.datas[0].datetime.date(0)\n            print(f'{dt.isoformat()}, {txt}')\n",
+    "filename": "E:/Quant/Qlibworks/src/qlworks/backtest/bt_strategy.py",
+    "data_feeds": [
+      {
+        "name": "002157.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603806.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002126.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601799.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002402.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603766.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601699.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601567.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002131.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002265.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002128.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600642.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600332.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000088.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002271.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002583.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002335.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000657.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002032.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603699.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603444.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600601.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601865.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600602.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603833.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600967.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000933.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000951.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600363.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002837.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000582.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603659.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600171.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601333.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002007.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002130.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "001696.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002312.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600985.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002773.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002851.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002461.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600562.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600487.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603899.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600007.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600312.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600295.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600132.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600606.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600720.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603129.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603605.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601001.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601918.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600483.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603179.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601019.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600816.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601965.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601615.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600763.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601212.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600754.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600578.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603298.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603345.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603486.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603728.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603979.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002607.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002756.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600004.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600583.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600884.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600977.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601216.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603606.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603338.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601966.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600995.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002608.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002432.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002008.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000958.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000893.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000423.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603596.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601233.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002340.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600655.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600873.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002025.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000703.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002080.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002738.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603816.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603688.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600378.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000683.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002850.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601666.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000155.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000591.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603737.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600352.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603160.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600143.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601108.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000783.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600499.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603939.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601990.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000785.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603233.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000987.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002673.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002508.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002739.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600157.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002430.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600118.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600299.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601555.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002939.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002153.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600521.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002945.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002409.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600298.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000728.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002532.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002065.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600208.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600095.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601577.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601198.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600998.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600988.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600663.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600637.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600536.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600498.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600390.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600369.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002958.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002439.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600177.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600764.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600871.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603589.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600517.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600968.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600038.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002966.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600131.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601997.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600170.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600398.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002299.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600516.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000709.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002683.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600546.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603927.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002138.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600535.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002156.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603786.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600153.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600566.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002294.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002185.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002595.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000629.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000739.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000898.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002429.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000050.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000825.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000967.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002203.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002423.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600339.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600704.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601228.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601598.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603379.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603858.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002797.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002926.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600486.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600497.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600549.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600707.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600739.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600909.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601118.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601139.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601611.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000932.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601106.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600959.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000060.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000623.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600820.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600901.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000559.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600008.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600699.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002372.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601958.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603650.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601866.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002385.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002500.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000537.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000750.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002465.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000738.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603885.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600021.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002831.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601179.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601098.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600528.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601608.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600885.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603225.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600060.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000009.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002152.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002195.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000887.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600737.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601128.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600598.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000027.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000039.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000729.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600126.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600582.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601928.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603000.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603228.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002670.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600863.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601016.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000960.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600862.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000400.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000598.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000878.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000937.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002353.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600166.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600282.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600316.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600348.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601168.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603568.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600808.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600062.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000519.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002155.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002244.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600970.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601717.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600392.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002266.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002273.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601000.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000021.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "603077.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600380.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600879.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "601880.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002223.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002444.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600435.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002281.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000513.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600511.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002078.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600329.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600141.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600765.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600801.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600673.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000997.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "002056.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000563.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "000830.SZ",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600563.SH",
+        "path": "Memory/DataFrame"
+      },
+      {
+        "name": "600580.SH",
+        "path": "Memory/DataFrame"
+      }
+    ]
+  },
+  "ohlcv_data": {
+    "data": [
+      {
+        "datetime": "2020-09-01T00:00:00",
+        "open": 24.899999618530273,
+        "high": 26.079999923706055,
+        "low": 24.899999618530273,
+        "close": 25.799999237060547,
+        "volume": 594194.0
+      },
+      {
+        "datetime": "2020-09-02T00:00:00",
+        "open": 25.809999465942383,
+        "high": 26.3799991607666,
+        "low": 25.25,
+        "close": 25.399999618530273,
+        "volume": 654065.0
+      },
+      {
+        "datetime": "2020-09-03T00:00:00",
+        "open": 25.59000015258789,
+        "high": 25.600000381469727,
+        "low": 24.209999084472656,
+        "close": 24.3700008392334,
+        "volume": 696517.0
+      },
+      {
+        "datetime": "2020-09-04T00:00:00",
+        "open": 23.799999237060547,
+        "high": 24.34000015258789,
+        "low": 23.75,
+        "close": 24.290000915527344,
+        "volume": 361200.0
+      },
+      {
+        "datetime": "2020-09-07T00:00:00",
+        "open": 24.81999969482422,
+        "high": 24.920000076293945,
+        "low": 21.860000610351562,
+        "close": 21.920000076293945,
+        "volume": 1159534.0
+      },
+      {
+        "datetime": "2020-09-08T00:00:00",
+        "open": 21.90999984741211,
+        "high": 21.90999984741211,
+        "low": 20.549999237060547,
+        "close": 21.139999389648438,
+        "volume": 905679.0
+      },
+      {
+        "datetime": "2020-09-09T00:00:00",
+        "open": 21.059999465942383,
+        "high": 21.18000030517578,
+        "low": 19.799999237060547,
+        "close": 19.799999237060547,
+        "volume": 690910.0
+      },
+      {
+        "datetime": "2020-09-10T00:00:00",
+        "open": 20.1299991607666,
+        "high": 20.260000228881836,
+        "low": 19.350000381469727,
+        "close": 19.450000762939453,
+        "volume": 544951.0
+      },
+      {
+        "datetime": "2020-09-11T00:00:00",
+        "open": 19.399999618530273,
+        "high": 19.639999389648438,
+        "low": 18.93000030517578,
+        "close": 19.510000228881836,
+        "volume": 396000.0
+      },
+      {
+        "datetime": "2020-09-14T00:00:00",
+        "open": 19.520000457763672,
+        "high": 19.920000076293945,
+        "low": 18.610000610351562,
+        "close": 18.8799991607666,
+        "volume": 595721.0
+      },
+      {
+        "datetime": "2020-09-15T00:00:00",
+        "open": 18.899999618530273,
+        "high": 19.149999618530273,
+        "low": 18.489999771118164,
+        "close": 19.06999969482422,
+        "volume": 353248.0
+      },
+      {
+        "datetime": "2020-09-16T00:00:00",
+        "open": 18.969999313354492,
+        "high": 19.239999771118164,
+        "low": 18.329999923706055,
+        "close": 18.739999771118164,
+        "volume": 440539.0
+      },
+      {
+        "datetime": "2020-09-17T00:00:00",
+        "open": 18.65999984741211,
+        "high": 18.809999465942383,
+        "low": 18.06999969482422,
+        "close": 18.670000076293945,
+        "volume": 454820.0
+      },
+      {
+        "datetime": "2020-09-18T00:00:00",
+        "open": 18.780000686645508,
+        "high": 19.1299991607666,
+        "low": 18.56999969482422,
+        "close": 18.809999465942383,
+        "volume": 444390.0
+      },
+      {
+        "datetime": "2020-09-21T00:00:00",
+        "open": 18.700000762939453,
+        "high": 18.860000610351562,
+        "low": 18.219999313354492,
+        "close": 18.600000381469727,
+        "volume": 317295.0
+      },
+      {
+        "datetime": "2020-09-22T00:00:00",
+        "open": 18.600000381469727,
+        "high": 18.649999618530273,
+        "low": 18.170000076293945,
+        "close": 18.200000762939453,
+        "volume": 280216.0
+      },
+      {
+        "datetime": "2020-09-23T00:00:00",
+        "open": 18.270000457763672,
+        "high": 18.559999465942383,
+        "low": 18.1299991607666,
+        "close": 18.549999237060547,
+        "volume": 270012.0
+      },
+      {
+        "datetime": "2020-09-24T00:00:00",
+        "open": 18.299999237060547,
+        "high": 18.540000915527344,
+        "low": 18.0,
+        "close": 18.0,
+        "volume": 304804.0
+      },
+      {
+        "datetime": "2020-09-25T00:00:00",
+        "open": 18.1200008392334,
+        "high": 18.610000610351562,
+        "low": 17.899999618530273,
+        "close": 18.479999542236328,
+        "volume": 378105.0
+      },
+      {
+        "datetime": "2020-09-28T00:00:00",
+        "open": 18.610000610351562,
+        "high": 18.690000534057617,
+        "low": 17.719999313354492,
+        "close": 17.780000686645508,
+        "volume": 352904.0
+      },
+      {
+        "datetime": "2020-09-29T00:00:00",
+        "open": 17.93000030517578,
+        "high": 18.489999771118164,
+        "low": 17.719999313354492,
+        "close": 18.3700008392334,
+        "volume": 341614.0
+      },
+      {
+        "datetime": "2020-09-30T00:00:00",
+        "open": 18.399999618530273,
+        "high": 18.459999084472656,
+        "low": 18.09000015258789,
+        "close": 18.18000030517578,
+        "volume": 235108.0
+      },
+      {
+        "datetime": "2020-10-09T00:00:00",
+        "open": 18.350000381469727,
+        "high": 18.43000030517578,
+        "low": 17.829999923706055,
+        "close": 18.270000457763672,
+        "volume": 366239.0
+      },
+      {
+        "datetime": "2020-10-12T00:00:00",
+        "open": 18.06999969482422,
+        "high": 18.75,
+        "low": 17.899999618530273,
+        "close": 18.559999465942383,
+        "volume": 503812.0
+      },
+      {
+        "datetime": "2020-10-13T00:00:00",
+        "open": 18.799999237060547,
+        "high": 19.969999313354492,
+        "low": 18.75,
+        "close": 19.799999237060547,
+        "volume": 995753.0
+      },
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "open": 19.719999313354492,
+        "high": 19.719999313354492,
+        "low": 18.899999618530273,
+        "close": 18.959999084472656,
+        "volume": 670977.0
+      },
+      {
+        "datetime": "2020-10-15T00:00:00",
+        "open": 18.93000030517578,
+        "high": 18.93000030517578,
+        "low": 18.440000534057617,
+        "close": 18.600000381469727,
+        "volume": 346178.0
+      },
+      {
+        "datetime": "2020-10-16T00:00:00",
+        "open": 18.5,
+        "high": 18.770000457763672,
+        "low": 18.239999771118164,
+        "close": 18.68000030517578,
+        "volume": 290954.0
+      },
+      {
+        "datetime": "2020-10-19T00:00:00",
+        "open": 18.75,
+        "high": 19.09000015258789,
+        "low": 18.600000381469727,
+        "close": 18.739999771118164,
+        "volume": 303420.0
+      },
+      {
+        "datetime": "2020-10-20T00:00:00",
+        "open": 18.760000228881836,
+        "high": 18.760000228881836,
+        "low": 18.190000534057617,
+        "close": 18.530000686645508,
+        "volume": 259208.0
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "open": 18.540000915527344,
+        "high": 18.559999465942383,
+        "low": 18.059999465942383,
+        "close": 18.079999923706055,
+        "volume": 231836.0
+      },
+      {
+        "datetime": "2020-10-22T00:00:00",
+        "open": 18.0,
+        "high": 18.06999969482422,
+        "low": 16.950000762939453,
+        "close": 17.190000534057617,
+        "volume": 514954.0
+      },
+      {
+        "datetime": "2020-10-23T00:00:00",
+        "open": 17.200000762939453,
+        "high": 17.350000381469727,
+        "low": 16.579999923706055,
+        "close": 16.639999389648438,
+        "volume": 365885.0
+      },
+      {
+        "datetime": "2020-10-26T00:00:00",
+        "open": 16.639999389648438,
+        "high": 16.93000030517578,
+        "low": 16.18000030517578,
+        "close": 16.6200008392334,
+        "volume": 276983.0
+      },
+      {
+        "datetime": "2020-10-27T00:00:00",
+        "open": 16.700000762939453,
+        "high": 17.43000030517578,
+        "low": 16.600000381469727,
+        "close": 17.260000228881836,
+        "volume": 446198.0
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "open": 17.5,
+        "high": 17.979999542236328,
+        "low": 17.43000030517578,
+        "close": 17.549999237060547,
+        "volume": 514926.0
+      },
+      {
+        "datetime": "2020-10-29T00:00:00",
+        "open": 17.299999237060547,
+        "high": 17.68000030517578,
+        "low": 17.09000015258789,
+        "close": 17.530000686645508,
+        "volume": 336546.0
+      },
+      {
+        "datetime": "2020-10-30T00:00:00",
+        "open": 17.540000915527344,
+        "high": 17.59000015258789,
+        "low": 17.09000015258789,
+        "close": 17.100000381469727,
+        "volume": 255840.0
+      },
+      {
+        "datetime": "2020-11-02T00:00:00",
+        "open": 17.399999618530273,
+        "high": 17.479999542236328,
+        "low": 17.110000610351562,
+        "close": 17.239999771118164,
+        "volume": 246996.0
+      },
+      {
+        "datetime": "2020-11-03T00:00:00",
+        "open": 17.260000228881836,
+        "high": 17.399999618530273,
+        "low": 16.93000030517578,
+        "close": 17.350000381469727,
+        "volume": 245080.0
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "open": 17.31999969482422,
+        "high": 17.549999237060547,
+        "low": 17.0,
+        "close": 17.079999923706055,
+        "volume": 256018.0
+      },
+      {
+        "datetime": "2020-11-05T00:00:00",
+        "open": 17.110000610351562,
+        "high": 17.56999969482422,
+        "low": 17.030000686645508,
+        "close": 17.450000762939453,
+        "volume": 317699.0
+      },
+      {
+        "datetime": "2020-11-06T00:00:00",
+        "open": 17.450000762939453,
+        "high": 17.489999771118164,
+        "low": 16.959999084472656,
+        "close": 17.100000381469727,
+        "volume": 286731.0
+      },
+      {
+        "datetime": "2020-11-09T00:00:00",
+        "open": 17.09000015258789,
+        "high": 17.459999084472656,
+        "low": 16.829999923706055,
+        "close": 17.260000228881836,
+        "volume": 384384.0
+      },
+      {
+        "datetime": "2020-11-10T00:00:00",
+        "open": 17.299999237060547,
+        "high": 17.350000381469727,
+        "low": 17.040000915527344,
+        "close": 17.09000015258789,
+        "volume": 259720.0
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "open": 17.09000015258789,
+        "high": 17.450000762939453,
+        "low": 17.059999465942383,
+        "close": 17.149999618530273,
+        "volume": 287069.0
+      },
+      {
+        "datetime": "2020-11-12T00:00:00",
+        "open": 17.200000762939453,
+        "high": 17.260000228881836,
+        "low": 16.5,
+        "close": 16.670000076293945,
+        "volume": 385419.0
+      },
+      {
+        "datetime": "2020-11-13T00:00:00",
+        "open": 16.6299991607666,
+        "high": 16.889999389648438,
+        "low": 16.3700008392334,
+        "close": 16.889999389648438,
+        "volume": 257376.0
+      },
+      {
+        "datetime": "2020-11-16T00:00:00",
+        "open": 16.8799991607666,
+        "high": 18.100000381469727,
+        "low": 16.809999465942383,
+        "close": 17.799999237060547,
+        "volume": 698324.0
+      },
+      {
+        "datetime": "2020-11-17T00:00:00",
+        "open": 17.799999237060547,
+        "high": 18.1299991607666,
+        "low": 17.5,
+        "close": 18.049999237060547,
+        "volume": 510662.0
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "open": 18.06999969482422,
+        "high": 18.170000076293945,
+        "low": 17.719999313354492,
+        "close": 17.799999237060547,
+        "volume": 285561.0
+      },
+      {
+        "datetime": "2020-11-19T00:00:00",
+        "open": 17.719999313354492,
+        "high": 18.549999237060547,
+        "low": 17.600000381469727,
+        "close": 18.309999465942383,
+        "volume": 530113.0
+      },
+      {
+        "datetime": "2020-11-20T00:00:00",
+        "open": 18.309999465942383,
+        "high": 18.309999465942383,
+        "low": 17.829999923706055,
+        "close": 18.040000915527344,
+        "volume": 354934.0
+      },
+      {
+        "datetime": "2020-11-23T00:00:00",
+        "open": 17.959999084472656,
+        "high": 18.040000915527344,
+        "low": 17.649999618530273,
+        "close": 17.959999084472656,
+        "volume": 323522.0
+      },
+      {
+        "datetime": "2020-11-24T00:00:00",
+        "open": 17.850000381469727,
+        "high": 18.290000915527344,
+        "low": 17.729999542236328,
+        "close": 18.059999465942383,
+        "volume": 269948.0
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "open": 18.06999969482422,
+        "high": 18.100000381469727,
+        "low": 17.6200008392334,
+        "close": 17.6200008392334,
+        "volume": 244825.0
+      },
+      {
+        "datetime": "2020-11-26T00:00:00",
+        "open": 17.760000228881836,
+        "high": 18.059999465942383,
+        "low": 17.700000762939453,
+        "close": 17.8799991607666,
+        "volume": 318430.0
+      },
+      {
+        "datetime": "2020-11-27T00:00:00",
+        "open": 18.100000381469727,
+        "high": 18.780000686645508,
+        "low": 18.100000381469727,
+        "close": 18.3700008392334,
+        "volume": 546356.0
+      },
+      {
+        "datetime": "2020-11-30T00:00:00",
+        "open": 18.8799991607666,
+        "high": 19.139999389648438,
+        "low": 18.540000915527344,
+        "close": 18.65999984741211,
+        "volume": 598856.0
+      },
+      {
+        "datetime": "2020-12-01T00:00:00",
+        "open": 18.610000610351562,
+        "high": 18.790000915527344,
+        "low": 18.350000381469727,
+        "close": 18.709999084472656,
+        "volume": 392488.0
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "open": 18.719999313354492,
+        "high": 19.06999969482422,
+        "low": 18.600000381469727,
+        "close": 18.8799991607666,
+        "volume": 327728.0
+      },
+      {
+        "datetime": "2020-12-03T00:00:00",
+        "open": 18.969999313354492,
+        "high": 19.030000686645508,
+        "low": 18.600000381469727,
+        "close": 18.940000534057617,
+        "volume": 374727.0
+      },
+      {
+        "datetime": "2020-12-04T00:00:00",
+        "open": 18.979999542236328,
+        "high": 19.1299991607666,
+        "low": 18.790000915527344,
+        "close": 19.010000228881836,
+        "volume": 300755.0
+      },
+      {
+        "datetime": "2020-12-07T00:00:00",
+        "open": 19.030000686645508,
+        "high": 19.450000762939453,
+        "low": 18.950000762939453,
+        "close": 19.229999542236328,
+        "volume": 469477.0
+      },
+      {
+        "datetime": "2020-12-08T00:00:00",
+        "open": 19.149999618530273,
+        "high": 19.15999984741211,
+        "low": 18.549999237060547,
+        "close": 18.579999923706055,
+        "volume": 442513.0
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "open": 18.579999923706055,
+        "high": 18.600000381469727,
+        "low": 17.959999084472656,
+        "close": 17.979999542236328,
+        "volume": 388632.0
+      },
+      {
+        "datetime": "2020-12-10T00:00:00",
+        "open": 17.81999969482422,
+        "high": 18.1299991607666,
+        "low": 17.549999237060547,
+        "close": 17.600000381469727,
+        "volume": 333558.0
+      },
+      {
+        "datetime": "2020-12-11T00:00:00",
+        "open": 17.600000381469727,
+        "high": 17.649999618530273,
+        "low": 16.899999618530273,
+        "close": 17.239999771118164,
+        "volume": 388412.0
+      },
+      {
+        "datetime": "2020-12-14T00:00:00",
+        "open": 17.309999465942383,
+        "high": 17.850000381469727,
+        "low": 17.290000915527344,
+        "close": 17.81999969482422,
+        "volume": 349450.0
+      },
+      {
+        "datetime": "2020-12-15T00:00:00",
+        "open": 17.700000762939453,
+        "high": 17.829999923706055,
+        "low": 17.450000762939453,
+        "close": 17.489999771118164,
+        "volume": 235803.0
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "open": 17.549999237060547,
+        "high": 17.6200008392334,
+        "low": 17.110000610351562,
+        "close": 17.200000762939453,
+        "volume": 231559.0
+      },
+      {
+        "datetime": "2020-12-17T00:00:00",
+        "open": 17.25,
+        "high": 17.479999542236328,
+        "low": 17.1299991607666,
+        "close": 17.399999618530273,
+        "volume": 258268.0
+      },
+      {
+        "datetime": "2020-12-18T00:00:00",
+        "open": 17.40999984741211,
+        "high": 17.420000076293945,
+        "low": 16.979999542236328,
+        "close": 16.989999771118164,
+        "volume": 333697.0
+      },
+      {
+        "datetime": "2020-12-21T00:00:00",
+        "open": 17.030000686645508,
+        "high": 17.18000030517578,
+        "low": 16.719999313354492,
+        "close": 17.010000228881836,
+        "volume": 353094.0
+      },
+      {
+        "datetime": "2020-12-22T00:00:00",
+        "open": 16.979999542236328,
+        "high": 17.100000381469727,
+        "low": 16.3700008392334,
+        "close": 16.420000076293945,
+        "volume": 480034.0
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "open": 16.5,
+        "high": 16.579999923706055,
+        "low": 16.18000030517578,
+        "close": 16.31999969482422,
+        "volume": 383445.0
+      },
+      {
+        "datetime": "2020-12-24T00:00:00",
+        "open": 16.399999618530273,
+        "high": 16.8799991607666,
+        "low": 16.25,
+        "close": 16.639999389648438,
+        "volume": 383993.0
+      },
+      {
+        "datetime": "2020-12-25T00:00:00",
+        "open": 16.690000534057617,
+        "high": 16.690000534057617,
+        "low": 16.299999237060547,
+        "close": 16.3700008392334,
+        "volume": 279848.0
+      },
+      {
+        "datetime": "2020-12-28T00:00:00",
+        "open": 16.579999923706055,
+        "high": 17.299999237060547,
+        "low": 16.510000228881836,
+        "close": 17.290000915527344,
+        "volume": 623074.0
+      },
+      {
+        "datetime": "2020-12-29T00:00:00",
+        "open": 17.350000381469727,
+        "high": 17.360000610351562,
+        "low": 16.829999923706055,
+        "close": 16.889999389648438,
+        "volume": 422568.0
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "open": 16.90999984741211,
+        "high": 17.09000015258789,
+        "low": 16.75,
+        "close": 16.84000015258789,
+        "volume": 298771.0
+      },
+      {
+        "datetime": "2020-12-31T00:00:00",
+        "open": 16.989999771118164,
+        "high": 17.239999771118164,
+        "low": 16.8700008392334,
+        "close": 17.040000915527344,
+        "volume": 308449.0
+      }
+    ]
+  },
+  "trades_data": {
+    "trades": [
+      {
+        "close_datetime": "2020-10-21T00:00:00",
+        "size": 0,
+        "price": 145.03488938903806,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 65.73493478167724,
+        "pnl": 3594.267188387272
+      },
+      {
+        "close_datetime": "2020-10-21T00:00:00",
+        "size": 0,
+        "price": 231.23099999999997,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 61.692101122924804,
+        "pnl": -1264.4229781981167
+      },
+      {
+        "close_datetime": "2020-10-28T00:00:00",
+        "size": 0,
+        "price": 1.3413400334119796,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.03887478035808,
+        "pnl": -1081.1987300447802
+      },
+      {
+        "close_datetime": "2020-10-28T00:00:00",
+        "size": 0,
+        "price": 24.065106625164255,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.474041138153076,
+        "pnl": -3045.522923431852
+      },
+      {
+        "close_datetime": "2020-10-28T00:00:00",
+        "size": 0,
+        "price": 10.560550190925596,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 65.27008907852172,
+        "pnl": 299.6775160144841
+      },
+      {
+        "close_datetime": "2020-11-02T00:00:00",
+        "size": 0,
+        "price": 72.15208183288573,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 59.60215264604491,
+        "pnl": -2796.8482102144076
+      },
+      {
+        "close_datetime": "2020-11-04T00:00:00",
+        "size": 0,
+        "price": 17.317299236297604,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.647215268983835,
+        "pnl": 1275.9254015160707
+      },
+      {
+        "close_datetime": "2020-11-04T00:00:00",
+        "size": 0,
+        "price": 6.06605994272232,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.094394862319945,
+        "pnl": -278.26726418604574
+      },
+      {
+        "close_datetime": "2020-11-11T00:00:00",
+        "size": 0,
+        "price": 46.47643030548095,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 59.657898620422365,
+        "pnl": -1378.8358389890702
+      },
+      {
+        "close_datetime": "2020-11-11T00:00:00",
+        "size": 0,
+        "price": 18.648629159927367,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.237410762691496,
+        "pnl": 1782.8861574479117
+      },
+      {
+        "close_datetime": "2020-11-11T00:00:00",
+        "size": 0,
+        "price": 10.410399618148803,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 66.02585624093628,
+        "pnl": 4309.44384601813
+      },
+      {
+        "close_datetime": "2020-11-18T00:00:00",
+        "size": 0,
+        "price": 43.163118930816644,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.90224610644531,
+        "pnl": -733.6820601628347
+      },
+      {
+        "close_datetime": "2020-11-18T00:00:00",
+        "size": 0,
+        "price": 21.151129159927365,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 63.48733413565063,
+        "pnl": -1383.212944502469
+      },
+      {
+        "close_datetime": "2020-11-18T00:00:00",
+        "size": 0,
+        "price": 20.830809465408322,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 64.46520118343925,
+        "pnl": -299.7582173024379
+      },
+      {
+        "close_datetime": "2020-11-18T00:00:00",
+        "size": 0,
+        "price": 11.888099618911744,
+        "direction": "Short",
+        "return_pct": 0.0,
+        "commission": 36.03616828393507,
+        "pnl": -871.5414806213305
+      },
+      {
+        "close_datetime": "2020-11-25T00:00:00",
+        "size": 0,
+        "price": 65.5554878616333,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 64.22723724630737,
+        "pnl": 1491.9636133396323
+      },
+      {
+        "close_datetime": "2020-11-25T00:00:00",
+        "size": 0,
+        "price": 3.203200047731399,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 64.55388527609968,
+        "pnl": -433.12717659641953
+      },
+      {
+        "close_datetime": "2020-11-25T00:00:00",
+        "size": 0,
+        "price": 9.369359656333922,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 64.28807506077003,
+        "pnl": 1673.9419200239959
+      },
+      {
+        "close_datetime": "2020-12-02T00:00:00",
+        "size": 0,
+        "price": 42.372331832885735,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 65.34298603682326,
+        "pnl": 1125.9326557974418
+      },
+      {
+        "close_datetime": "2020-12-02T00:00:00",
+        "size": 0,
+        "price": 78.37830305480956,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.56621517126465,
+        "pnl": -1609.8029427408412
+      },
+      {
+        "close_datetime": "2020-12-02T00:00:00",
+        "size": 0,
+        "price": 5.665659847259521,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 62.88543466119384,
+        "pnl": -1720.6477534478104
+      },
+      {
+        "close_datetime": "2020-12-04T00:00:00",
+        "size": 0,
+        "price": 17.46745076370239,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 59.79587488489469,
+        "pnl": -3076.873936264007
+      },
+      {
+        "close_datetime": "2020-12-09T00:00:00",
+        "size": 0,
+        "price": 1.4714700286388396,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 56.88312110710143,
+        "pnl": -113.7662422142016
+      },
+      {
+        "close_datetime": "2020-12-09T00:00:00",
+        "size": 0,
+        "price": 6.860000133514404,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 61.58487592708827,
+        "pnl": -1657.3101785064907
+      },
+      {
+        "close_datetime": "2020-12-11T00:00:00",
+        "size": 0,
+        "price": 12.052039961814879,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 57.953501900093244,
+        "pnl": -3377.0227676737036
+      },
+      {
+        "close_datetime": "2020-12-16T00:00:00",
+        "size": 0,
+        "price": 14.014,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 61.929587502918245,
+        "pnl": 1887.7379154153275
+      },
+      {
+        "close_datetime": "2020-12-23T00:00:00",
+        "size": 0,
+        "price": 5.164902400331043,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 57.8080520617156,
+        "pnl": -1904.37871416966
+      },
+      {
+        "close_datetime": "2020-12-23T00:00:00",
+        "size": 0,
+        "price": 29.00897954177856,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 56.53974021635055,
+        "pnl": -954.5790165873515
+      },
+      {
+        "close_datetime": "2020-12-23T00:00:00",
+        "size": 0,
+        "price": 48.56852045822143,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 54.738839736946105,
+        "pnl": -1849.6569161605853
+      },
+      {
+        "close_datetime": "2020-12-30T00:00:00",
+        "size": 0,
+        "price": 5.735730019092559,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 58.29356052963638,
+        "pnl": 3103.430025589066
+      },
+      {
+        "close_datetime": "2020-12-30T00:00:00",
+        "size": 0,
+        "price": 11.731720267295836,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 54.73029979474639,
+        "pnl": -1448.980263791633
+      },
+      {
+        "close_datetime": "2020-12-30T00:00:00",
+        "size": 0,
+        "price": 11.111100381851195,
+        "direction": "Long",
+        "return_pct": 0.0,
+        "commission": 57.14635495179462,
+        "pnl": 622.5964562750556
+      }
+    ]
+  },
+  "orders_data": {
+    "orders": [
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "type": "buy",
+        "price": 145.03488938903806,
+        "size": 214,
+        "comm": 31.037466329254144,
+        "value": 31037.466329254145,
+        "pos_size": 214,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "603129.SH",
+        "stock_name": "603129.SH"
+      },
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "type": "buy",
+        "price": 24.074049236297604,
+        "size": 1320,
+        "comm": 31.77774499191284,
+        "value": 31777.744991912838,
+        "pos_size": 1320,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
+      },
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "type": "buy",
+        "price": 231.23099999999997,
+        "size": 136,
+        "comm": 31.447415999999997,
+        "value": 31447.415999999994,
+        "pos_size": 136,
+        "cash": 5643.110051511837,
+        "total_value": 101210.09090173156,
+        "stock_code": "600763.SH",
+        "stock_name": "600763.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "sell",
+        "price": 162.13770304870604,
+        "size": -214,
+        "comm": 34.697468452423095,
+        "value": 31037.466329254145,
+        "pos_size": 0,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "603129.SH",
+        "stock_name": "603129.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "sell",
+        "price": 222.3873906097412,
+        "size": -136,
+        "comm": 30.244685122924807,
+        "value": 31447.415999999994,
+        "pos_size": 0,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "600763.SH",
+        "stock_name": "600763.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "buy",
+        "price": 1.3413400334119796,
+        "size": 23878,
+        "comm": 32.02851731781125,
+        "value": 32028.51731781125,
+        "pos_size": 23878,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "600157.SH",
+        "stock_name": "600157.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "buy",
+        "price": 10.560550190925596,
+        "size": 3073,
+        "comm": 32.45257073671436,
+        "value": 32452.57073671436,
+        "pos_size": 3073,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "603885.SH",
+        "stock_name": "603885.SH"
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "type": "buy",
+        "price": 23.770000457763672,
+        "size": 40,
+        "comm": 0.950800018310547,
+        "value": 950.8000183105469,
+        "pos_size": 1360,
+        "cash": 5023.001512375403,
+        "total_value": 100998.73107990317,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
+      },
+      {
+        "datetime": "2020-10-26T00:00:00",
+        "type": "sell",
+        "price": 21.850000381469727,
+        "size": -1320,
+        "comm": 28.842000503540042,
+        "value": 31765.940745216816,
+        "pos_size": 40,
+        "cash": 33836.16001541191,
+        "total_value": 98583.5998085218,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "sell",
+        "price": 1.298699952363968,
+        "size": -23878,
+        "comm": 31.01035746254683,
+        "value": 32028.51731781125,
+        "pos_size": 0,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600157.SH",
+        "stock_name": "600157.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "sell",
+        "price": 22.58739060974121,
+        "size": -40,
+        "comm": 0.9034956243896484,
+        "value": 962.6042650065701,
+        "pos_size": 0,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600739.SH",
+        "stock_name": "600739.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "sell",
+        "price": 10.679309580802917,
+        "size": -3073,
+        "comm": 32.817518341807364,
+        "value": 32452.57073671436,
+        "pos_size": 0,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "603885.SH",
+        "stock_name": "603885.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "buy",
+        "price": 6.06605994272232,
+        "size": 5136,
+        "comm": 31.155283865821836,
+        "value": 31155.283865821835,
+        "pos_size": 5136,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600126.SH",
+        "stock_name": "600126.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "buy",
+        "price": 17.317299236297604,
+        "size": 1799,
+        "comm": 31.15382132609939,
+        "value": 31153.82132609939,
+        "pos_size": 1799,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600131.SH",
+        "stock_name": "600131.SH"
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "type": "buy",
+        "price": 72.15208183288573,
+        "size": 432,
+        "comm": 31.169699351806635,
+        "value": 31169.699351806634,
+        "pos_size": 432,
+        "cash": 4930.516724455413,
+        "total_value": 98109.08819090134,
+        "stock_code": "600536.SH",
+        "stock_name": "600536.SH"
+      },
+      {
+        "datetime": "2020-11-02T00:00:00",
+        "type": "sell",
+        "price": 65.81586410703304,
+        "size": -432,
+        "comm": 28.43245329423827,
+        "value": 31169.699351806634,
+        "pos_size": 0,
+        "cash": 33334.53756539944,
+        "total_value": 95505.05560510283,
+        "stock_code": "600536.SH",
+        "stock_name": "600536.SH"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "sell",
+        "price": 18.061919923782348,
+        "size": -1799,
+        "comm": 32.493393942884445,
+        "value": 31153.82132609939,
+        "pos_size": 0,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "600131.SH",
+        "stock_name": "600131.SH"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "sell",
+        "price": 6.0239702095985415,
+        "size": -5136,
+        "comm": 30.93911099649811,
+        "value": 31155.283865821835,
+        "pos_size": 0,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "600126.SH",
+        "stock_name": "600126.SH"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "buy",
+        "price": 18.648629159927367,
+        "size": 1646,
+        "comm": 30.695643597240448,
+        "value": 30695.643597240447,
+        "pos_size": 1646,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "603688.SH",
+        "stock_name": "603688.SH"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "buy",
+        "price": 46.47643030548095,
+        "size": 656,
+        "comm": 30.488538280395506,
+        "value": 30488.538280395504,
+        "pos_size": 656,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "type": "buy",
+        "price": 10.410399618148803,
+        "size": 2961,
+        "comm": 30.825193269338605,
+        "value": 30825.193269338608,
+        "pos_size": 2961,
+        "cash": 4602.225477721095,
+        "total_value": 97740.7053780812,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "sell",
+        "price": 11.888099618911744,
+        "size": -1480.5,
+        "comm": 17.600331485798836,
+        "value": 15412.596634669304,
+        "pos_size": -1480.5,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "sell",
+        "price": 44.46548832321167,
+        "size": -656,
+        "comm": 29.16936034002686,
+        "value": 30488.538280395504,
+        "pos_size": 0,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "sell",
+        "price": 19.770210914611816,
+        "size": -1646,
+        "comm": 32.54176716545105,
+        "value": 30695.643597240447,
+        "pos_size": 0,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "603688.SH",
+        "stock_name": "603688.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "sell",
+        "price": 11.888099618911744,
+        "size": -2961.0,
+        "comm": 35.20066297159767,
+        "value": -2187.734851129533,
+        "pos_size": -1480.5,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "buy",
+        "price": 43.163118930816644,
+        "size": 748,
+        "comm": 32.28601296025085,
+        "value": 32286.01296025085,
+        "pos_size": 748,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "002773.SZ",
+        "stock_name": "002773.SZ"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "buy",
+        "price": 20.830809465408322,
+        "size": 1553,
+        "comm": 32.350247099779125,
+        "value": 32350.247099779124,
+        "pos_size": 1553,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "600378.SH",
+        "stock_name": "600378.SH"
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "type": "buy",
+        "price": 21.151129159927365,
+        "size": 1532,
+        "comm": 32.40352987300872,
+        "value": 32403.529873008723,
+        "pos_size": 1532,
+        "cash": 21863.005595660892,
+        "total_value": 100318.17597625323,
+        "stock_code": "603606.SH",
+        "stock_name": "603606.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "sell",
+        "price": 42.26769137191773,
+        "size": -748,
+        "comm": 31.61623314619446,
+        "value": 32286.01296025085,
+        "pos_size": 0,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "002773.SZ",
+        "stock_name": "002773.SZ"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "sell",
+        "price": 20.28968946647644,
+        "size": -1532,
+        "comm": 31.083804262641905,
+        "value": 32403.529873008723,
+        "pos_size": 0,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "603606.SH",
+        "stock_name": "603606.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "sell",
+        "price": 20.679300762176513,
+        "size": -1553,
+        "comm": 32.11495408366012,
+        "value": 32350.247099779124,
+        "pos_size": 0,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "600378.SH",
+        "stock_name": "600378.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 12.452439579963682,
+        "size": 1480.5,
+        "comm": 18.43583679813623,
+        "value": -17600.331485798837,
+        "pos_size": 0.0,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "601168.SH",
+        "stock_name": "601168.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 65.5554878616333,
+        "size": 478,
+        "comm": 31.335523197860716,
+        "value": 31335.523197860715,
+        "pos_size": 478,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "603786.SH",
+        "stock_name": "603786.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 3.203200047731399,
+        "size": 10134,
+        "comm": 32.46122928371,
+        "value": 32461.22928371,
+        "pos_size": 10134,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "601866.SH",
+        "stock_name": "601866.SH"
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "type": "buy",
+        "price": 9.369359656333922,
+        "size": 3338,
+        "comm": 31.27492253284263,
+        "value": 31274.92253284263,
+        "pos_size": 3338,
+        "cash": 2962.162772302747,
+        "total_value": 96777.5210315038,
+        "stock_code": "000519.SZ",
+        "stock_name": "000519.SZ"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "sell",
+        "price": 68.81111725616455,
+        "size": -478,
+        "comm": 32.89171404844666,
+        "value": 31335.523197860715,
+        "pos_size": 0,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "603786.SH",
+        "stock_name": "603786.SH"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "sell",
+        "price": 3.1668300762176513,
+        "size": -10134,
+        "comm": 32.09265599238968,
+        "value": 32461.22928371,
+        "pos_size": 0,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "601866.SH",
+        "stock_name": "601866.SH"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "sell",
+        "price": 9.890099618911742,
+        "size": -3338,
+        "comm": 33.013152527927396,
+        "value": 31274.92253284263,
+        "pos_size": 0,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "000519.SZ",
+        "stock_name": "000519.SZ"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 42.372331832885735,
+        "size": 757,
+        "comm": 32.0758551974945,
+        "value": 32075.8551974945,
+        "pos_size": 757,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 78.37830305480956,
+        "size": 409,
+        "comm": 32.056725949417114,
+        "value": 32056.725949417112,
+        "pos_size": 409,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "603899.SH",
+        "stock_name": "603899.SH"
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "type": "buy",
+        "price": 5.665659847259521,
+        "size": 5696,
+        "comm": 32.27159848999023,
+        "value": 32271.598489990232,
+        "pos_size": 5696,
+        "cash": 4361.10400195895,
+        "total_value": 97498.67389865697,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "sell",
+        "price": 43.94601167678834,
+        "size": -757,
+        "comm": 33.267130839328765,
+        "value": 32075.8551974945,
+        "pos_size": 0,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "002007.SZ",
+        "stock_name": "002007.SZ"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "sell",
+        "price": 74.59532817077637,
+        "size": -409,
+        "comm": 30.509489221847538,
+        "value": 32056.725949417112,
+        "pos_size": 0,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "603899.SH",
+        "stock_name": "603899.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "sell",
+        "price": 5.374620114326477,
+        "size": -5696,
+        "comm": 30.613836171203612,
+        "value": 32271.598489990232,
+        "pos_size": 0,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "buy",
+        "price": 17.46745076370239,
+        "size": 1798,
+        "comm": 31.4064764731369,
+        "value": 31406.4764731369,
+        "pos_size": 1798,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "601965.SH",
+        "stock_name": "601965.SH"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "buy",
+        "price": 6.860000133514404,
+        "size": 4605,
+        "comm": 31.590300614833836,
+        "value": 31590.30061483383,
+        "pos_size": 4605,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "000155.SZ",
+        "stock_name": "000155.SZ"
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "type": "buy",
+        "price": 1.4714700286388396,
+        "size": 19348,
+        "comm": 28.47000211410427,
+        "value": 28470.002114104267,
+        "pos_size": 19348,
+        "cash": 7098.92379682941,
+        "total_value": 96571.88384216708,
+        "stock_code": "600816.SH",
+        "stock_name": "600816.SH"
+      },
+      {
+        "datetime": "2020-12-04T00:00:00",
+        "type": "sell",
+        "price": 15.789431819665065,
+        "size": -1798,
+        "comm": 28.38939841175779,
+        "value": 31406.4764731369,
+        "pos_size": 0,
+        "cash": 35459.932810175436,
+        "total_value": 94617.19261680843,
+        "stock_code": "601965.SH",
+        "stock_name": "601965.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "sell",
+        "price": 1.4685300285816192,
+        "size": -19348,
+        "comm": 28.413118992997166,
+        "value": 28470.002114104267,
+        "pos_size": 0,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "600816.SH",
+        "stock_name": "600816.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "sell",
+        "price": 6.513479980945587,
+        "size": -4605,
+        "comm": 29.994575312254433,
+        "value": 31590.30061483383,
+        "pos_size": 0,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "000155.SZ",
+        "stock_name": "000155.SZ"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "buy",
+        "price": 12.052039961814879,
+        "size": 2542,
+        "comm": 30.636285582933425,
+        "value": 30636.285582933422,
+        "pos_size": 2542,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "buy",
+        "price": 14.014,
+        "size": 2140,
+        "comm": 29.98996,
+        "value": 29989.96,
+        "pos_size": 2140,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "600095.SH",
+        "stock_name": "600095.SH"
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "type": "buy",
+        "price": 5.165159847259521,
+        "size": 5764,
+        "comm": 29.77198135960388,
+        "value": 29771.98135960388,
+        "pos_size": 5764,
+        "cash": 3320.594251641932,
+        "total_value": 92043.99545861215,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-11T00:00:00",
+        "type": "sell",
+        "price": 10.74634788243895,
+        "size": -2542,
+        "comm": 27.317216317159815,
+        "value": 30636.285582933422,
+        "pos_size": 0,
+        "cash": 30610.493352484584,
+        "total_value": 90656.21179158676,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "type": "sell",
+        "price": 14.925059580802918,
+        "size": -2140,
+        "comm": 31.939627502918245,
+        "value": 29989.96,
+        "pos_size": 0,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "600095.SH",
+        "stock_name": "600095.SH"
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "type": "buy",
+        "price": 48.56852045822143,
+        "size": 582,
+        "comm": 28.26687890668487,
+        "value": 28266.87890668487,
+        "pos_size": 582,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "600511.SH",
+        "stock_name": "600511.SH"
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "type": "buy",
+        "price": 5.03000020980835,
+        "size": 11,
+        "comm": 0.05533000230789184,
+        "value": 55.330002307891846,
+        "pos_size": 5775,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "type": "buy",
+        "price": 29.00897954177856,
+        "size": 990,
+        "comm": 28.718889746360777,
+        "value": 28718.889746360775,
+        "pos_size": 990,
+        "cash": 5420.04147389101,
+        "total_value": 90385.20204546617,
+        "stock_code": "002294.SZ",
+        "stock_name": "002294.SZ"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "sell",
+        "price": 4.845149904727935,
+        "size": -5775,
+        "comm": 27.980740699803828,
+        "value": 29827.311361911772,
+        "pos_size": 0,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "601216.SH",
+        "stock_name": "601216.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "sell",
+        "price": 28.101869161605833,
+        "size": -990,
+        "comm": 27.820850469989775,
+        "value": 28718.889746360775,
+        "pos_size": 0,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "002294.SZ",
+        "stock_name": "002294.SZ"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "sell",
+        "price": 45.48446878051758,
+        "size": -582,
+        "comm": 26.47196083026123,
+        "value": 28266.87890668487,
+        "pos_size": 0,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "600511.SH",
+        "stock_name": "600511.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "buy",
+        "price": 11.111100381851195,
+        "size": 2541,
+        "comm": 28.233306070283884,
+        "value": 28233.306070283885,
+        "pos_size": 2541,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "buy",
+        "price": 5.735730019092559,
+        "size": 4806,
+        "comm": 27.565918471758838,
+        "value": 27565.91847175884,
+        "pos_size": 4806,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "600707.SH",
+        "stock_name": "600707.SH"
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "type": "buy",
+        "price": 11.731720267295836,
+        "size": 2392,
+        "comm": 28.06227487937164,
+        "value": 28062.274879371642,
+        "pos_size": 2392,
+        "cash": 3665.9590011100267,
+        "total_value": 86279.15932230755,
+        "stock_code": "002670.SZ",
+        "stock_name": "002670.SZ"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "sell",
+        "price": 6.393600095272064,
+        "size": -4806,
+        "comm": 30.727642057877542,
+        "value": 27565.91847175884,
+        "pos_size": 0,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "600707.SH",
+        "stock_name": "600707.SH"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "sell",
+        "price": 11.148839847564696,
+        "size": -2392,
+        "comm": 26.66802491537475,
+        "value": 28062.274879371642,
+        "pos_size": 0,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "002670.SZ",
+        "stock_name": "002670.SZ"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "sell",
+        "price": 11.378610342979432,
+        "size": -2541,
+        "comm": 28.913048881510736,
+        "value": 28233.306070283885,
+        "pos_size": 0,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "601717.SH",
+        "stock_name": "601717.SH"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "buy",
+        "price": 11.031020458221434,
+        "size": 2551,
+        "comm": 28.14013318892288,
+        "value": 28140.13318892288,
+        "pos_size": 2551,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "603979.SH",
+        "stock_name": "603979.SH"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "buy",
+        "price": 18.42840984725952,
+        "size": 1533,
+        "comm": 28.250752295848848,
+        "value": 28250.752295848844,
+        "pos_size": 1533,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "601615.SH",
+        "stock_name": "601615.SH"
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "type": "buy",
+        "price": 8.608600381851195,
+        "size": 3232,
+        "comm": 27.822996434143064,
+        "value": 27822.996434143064,
+        "pos_size": 3232,
+        "cash": 5590.2703391846135,
+        "total_value": 91772.3794957932,
+        "stock_code": "600546.SH",
+        "stock_name": "600546.SH"
+      }
+    ]
+  },
+  "portfolio_data": {
+    "data": [
+      {
+        "datetime": "2020-09-01T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-02T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-03T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-04T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-07T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-08T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-09T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-10T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-11T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-14T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-15T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-16T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-17T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-18T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-21T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-22T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-23T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-24T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-25T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-28T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-29T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-09-30T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-10-09T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-10-12T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-10-13T00:00:00",
+        "value": 100000.0
+      },
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "value": 101210.09090173156
+      },
+      {
+        "datetime": "2020-10-15T00:00:00",
+        "value": 99806.5512136212
+      },
+      {
+        "datetime": "2020-10-16T00:00:00",
+        "value": 100542.55200707824
+      },
+      {
+        "datetime": "2020-10-19T00:00:00",
+        "value": 99763.90839135558
+      },
+      {
+        "datetime": "2020-10-20T00:00:00",
+        "value": 101799.0513662091
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "value": 100998.73107990317
+      },
+      {
+        "datetime": "2020-10-22T00:00:00",
+        "value": 102437.5409329801
+      },
+      {
+        "datetime": "2020-10-23T00:00:00",
+        "value": 100581.2892082601
+      },
+      {
+        "datetime": "2020-10-26T00:00:00",
+        "value": 98583.5998085218
+      },
+      {
+        "datetime": "2020-10-27T00:00:00",
+        "value": 98295.49861795479
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "value": 98109.08819090134
+      },
+      {
+        "datetime": "2020-10-29T00:00:00",
+        "value": 96808.92664991623
+      },
+      {
+        "datetime": "2020-10-30T00:00:00",
+        "value": 96186.1178902269
+      },
+      {
+        "datetime": "2020-11-02T00:00:00",
+        "value": 95505.05560510283
+      },
+      {
+        "datetime": "2020-11-03T00:00:00",
+        "value": 96791.94860475187
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "value": 97740.7053780812
+      },
+      {
+        "datetime": "2020-11-05T00:00:00",
+        "value": 98138.6082120198
+      },
+      {
+        "datetime": "2020-11-06T00:00:00",
+        "value": 97502.85552456557
+      },
+      {
+        "datetime": "2020-11-09T00:00:00",
+        "value": 102798.32439663589
+      },
+      {
+        "datetime": "2020-11-10T00:00:00",
+        "value": 102254.80758526504
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "value": 100318.17597625323
+      },
+      {
+        "datetime": "2020-11-12T00:00:00",
+        "value": 101643.22579095431
+      },
+      {
+        "datetime": "2020-11-13T00:00:00",
+        "value": 102178.18830297061
+      },
+      {
+        "datetime": "2020-11-16T00:00:00",
+        "value": 100757.08478782244
+      },
+      {
+        "datetime": "2020-11-17T00:00:00",
+        "value": 98894.08566186496
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "value": 96777.5210315038
+      },
+      {
+        "datetime": "2020-11-19T00:00:00",
+        "value": 97544.88280118
+      },
+      {
+        "datetime": "2020-11-20T00:00:00",
+        "value": 100897.80350506795
+      },
+      {
+        "datetime": "2020-11-23T00:00:00",
+        "value": 100604.56366885197
+      },
+      {
+        "datetime": "2020-11-24T00:00:00",
+        "value": 101279.10347950947
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "value": 97498.67389865697
+      },
+      {
+        "datetime": "2020-11-26T00:00:00",
+        "value": 96688.8344249326
+      },
+      {
+        "datetime": "2020-11-27T00:00:00",
+        "value": 96999.64377780736
+      },
+      {
+        "datetime": "2020-11-30T00:00:00",
+        "value": 96776.10676379979
+      },
+      {
+        "datetime": "2020-12-01T00:00:00",
+        "value": 98901.2256030637
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "value": 96571.88384216708
+      },
+      {
+        "datetime": "2020-12-03T00:00:00",
+        "value": 95032.55206888598
+      },
+      {
+        "datetime": "2020-12-04T00:00:00",
+        "value": 94617.19261680843
+      },
+      {
+        "datetime": "2020-12-07T00:00:00",
+        "value": 94451.20387302639
+      },
+      {
+        "datetime": "2020-12-08T00:00:00",
+        "value": 94110.29310022594
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "value": 92043.99545861215
+      },
+      {
+        "datetime": "2020-12-10T00:00:00",
+        "value": 91754.67279435128
+      },
+      {
+        "datetime": "2020-12-11T00:00:00",
+        "value": 90656.21179158676
+      },
+      {
+        "datetime": "2020-12-14T00:00:00",
+        "value": 91061.4141536473
+      },
+      {
+        "datetime": "2020-12-15T00:00:00",
+        "value": 91374.13385541427
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "value": 90385.20204546617
+      },
+      {
+        "datetime": "2020-12-17T00:00:00",
+        "value": 91627.14237454103
+      },
+      {
+        "datetime": "2020-12-18T00:00:00",
+        "value": 90959.6407623546
+      },
+      {
+        "datetime": "2020-12-21T00:00:00",
+        "value": 90090.90261795686
+      },
+      {
+        "datetime": "2020-12-22T00:00:00",
+        "value": 87884.34075262712
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "value": 86279.15932230755
+      },
+      {
+        "datetime": "2020-12-24T00:00:00",
+        "value": 87269.01901964947
+      },
+      {
+        "datetime": "2020-12-25T00:00:00",
+        "value": 86290.73938231273
+      },
+      {
+        "datetime": "2020-12-28T00:00:00",
+        "value": 89196.72075037762
+      },
+      {
+        "datetime": "2020-12-29T00:00:00",
+        "value": 89525.25987200542
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "value": 91772.3794957932
+      },
+      {
+        "datetime": "2020-12-31T00:00:00",
+        "value": 93874.35057180485
+      }
+    ]
+  },
+  "position_data": {
+    "data": [
+      {
+        "datetime": "2020-09-01T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-02T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-03T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-04T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-07T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-08T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-09T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-10T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-11T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-14T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-15T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-16T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-17T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-18T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-21T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-22T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-23T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-24T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-25T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-28T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-29T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-09-30T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-09T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-12T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-13T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-14T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-15T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-16T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-19T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-20T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-21T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-22T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-23T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-26T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-27T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-28T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-29T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-10-30T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-02T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-03T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-04T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-05T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-06T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-09T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-10T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-11T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-12T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-13T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-16T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-17T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-18T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-19T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-20T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-23T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-24T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-25T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-26T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-27T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-11-30T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-01T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-02T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-03T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-04T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-07T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-08T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-09T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-10T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-11T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-14T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-15T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-16T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-17T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-18T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-21T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-22T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-23T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-24T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-25T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-28T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-29T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-30T00:00:00",
+        "size": 0
+      },
+      {
+        "datetime": "2020-12-31T00:00:00",
+        "size": 0
+      }
+    ]
+  },
+  "indicators_data": [
+    {
+      "id": "ATR_0_subplot",
+      "name": "ATR",
+      "subplot": true,
+      "background": null,
+      "render_lines": null,
+      "lines": [
+        {
+          "name": "atr",
+          "color": null,
+          "width": null,
+          "method": null,
+          "marker": null,
+          "marker_position": null,
+          "marker_shape": null,
+          "marker_text": null,
+          "marker_size": null,
+          "style": null,
+          "price_scale_id": null,
+          "price_format": null,
+          "opacity": null,
+          "data": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            1.0992858069283622,
+            1.055051073736074,
+            1.0104045902674819,
+            0.9775184936098437,
+            0.9584101006249469,
+            0.9592380377733882,
+            0.9457210677726943,
+            0.9045980580664137,
+            0.8828410811666504,
+            0.8804953169025844,
+            0.9183170690818363,
+            0.9170086797567246,
+            0.8886508133751757,
+            0.8630329471801994,
+            0.8363877203186255,
+            0.8173600042118822,
+            0.794691432482462,
+            0.8186419845027577,
+            0.8151675897356803,
+            0.8105127618974175,
+            0.8119047020266059,
+            0.8053400314071693,
+            0.7899586114915065,
+            0.7692472820992561,
+            0.7414438448612093,
+            0.7220549497535866,
+            0.7097652559897981,
+            0.6976390954318633,
+            0.6856649233756951,
+            0.6816887974750455,
+            0.6551395595084267,
+            0.6362011121861869,
+            0.6450439062358762,
+            0.6361120951058163,
+            0.6828184394216398,
+            0.6790456338034228,
+            0.6626852858845678,
+            0.6832076837207286,
+            0.6686928164718429,
+            0.6487862793665019,
+            0.64244450036111,
+            0.6308412890664827,
+            0.6172096703266614,
+            0.6374090885803931,
+            0.646879764425725,
+            0.6321026765422888,
+            0.6205238648860176,
+            0.6069150391924293,
+            0.5878495539100599,
+            0.5815745857736271,
+            0.5886049943023525,
+            0.5922761587805466,
+            0.5913992848466544,
+            0.6027279073576077,
+            0.6032473861428902,
+            0.5873010843302982,
+            0.581779594655408,
+            0.5652239365707165,
+            0.5562794078197808,
+            0.5494023781056028,
+            0.5623021755435118,
+            0.5507091357568519,
+            0.556372708971834,
+            0.5444890366879223,
+            0.5720254196264384,
+            0.5690236529849434,
+            0.552664831528011,
+            0.5417601734567441
+          ]
+        }
+      ]
+    }
+  ],
+  "analysis_data": {
+    "tradeanalyzer": {
+      "total": {
+        "total": 35,
+        "open": 3,
+        "closed": 32
+      },
+      "streak": {
+        "won": {
+          "current": 1,
+          "longest": 2
+        },
+        "lost": {
+          "current": 0,
+          "longest": 6
+        }
+      },
+      "pnl": {
+        "gross": {
+          "total": -8170.000298903413,
+          "average": -255.31250934073165
+        },
+        "net": {
+          "total": -10111.633859981659,
+          "average": -315.98855812442685
+        }
+      },
+      "won": {
+        "total": 11,
+        "pnl": {
+          "total": 21167.802695824386,
+          "average": 1924.3456996203988,
+          "max": 4309.44384601813
+        }
+      },
+      "lost": {
+        "total": 21,
+        "pnl": {
+          "total": -31279.43655580605,
+          "average": -1489.496978847907,
+          "max": -3377.0227676737036
+        }
+      },
+      "long": {
+        "total": 31,
+        "pnl": {
+          "total": -9240.092379360329,
+          "average": -298.0674961083977,
+          "won": {
+            "total": 21167.802695824386,
+            "average": 1924.3456996203988,
+            "max": 4309.44384601813
+          },
+          "lost": {
+            "total": -30407.89507518472,
+            "average": -1520.394753759236,
+            "max": -3377.0227676737036
+          }
+        },
+        "won": 11,
+        "lost": 20
+      },
+      "short": {
+        "total": 1,
+        "pnl": {
+          "total": -871.5414806213305,
+          "average": -871.5414806213305,
+          "won": {
+            "total": 0.0,
+            "average": 0.0,
+            "max": 0.0
+          },
+          "lost": {
+            "total": -871.5414806213305,
+            "average": -871.5414806213305,
+            "max": -871.5414806213305
+          }
+        },
+        "won": 0,
+        "lost": 1
+      },
+      "len": {
+        "total": 162,
+        "average": 5.0625,
+        "max": 10,
+        "min": 2,
+        "won": {
+          "total": 55,
+          "average": 5.0,
+          "max": 5,
+          "min": 5
+        },
+        "lost": {
+          "total": 107,
+          "average": 5.095238095238095,
+          "max": 10,
+          "min": 2
+        },
+        "long": {
+          "total": 157,
+          "average": 5.064516129032258,
+          "max": 10,
+          "min": 2,
+          "won": {
+            "total": 55,
+            "average": 5.0,
+            "max": 5,
+            "min": 5
+          },
+          "lost": {
+            "total": 102,
+            "average": 5.1,
+            "max": 10,
+            "min": 2
+          }
+        },
+        "short": {
+          "total": 5,
+          "average": 5.0,
+          "max": 5,
+          "min": 5,
+          "won": {
+            "total": 0,
+            "average": 0.0,
+            "max": 0,
+            "min": 9223372036854775807
+          },
+          "lost": {
+            "total": 5,
+            "average": 5.0,
+            "max": 5,
+            "min": 5
+          }
+        }
+      }
+    },
+    "drawdown": {
+      "len": 38,
+      "drawdown": 8.681049887932874,
+      "moneydown": 8923.973824831031,
+      "max": {
+        "len": 38,
+        "drawdown": 16.069488652938524,
+        "moneydown": 16519.16507432834
+      }
+    },
+    "returns": {
+      "2020-09-01T00:00:00": 0.0,
+      "2020-09-02T00:00:00": 0.0,
+      "2020-09-03T00:00:00": 0.0,
+      "2020-09-04T00:00:00": 0.0,
+      "2020-09-07T00:00:00": 0.0,
+      "2020-09-08T00:00:00": 0.0,
+      "2020-09-09T00:00:00": 0.0,
+      "2020-09-10T00:00:00": 0.0,
+      "2020-09-11T00:00:00": 0.0,
+      "2020-09-14T00:00:00": 0.0,
+      "2020-09-15T00:00:00": 0.0,
+      "2020-09-16T00:00:00": 0.0,
+      "2020-09-17T00:00:00": 0.0,
+      "2020-09-18T00:00:00": 0.0,
+      "2020-09-21T00:00:00": 0.0,
+      "2020-09-22T00:00:00": 0.0,
+      "2020-09-23T00:00:00": 0.0,
+      "2020-09-24T00:00:00": 0.0,
+      "2020-09-25T00:00:00": 0.0,
+      "2020-09-28T00:00:00": 0.0,
+      "2020-09-29T00:00:00": 0.0,
+      "2020-09-30T00:00:00": 0.0,
+      "2020-10-09T00:00:00": 0.0,
+      "2020-10-12T00:00:00": 0.0,
+      "2020-10-13T00:00:00": 0.0,
+      "2020-10-14T00:00:00": 0.012100909017315642,
+      "2020-10-15T00:00:00": -0.01386758647883335,
+      "2020-10-16T00:00:00": 0.007374273376922202,
+      "2020-10-19T00:00:00": -0.007744418658359065,
+      "2020-10-20T00:00:00": 0.02039959147219883,
+      "2020-10-21T00:00:00": -0.007861765660535203,
+      "2020-10-22T00:00:00": 0.01424582108797634,
+      "2020-10-23T00:00:00": -0.01812081496503759,
+      "2020-10-26T00:00:00": -0.019861441580868555,
+      "2020-10-27T00:00:00": -0.0029224048536125036,
+      "2020-10-28T00:00:00": -0.0018964289278186053,
+      "2020-10-29T00:00:00": -0.013252202879056818,
+      "2020-10-30T00:00:00": -0.006433381520090098,
+      "2020-11-02T00:00:00": -0.007080671307488906,
+      "2020-11-03T00:00:00": 0.013474606045674964,
+      "2020-11-04T00:00:00": 0.009802021624789825,
+      "2020-11-05T00:00:00": 0.004071004321070104,
+      "2020-11-06T00:00:00": -0.006478109879862304,
+      "2020-11-09T00:00:00": 0.05431091062493176,
+      "2020-11-10T00:00:00": -0.005287214694995934,
+      "2020-11-11T00:00:00": -0.01893927194960443,
+      "2020-11-12T00:00:00": 0.013208471962396384,
+      "2020-11-13T00:00:00": 0.00526313984875415,
+      "2020-11-16T00:00:00": -0.013908090745692436,
+      "2020-11-17T00:00:00": -0.018490006235101553,
+      "2020-11-18T00:00:00": -0.021402337826329054,
+      "2020-11-19T00:00:00": 0.007929132318096999,
+      "2020-11-20T00:00:00": 0.034373107103137235,
+      "2020-11-23T00:00:00": -0.0029063054499619545,
+      "2020-11-24T00:00:00": 0.006704862941186329,
+      "2020-11-25T00:00:00": -0.037326846812159586,
+      "2020-11-26T00:00:00": -0.00830615885674646,
+      "2020-11-27T00:00:00": 0.003214532005927362,
+      "2020-11-30T00:00:00": -0.0023045137621290346,
+      "2020-12-01T00:00:00": 0.021959127209473905,
+      "2020-12-02T00:00:00": -0.02355220318750495,
+      "2020-12-03T00:00:00": -0.015939750909249262,
+      "2020-12-04T00:00:00": -0.004370707121244877,
+      "2020-12-07T00:00:00": -0.001754319053348885,
+      "2020-12-08T00:00:00": -0.0036093851514983344,
+      "2020-12-09T00:00:00": -0.021956128001994646,
+      "2020-12-10T00:00:00": -0.0031433084018062107,
+      "2020-12-11T00:00:00": -0.011971717290371608,
+      "2020-12-14T00:00:00": 0.004469659100603929,
+      "2020-12-15T00:00:00": 0.003434162588770162,
+      "2020-12-16T00:00:00": -0.0108228857360545,
+      "2020-12-17T00:00:00": 0.013740527220928556,
+      "2020-12-18T00:00:00": -0.007284976862619086,
+      "2020-12-21T00:00:00": -0.009550808876515271,
+      "2020-12-22T00:00:00": -0.024492615804805218,
+      "2020-12-23T00:00:00": -0.018264703547561045,
+      "2020-12-24T00:00:00": 0.011472755473244334,
+      "2020-12-25T00:00:00": -0.011209930492245612,
+      "2020-12-28T00:00:00": 0.03367663075860183,
+      "2020-12-29T00:00:00": 0.0036833094183725823,
+      "2020-12-30T00:00:00": 0.02510039766430716,
+      "2020-12-31T00:00:00": 0.022904179749507536
+    },
+    "sharpe": {},
+    "sqn": {},
+    "calmar": {
+      "2020-09-30T00:00:00": null,
+      "2020-10-31T00:00:00": null,
+      "2020-11-30T00:00:00": null,
+      "2020-12-31T00:00:00": null
+    }
+  },
+  "metrics_data": {
+    "initial_capital": 100000.0,
+    "final_value": 93874.35057180485,
+    "total_pnl": -10111.633859981659,
+    "total_roi": -0.06125649428195146,
+    "annual_roi": -0.17360616782302496,
+    "max_drawdown": 16.069488652938524,
+    "profit_factor": 0.6767322249573976,
+    "win_rate": 31.428571428571427,
+    "sharpe_ratio": null,
+    "volatility": 0.22085668460552949,
+    "sortino_ratio": -1.166766831843904,
+    "calmar_ratio": -1.080346559697646,
+    "max_loss_streak": 6,
+    "total_trades": 32,
+    "avg_pl_ratio": 1.2919433385550319,
+    "avg_pl": -315.98855812442685,
+    "sqn": -0.9322588788634628
+  }
+}
