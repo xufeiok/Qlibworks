@@ -54,6 +54,9 @@ batch_selected_factors.csv
 train_tree_batch_*.csv
 train_tree_daily_ic_series_*.csv
 
+# 训练评分输出（大文件，超 GitHub 100MB 限制，不推送）
+score_tree*.csv
+
 # 模型训练缓存
 catboost_info/
 mlruns/
@@ -116,3 +119,7 @@ factor_data/registry/
 
 # GitHub
 .github/instructions/codacy.instructions.md
+
+# 用户规则：所有点开头条目（隐藏配置/目录）不推送，仅保留 .gitignore 本身
+.*
+!.gitignore

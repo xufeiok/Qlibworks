@@ -56,7 +56,7 @@ class CSNeutralize(Processor):
         except Exception as e:
             _logger.warning("Failed to fetch exposure data (%s). Falling back to mean-centering.", e)
             neutralized_data = data.groupby(level="datetime").apply(lambda x: x - x.mean())
-            df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
+            df.loc[:, (self.fields_group, data.columns)] = neutralized_data.astype(np.float32).values
             return df
 
         _logger.debug("Running Ridge cross-sectional neutralization for group: %s...", self.fields_group)
@@ -90,15 +90,21 @@ class CSNeutralize(Processor):
             X = X.fillna(0).values.astype(float)
             
             # 提取目标变量矩阵 Y (需要中性化的因子矩阵)
+            # [P0修复] 原实现用 sub_df.loc[(valid_instruments, date), :] 部分索引，
+            # valid_instruments 为 pd.Index 对象时，pandas 2.x 对 tuple 中带 Index
+            # 的部分索引行为不稳定，会导致 valid_sub_df 形状错乱（IndexError 根因）。
+            # 改为布尔掩码 + isin，索引天然对齐，行为确定。
             if isinstance(sub_df.index, pd.MultiIndex):
-                if sub_df.index.names[0] == 'datetime':
-                    valid_sub_df = sub_df.loc[(date, valid_instruments), :]
-                else:
-                    valid_sub_df = sub_df.loc[(valid_instruments, date), :]
+                _inst_level = 0 if sub_df.index.names[0] == "instrument" else 1
+                _mask = sub_df.index.get_level_values(_inst_level).isin(list(valid_instruments))
+                valid_sub_df = sub_df.loc[_mask]
             else:
-                valid_sub_df = sub_df.loc[valid_instruments]
-                
+                valid_sub_df = sub_df.loc[sub_df.index.isin(list(valid_instruments))]
+
             Y = valid_sub_df.values.astype(float)
+            if len(Y) == 0 or len(Y) != X.shape[0]:
+                # 防御：股票子集为空或与解释变量行数不一致时，退化为按日去均值
+                return sub_df - sub_df.mean()
             
             # 使用 Ridge 回归（引入微小的 L2 惩罚项 1e-5）
             # 这是 AQR 处理截面中性化防止矩阵奇异的杀手锏
@@ -110,18 +116,23 @@ class CSNeutralize(Processor):
             model.fit(X, Y_filled)
             
             # 残差 = 实际值 - 预测值 (剥离了市值和行业 Beta 后的纯净 Alpha)
-            residuals = Y_filled - model.predict(X)
+            # [P0修复] sklearn 单目标回归 predict 返回 1D (n,)，
+            # 与 2D 的 Y_filled (n, 1) 相减会触发 numpy 广播 → (n, n) 形状错乱
+            # （IndexError: boolean index did not match... 根因），需显式 reshape。
+            residuals = Y_filled - model.predict(X).reshape(Y_filled.shape)
             
             # 将原本是 NaN 的位置恢复为 NaN
             residuals[np.isnan(Y)] = np.nan
             
             # 写回结果
+            # [dtype] QLib 原始数据为 float32，残差需先转 float32 再写回，
+            # 避免 pandas 2.2+ 的"incompatible dtype" FutureWarning（未来会报错）。
             res_df = sub_df.copy()
-            res_df.loc[valid_sub_df.index, data.columns] = residuals
+            res_df.loc[valid_sub_df.index, data.columns] = residuals.astype(np.float32)
             return res_df
 
         neutralized_data = data.groupby(level='datetime', group_keys=False).apply(_robust_ridge_neutralize_slice)
-        df.loc[:, (self.fields_group, data.columns)] = neutralized_data.values
+        df.loc[:, (self.fields_group, data.columns)] = neutralized_data.astype(np.float32).values
         
         _logger.debug("Ridge Neutralization completed.")
         return df

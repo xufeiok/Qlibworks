@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import warnings
 import argparse
@@ -8,8 +8,18 @@ import copy
 os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
 
 # Conda site-packages 和 Roaming 路径优先级调整，避免 Roaming 版本覆盖
+# 使用 sys.prefix 和 CONDA_PREFIX 定位 conda 环境，避免字符串硬匹配
+_conda_root = os.environ.get("CONDA_PREFIX") or sys.prefix
 sp = list(sys.path)
-conda_sp = [p for p in sp if 'Anaconda' in p and 'site-packages' in p]
+conda_sp = []
+for p in sp:
+    if 'site-packages' not in p:
+        continue
+    try:
+        if os.path.commonpath([p, _conda_root]) == os.path.normpath(_conda_root):
+            conda_sp.append(p)
+    except ValueError:
+        continue  # 跨盘符路径无法比较公共同级目录，跳过
 roaming_sp = [p for p in sp if 'Roaming' in p]
 other_sp = [p for p in sp if p not in conda_sp and p not in roaming_sp]
 sys.path = conda_sp + other_sp + roaming_sp
@@ -51,7 +61,7 @@ LOCAL_CONFIG = {
     # 股票池：使用本地 instruments/main_board.txt
     # main_board 包含 600/601/603/000 开头的主板股票，支持 PIT 格式
     # 如需全市场测试，改为 all.txt 即可
-    "instruments": "csi500", 
+    "instruments": "main_board", 
     "start_time": "2020-01-01",
     "end_time": "2025-12-31",
     
@@ -69,18 +79,22 @@ LOCAL_CONFIG = {
     # 4) normalize_labels: 标签分位数化
     #    - 将标签转为截面分位数，消除极端值影响
     # 5) neutralize_labels: 标签中性化
-    #    - 剥离行业/市值效应后的纯 alpha 标签
+    #    - 剥离行业/市值效应，提取纯 alpha 标签
     "model_type": "tree",  # 模型流派 (tree / linear / nn)
     "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"],  # T+1开盘买入, T+5收盘卖出
     "label_names": ["LABEL_5D"],  # 标签名称
-    "factor_files": ["reversal_momentum_factors","quality_factors","style_factors","risk_factors","sentiment_factors","other_factors",],  # 因子配置文件
+    "factor_files": ["reversal_momentum_factors","quality_factors","style_factors","price_volume_factors","risk_factors","sentiment_factors","other_factors",],  # 因子配置文件
     "factor_cache_names": [],  # DuckDB + Parquet 预计算因子回退
+    # [对齐筛选端] 使用 select_factors.py 输出的跨窗口精选因子作为候选池，
+    # 跳过窗口内全量 243 因子 IC 粗筛，保证训练端与筛选端因子口径一致。
+    # 设为 None 则回退到原有的"窗口内跨窗口稳定 IC 粗筛"逻辑。
+    "preselected_factors_file": "selected_factors_20260802_014720_selected.csv",
     "normalize_features": True,  # 特征截面分位数化（树模型推荐）
-    "neutralize_features": False,  # [AQR修正] 树模型不推荐特征中性化
+    "neutralize_features": False,  # [AQR修正] 树模型不推荐特征中性化（可通过特征交互学习行业效应）
     "renormalize_features_after_neutralize": False,  # 树模型不需要再标准化
     "normalize_labels": True,  # 标签截面 rank 归一化 → [0,1]（通过 Processor 管线在每个 fold 内独立执行，消除前视偏差）
-    "neutralize_labels": False,  # 标签中性化（树模型不推荐）
-    "use_dynamic_filter": True,  # 启用流动性过滤（成交量>0 + 近20日均成交额>500万），涨跌停过滤已移至 filter_untradeable_labels
+    "neutralize_labels": True,  # 标签中性化：剥离行业/市值效应，提取纯 alpha 标签
+    "use_dynamic_filter": True,  # 启用流动性过滤（成交量>0 + 近20日均成交额>500万），涨跌停/一字板/持仓期停牌过滤已移至 filter_untradeable_labels
     "filter_new_stocks": True,   # 过滤上市不满 250 日次新股
     "filter_st": True,           # 过滤 ST 股票
     
@@ -120,7 +134,7 @@ LOCAL_CONFIG = {
             "test":  ("2025-01-01", "2025-12-31"),
         }
     ],
-    "top_k_factors": 20,  # 每窗口保留的因子数量
+    "top_k_factors": 60,  # 每窗口保留的因子数量（嵌入法精选后）
     "feature_selection_date_stride": 2,  # IC 采样跨步（2=隔日采样）
     "train_models": ["lgb", "xgb", "cat"],
     "model_params": {
@@ -129,14 +143,14 @@ LOCAL_CONFIG = {
             "learning_rate": 0.02, "max_depth": 5, "num_leaves": 15,
             "min_child_samples": 50, "subsample": 0.7, "colsample_bytree": 0.7,
             "reg_alpha": 0.1, "reg_lambda": 1.0,
-            "device_type": "gpu", "gpu_device_id": 0,
+            # device_type 由 train_lgb_model 自动检测 GPU 可用性，不硬编码
         },
         "xgb": {
             "num_boost_round": 500, "early_stopping_rounds": 50,
             "learning_rate": 0.02, "max_depth": 5,
             "min_child_weight": 5, "subsample": 0.7, "colsample_bytree": 0.7,
             "reg_alpha": 0.1, "reg_lambda": 1.0,
-            "device": "cuda",
+            # device 由 train_xgb_model 自动检测 GPU 可用性，不硬编码
         },
         "cat": {
             "num_boost_round": 500, "early_stopping_rounds": 50,
@@ -148,7 +162,25 @@ LOCAL_CONFIG = {
     "purged_kfold": {
         "enabled": True,
         "n_splits": 3,
-        "purge_days": 11,
+        "purge_days": 25,  # 5日标签的5倍，消除前视偏差
+        "embargo_days": 5,  # 验证集后禁运期，处理序列自相关
+    },
+    "cpcv": {
+        "enabled": False,  # 默认关闭，CPCV 更严格但训练更慢
+        "n_groups": 6,     # 时间分组数（组合数 C(6,2)=15）
+        "n_test_groups": 2,  # 验证集分组数
+        "purge_days": 25,
+        "embargo_days": 5,
+    },
+    "permutation_test": {
+        "enabled": True,   # 置换检验，验证因子显著性
+        "n_permutations": 200,  # 置换次数（200次足够p值精度，兼顾性能）
+        "pvalue_threshold": 0.05,  # p值阈值
+    },
+    "factor_neutralization": {
+        "enabled": False,  # 因子正交化（行业+市值中性）；树模型不开启，因子筛选保持原始信号
+        "by_industry": True,  # 行业内去均值
+        "by_marketcap": True,  # 市值中性化（对市值回归取残差）
     },
     "factor_redundancy_check": {
         "enabled": True,                   # [AQR 标准] 因子冗余剔除
@@ -161,8 +193,9 @@ LOCAL_CONFIG = {
     },
     "hyperparam_search": {
         "enabled": False,  # 默认关闭以加速（需要 Optuna，耗时较长）
-        "method": "coarse_grid",
-        "n_trials_per_model": 12,
+        "method": "optuna",  # optuna / coarse_grid
+        "n_trials_per_model": 20,  # 每个模型的试验次数
+        "objective": "icir",  # 优化目标：icir / ic
     },
     "feature_selection": {
         "method": "embedded",   
@@ -264,7 +297,7 @@ def build_effective_local_config(base_config: dict | None = None, latest_date: s
 # ==============================================================================
 
 def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_start, train_end,
-                                out_dir=None, batch_size=20, top_k=60, stride=2):
+                                out_dir=None, batch_size=20, top_k=60, stride=2, ic_history=None):
     """按 batch_size 分批计算因子 IC，避免 OOM。
 
     参数:
@@ -275,9 +308,13 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
     - batch_size: 每批因子数
     - top_k: 保留因子数
     - stride: 采样步长（2=隔日采 IC）
+    - ic_history: 可选，跨窗口 IC 历史（list of dict，每元素为 {因子名: 该窗口IC}）。
+        传入后粗筛改为"跨窗口稳定 IC"：要求当前窗口 IC 方向与历史均值方向一致，
+        并以"历史各窗口同号占比 × 跨窗口均值 IC 绝对值"综合打分，
+        避免单窗口 |IC| 选入训练期噪声因子。
 
     返回:
-    - selected_names: 按 |IC| 降序排列的 top_k 因子名列表
+    - selected_names: 按稳定 IC 降序排列的 top_k 因子名列表
     """
     from qlib.data import D
     import gc
@@ -366,18 +403,59 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
         del batch_df
         gc.collect()
 
-    # 按 |IC| 降序取 top_k
+    # 打分：单窗口 |IC| 或跨窗口稳定 IC（同号占比 × 跨窗口均值 |IC|）
+    # [跨窗口稳定 IC] 首个窗口无历史 → 退化为单窗口 |IC|；
+    # 后续窗口要求因子方向与历史均值方向一致，且历史各窗口同号占比 >= 0.5。
+    stable_score = {}
+    for factor, ic_val in all_ic_results.items():
+        if ic_val is None or (isinstance(ic_val, float) and np.isnan(ic_val)):
+            continue
+        score = abs(float(ic_val))
+        if ic_history:
+            hist_ics = [h.get(factor) for h in ic_history]
+            hist_ics = [x for x in hist_ics if x is not None and not (isinstance(x, float) and np.isnan(x))]
+            if len(hist_ics) > 0:
+                hist_mean = float(np.mean(hist_ics))
+                if np.sign(ic_val) != np.sign(hist_mean):
+                    # 当前窗口与历史方向相反 → 视为不稳定，剔除
+                    continue
+                _all_ics = hist_ics + [ic_val]
+                same_ratio = np.mean([1.0 if np.sign(x) == np.sign(ic_val) else 0.0 for x in _all_ics])
+                if same_ratio < 0.5:
+                    continue
+                score = abs(float(np.mean(_all_ics))) * same_ratio
+        stable_score[factor] = score
+
+    # 按稳定 IC 降序取 top_k
     ic_df = pd.Series(all_ic_results).sort_values(key=abs, ascending=False)
+    if ic_history:
+        # 有历史时按跨窗口稳定 IC 排序
+        ic_df = ic_df.reindex(sorted(stable_score.keys(), key=lambda k: stable_score[k], reverse=True))
     selected = list(ic_df.head(top_k).index)
     if selected:
-        print(f"    [筛选完成] Top {len(selected)} 因子 (|IC| 范围: "
-              f"{abs(ic_df[selected[-1]]):.4f} ~ {abs(ic_df[selected[0]]):.4f})")
+        if ic_history:
+            print(f"    [筛选完成] Top {len(selected)} 因子 (跨窗口稳定 IC, "
+                  f"同号占比>=0.5, 均值|IC|范围: {abs(ic_df[selected[-1]]):.4f} ~ {abs(ic_df[selected[0]]):.4f})")
+        else:
+            print(f"    [筛选完成] Top {len(selected)} 因子 (|IC| 范围: "
+                  f"{abs(ic_df[selected[-1]]):.4f} ~ {abs(ic_df[selected[0]]):.4f})")
+        # [IC 稳定性统计] 全量因子 IC 分布概览
+        _ic_vals = ic_df.dropna()
+        if len(_ic_vals) > 0:
+            print(f"    [IC 统计] 全量 {len(_ic_vals)} 因子: "
+                  f"mean={_ic_vals.mean():.4f}, std={_ic_vals.std():.4f}, "
+                  f"正IC占比={(_ic_vals > 0).mean():.2%}, "
+                  f"|IC|>0.02占比={(_ic_vals.abs() > 0.02).mean():.2%}")
     else:
         print("    [筛选完成] 无因子通过 IC 筛选，返回空列表")
 
     if out_dir is not None:
         ic_df.to_csv(Path(out_dir) / "batch_factor_ic.csv")
         pd.Series(selected).to_csv(Path(out_dir) / "batch_selected_factors.csv", index=False, header=["factor"])
+
+    # 记录本窗口 IC 到跨窗口历史（供下一窗口稳定 IC 粗筛使用）
+    if ic_history is not None:
+        ic_history.append(dict(all_ic_results))
 
     return selected
 
@@ -434,15 +512,26 @@ def _purged_kfold_train(
 
     n_splits = purged_kfold_config["n_splits"]
     purge_days = purged_kfold_config["purge_days"]
+    embargo_days = purged_kfold_config.get("embargo_days", 0)  # 验证集后禁运期
 
     train_start = pd.Timestamp(segments["train"][0])
     train_end = pd.Timestamp(segments["train"][1])
 
-    print(f"\n    [Purged K-Fold] n_splits={n_splits}, purge={purge_days}d")
+    print(f"\n    [Purged K-Fold] n_splits={n_splits}, purge={purge_days}d, embargo={embargo_days}d")
     print(f"    训练期: {train_start.date()} ~ {train_end.date()}")
+    # [Lopez de Prado 标准] Purged K-Fold 设计说明：
+    # 1) purge：每折训练数据在验证集开始前剔除 purge_days 个交易日，
+    #    防止标签时间窗口与验证集重叠造成信息泄漏。
+    # 2) embargo：在当前 Rolling Window 设计中，每折训练期严格在验证期之前结束
+    #    （train_end = valid_start - purge_days），因此 embargo 区间
+    #    [valid_end, valid_end+embargo) 已天然被排除在训练数据之外。
+    #    这与 CPCV 中显式 embargo 不同——CPCV 训练期可以跨越验证期，
+    #    而 Purged K-Fold 折叠间 training/validation 段严格有序不交叉。
+    # 3) 跨折训练集重叠（如前折验证集部分成为后折训练集）是 Purged K-Fold 标准行为，
+    #    因为 purge 已处理标签重叠，embargo 确保验证集序列自相关不泄漏。
 
     try:
-        train_frame_full, valid_frame_full = dataset.prepare(["train", "valid"])
+        train_frame_full, valid_frame_full = dataset.prepare(["train", "valid"], data_key=DataHandlerLP.DK_L)
     except Exception:
         print(f"    [CV] 无法获取全量数据，回退标准训练")
         return None
@@ -450,13 +539,14 @@ def _purged_kfold_train(
     # 提取日期索引
     train_dates = sorted(train_frame_full.index.get_level_values("datetime").unique())
 
-    # 计算折叠边界
+    # 计算折叠边界（Rolling Window 模式：训练集占2段，验证集占1段，步长1段）
     n_dates = len(train_dates)
-    if n_dates < n_splits * 2:
+    n_segments = n_splits + 2  # n_splits折 + 训练集多1段
+    fold_size = n_dates // n_segments
+    
+    if n_dates < n_splits * 30:
         print(f"    [警告] 训练期仅 {n_dates} 天，不足 Purged K-Fold 最低要求，回退标准训练")
         return None
-
-    fold_size = n_dates // (n_splits + 1)
 
     all_fold_models: list[list] = []
     fold_ic_results = []
@@ -464,15 +554,16 @@ def _purged_kfold_train(
     model_type_order = list(selected_models)
 
     for fold in range(n_splits):
-        fold_valid_start_idx = fold_size * (fold + 1)
-        fold_valid_end_idx = min(fold_size * (fold + 2), n_dates)
-        fold_train_end_idx = max(0, fold_valid_start_idx - purge_days)
+        fold_train_start_idx = fold * fold_size
+        fold_valid_start_idx = (fold + 2) * fold_size
+        fold_valid_end_idx = min((fold + 3) * fold_size, n_dates)
+        fold_train_end_idx = max(fold_train_start_idx + 1, fold_valid_start_idx - purge_days)
 
-        if fold_train_end_idx <= 0 or fold_valid_start_idx >= n_dates:
+        if fold_train_end_idx <= fold_train_start_idx or fold_valid_start_idx >= n_dates:
             print(f"    [CV fold {fold+1}] 边界不足，跳过")
             continue
 
-        fold_train_start = str(train_dates[0].date())
+        fold_train_start = str(train_dates[fold_train_start_idx].date())
         fold_train_end = str(train_dates[fold_train_end_idx].date())
         fold_valid_start = str(train_dates[fold_valid_start_idx].date())
         fold_valid_end = str(train_dates[fold_valid_end_idx - 1].date())
@@ -506,7 +597,7 @@ def _purged_kfold_train(
                 use_dynamic_filter=CONFIG.get("use_dynamic_filter", False),
             )
 
-            fold_train_frame = dataset_fold.prepare("train")
+            fold_train_frame = dataset_fold.prepare("train", data_key=DataHandlerLP.DK_L)
             # [Virtu-Renaissance 修复] 每折独立过滤不可交易标签
             if CONFIG.get("filter_untradeable_labels", False):
                 _fold_instruments = fold_train_frame.index.get_level_values("instrument").unique().tolist()
@@ -537,7 +628,7 @@ def _purged_kfold_train(
 
                 # 快速验证集 IC
                 try:
-                    valid_frame = dataset_fold.prepare("valid")
+                    valid_frame = dataset_fold.prepare("valid", data_key=DataHandlerLP.DK_L)
                     if "label" in valid_frame.columns.get_level_values(0):
                         actual_label = valid_frame["label"].squeeze()
                         if isinstance(actual_label, pd.DataFrame):
@@ -587,6 +678,398 @@ def _purged_kfold_train(
             return merged_models
 
     return None
+
+
+# ==============================================================================
+# [辅助函数] CPCV 组合式交叉验证
+# ==============================================================================
+
+def _cpcv_train(
+    dataset,
+    train_models_config,
+    model_params,
+    selected_models,
+    cpcv_config,
+    bundle_all,
+    CONFIG,
+    window_name,
+    feature_cache,
+    segments,
+    window_selected_factors,
+) -> list:
+    """CPCV（组合式交叉验证）训练。
+
+    [Lopez de Prado 标准] 将训练期分成 N 个等长分组，从中选 K 个作为验证集，
+    组合数 C(N, K)。每个组合独立训练模型，全部用于集成。
+    相比 K-Fold，验证集分布在整个时间轴上，能更全面地检测过拟合。
+
+    注意：CPCV 计算量较大（组合数 = C(N,K)），默认 N=6, K=2 → 15 个组合。
+    """
+    from itertools import combinations
+
+    n_groups = cpcv_config.get("n_groups", 6)
+    n_test_groups = cpcv_config.get("n_test_groups", 2)
+    purge_days = cpcv_config.get("purge_days", 25)
+    embargo_days = cpcv_config.get("embargo_days", 5)
+
+    try:
+        train_frame_full = dataset.prepare("train", data_key=DataHandlerLP.DK_L)
+        # [说明] 仅需 train_frame_full 提取日期索引，valid_frame_full 不参与 CPCV 逻辑
+    except Exception:
+        print(f"    [CPCV] 无法获取全量数据，回退标准训练")
+        return None
+
+    # 提取日期索引
+    train_dates = sorted(train_frame_full.index.get_level_values("datetime").unique())
+    n_dates = len(train_dates)
+
+    if n_dates < n_groups * 20:
+        print(f"    [警告] 训练期仅 {n_dates} 天，不足 CPCV 最低要求，回退标准训练")
+        return None
+
+    # 计算分组大小
+    group_size = n_dates // n_groups
+
+    # 生成所有验证集组合
+    all_group_indices = list(range(n_groups))
+    test_combos = list(combinations(all_group_indices, n_test_groups))
+
+    print(f"\n    [CPCV] n_groups={n_groups}, n_test_groups={n_test_groups}, "
+          f"combinations={len(test_combos)}, purge={purge_days}d, embargo={embargo_days}d")
+
+    all_comb_models: list[list] = []
+    model_type_order = list(selected_models)
+
+    for combo_idx, test_groups in enumerate(test_combos):
+        # 计算每个分组的日期索引范围
+        group_ranges = []
+        for g in range(n_groups):
+            start_idx = g * group_size
+            end_idx = min((g + 1) * group_size, n_dates)
+            group_ranges.append((start_idx, end_idx))
+
+        # 计算验证集的所有日期索引
+        valid_date_indices = set()
+        for g in test_groups:
+            start_idx, end_idx = group_ranges[g]
+            for i in range(start_idx, end_idx):
+                valid_date_indices.add(i)
+
+        # 计算 purge（验证集前）和 embargo（验证集后）的日期索引
+        purge_date_indices = set()
+        embargo_date_indices = set()
+        for g in test_groups:
+            start_idx, end_idx = group_ranges[g]
+            # purge：验证集标签影响的训练样本（验证集之前 purge_days）
+            purge_start = max(0, start_idx - purge_days)
+            for i in range(purge_start, end_idx):
+                purge_date_indices.add(i)
+            # embargo：验证集之后 embargo_days（处理序列自相关）
+            embargo_end = min(n_dates, end_idx + embargo_days)
+            for i in range(end_idx, embargo_end):
+                embargo_date_indices.add(i)
+
+        # 训练集 = 全部 - 验证集 - purge - embargo
+        train_date_indices = (
+            set(range(n_dates)) - valid_date_indices - purge_date_indices - embargo_date_indices
+        )
+        train_date_indices = sorted(train_date_indices)
+        valid_date_indices = sorted(valid_date_indices)
+
+        if len(train_date_indices) < 60 or len(valid_date_indices) < 10:
+            print(f"    [CPCV comb {combo_idx+1}/{len(test_combos)}] 样本不足，跳过")
+            continue
+
+        combo_valid_start = str(train_dates[valid_date_indices[0]].date())
+        combo_valid_end = str(train_dates[valid_date_indices[-1]].date())
+
+        if combo_idx < 3 or combo_idx == len(test_combos) - 1:
+            print(f"    [CPCV comb {combo_idx+1}/{len(test_combos)}] "
+                  f"train_days={len(train_date_indices)}, valid=[{combo_valid_start}, {combo_valid_end}]")
+        elif combo_idx == 3:
+            print(f"    [CPCV] ... 省略中间 {len(test_combos) - 4} 个组合 ...")
+
+        try:
+            # 创建 dataset（验证集用当前组合的验证范围）
+            # [修复] 非连续 test groups 时 valid segment 中间含训练数据，
+            # 通过对 valid_frame 按 valid_date_indices 过滤解决。
+            combo_segments = {
+                "train": (segments["train"][0], segments["train"][1]),
+                "valid": (combo_valid_start, combo_valid_end),
+                "test": segments["test"],
+            }
+
+            _, dataset_combo = create_custom_dataset(
+                instruments=CONFIG["instruments"],
+                feature_cache=feature_cache,
+                selected_feature_names=window_selected_factors,
+                start_time=segments["train"][0],
+                end_time=segments["test"][1],
+                fit_start_time=segments["train"][0],
+                # [修复前视偏差] fit 只用验证集之前的数据，严格遵循时间因果
+                # 验证集之后的训练数据也用此 fit 结果 transform（模拟实盘：用过去统计量 transform 现在）
+                fit_end_time=combo_valid_start,
+                segments=combo_segments,
+                model_type=CONFIG["model_type"],
+                normalize_features=CONFIG["normalize_features"],
+                neutralize_features=CONFIG["neutralize_features"],
+                renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+                normalize_labels=CONFIG["normalize_labels"],
+                neutralize_labels=CONFIG["neutralize_labels"],
+                use_dynamic_filter=CONFIG.get("use_dynamic_filter", False),
+            )
+
+            # 获取训练数据并过滤（只保留安全的训练日期）
+            combo_train_frame = dataset_combo.prepare("train", data_key=DataHandlerLP.DK_L)
+            train_dates_set = set([train_dates[i] for i in train_date_indices])
+            mask = combo_train_frame.index.get_level_values("datetime").isin(train_dates_set)
+            combo_train_filtered = combo_train_frame[mask]
+
+            if len(combo_train_filtered) < 100:
+                print(f"      过滤后样本不足，跳过")
+                continue
+
+            # 过滤不可交易标签
+            if CONFIG.get("filter_untradeable_labels", False):
+                _combo_instruments = combo_train_filtered.index.get_level_values("instrument").unique().tolist()
+                combo_train_filtered = apply_label_filter(
+                    combo_train_filtered, _combo_instruments,
+                    segments["train"][0], segments["train"][1], bundle_all.label_names
+                )
+
+            # [修复] 过滤 valid_frame 只保留真正验证日期，避免非连续 groups 时混入训练数据
+            combo_valid_filtered = None
+            try:
+                combo_valid_frame = dataset_combo.prepare("valid", data_key=DataHandlerLP.DK_L)
+                if combo_valid_frame is not None and len(combo_valid_frame) > 0:
+                    valid_dates_set = set([train_dates[i] for i in valid_date_indices])
+                    vmask = combo_valid_frame.index.get_level_values("datetime").isin(valid_dates_set)
+                    combo_valid_filtered = combo_valid_frame[vmask]
+            except Exception:
+                pass
+
+            # 包装 dataset（用过滤后的训练数据和验证数据）
+            dataset_combo = wrap_dataset_with_cached_train_frame(
+                dataset_combo,
+                train_frame=combo_train_filtered,
+                selected_feature_names=window_selected_factors,
+                label_names=bundle_all.label_names,
+                learn_data_key=DataHandlerLP.DK_L,
+                infer_data_key=DataHandlerLP.DK_I,
+                valid_frame=combo_valid_filtered,
+            )
+
+            # 训练该组合的模型
+            combo_models = []
+            if "lgb" in selected_models:
+                combo_models.append(train_lgb_model(dataset_combo, params=model_params.get("lgb")))
+            if "xgb" in selected_models:
+                combo_models.append(train_xgb_model(dataset_combo, params=model_params.get("xgb")))
+            if "cat" in selected_models:
+                combo_models.append(train_catboost_model(dataset_combo, params=model_params.get("cat")))
+
+            if combo_models:
+                all_comb_models.append(combo_models)
+
+        except Exception as e:
+            print(f"    [CPCV comb {combo_idx+1}] 训练失败: {e}")
+            continue
+
+    # 合并所有组合的模型
+    if all_comb_models:
+        type_models: dict[str, list] = {mt: [] for mt in model_type_order}
+        for combo_models in all_comb_models:
+            for m_idx, m_type in enumerate(model_type_order):
+                if m_idx < len(combo_models):
+                    type_models[m_type].append(combo_models[m_idx])
+
+        merged_models = []
+        for m_type in model_type_order:
+            type_list = type_models.get(m_type, [])
+            if type_list:
+                merged_models.extend(type_list)
+                print(f"    [CPCV 合并] {m_type}: {len(type_list)}/{len(all_comb_models)} 组合成功")
+
+        if merged_models:
+            print(f"    [CPCV 完成] {len(merged_models)} 个模型 (来自 {len(all_comb_models)} 组合)")
+            return merged_models
+
+    return None
+
+
+# ==============================================================================
+# [辅助函数] Optuna 超参搜索
+# ==============================================================================
+
+def _optuna_tune_hyperparams(
+    dataset,
+    feature_cache,
+    selected_models,
+    bundle_all,
+    CONFIG,
+    segments,
+    window_selected_factors,
+    n_trials=20,
+    objective="icir",
+) -> dict:
+    """Optuna 贝叶斯超参搜索。
+
+    [一线机构标准] 用 TPE 采样器自动搜索最优超参，目标为验证集 ICIR。
+    搜索完成后返回最优参数，用于最终模型训练。
+
+    注意：耗时较长，默认关闭。建议在第一个窗口搜索后复用参数。
+    """
+    try:
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+    except ImportError:
+        print("    [警告] Optuna 未安装 (pip install optuna)，跳过超参搜索")
+        return {}
+
+    from scipy.stats import spearmanr
+
+    # 准备验证数据（用最后 20% 作为验证集）
+    try:
+        train_frame_full = dataset.prepare("train", data_key=DataHandlerLP.DK_L)
+    except Exception:
+        print("    [Optuna] 无法获取训练数据，跳过")
+        return {}
+
+    train_dates = sorted(train_frame_full.index.get_level_values("datetime").unique())
+    n_dates = len(train_dates)
+    if n_dates < 120:
+        print("    [Optuna] 训练数据不足，跳过")
+        return {}
+
+    # 划分：前 80% 训练，后 20% 验证
+    split_idx = int(n_dates * 0.8)
+    tune_train_end = str(train_dates[split_idx - 1].date())
+    tune_valid_start = str(train_dates[split_idx].date())
+    tune_valid_end = str(train_dates[-1].date())
+
+    print(f"\n    [Optuna] 超参搜索 (n_trials={n_trials}, objective={objective})")
+    print(f"      训练: {segments['train'][0]} ~ {tune_train_end}")
+    print(f"      验证: {tune_valid_start} ~ {tune_valid_end}")
+
+    best_params = {}
+
+    for model_type in selected_models:
+        print(f"\n    [Optuna] 搜索 {model_type} 超参...")
+
+        def objective(trial, _mt=model_type):
+            # 定义搜索空间
+            if _mt == "lgb":
+                params = {
+                    "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+                    "max_depth": trial.suggest_int("max_depth", 3, 8),
+                    "num_leaves": trial.suggest_int("num_leaves", 8, 63),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+                    "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                    "min_child_samples": trial.suggest_int("min_child_samples", 10, 100),
+                    "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 10.0),
+                    "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 10.0),
+                    "verbose": -1,
+                }
+            elif _mt == "xgb":
+                params = {
+                    "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+                    "max_depth": trial.suggest_int("max_depth", 3, 8),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+                    "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                    "colsample_bytree": trial.suggest_float("colsample_bytree", 0.6, 1.0),
+                    "min_child_weight": trial.suggest_int("min_child_weight", 1, 20),
+                    "reg_alpha": trial.suggest_float("reg_alpha", 0.0, 10.0),
+                    "reg_lambda": trial.suggest_float("reg_lambda", 0.0, 10.0),
+                    "verbosity": 0,
+                }
+            elif _mt == "cat":
+                params = {
+                    "n_estimators": trial.suggest_int("n_estimators", 100, 500),
+                    "max_depth": trial.suggest_int("max_depth", 3, 8),
+                    "learning_rate": trial.suggest_float("learning_rate", 0.01, 0.1, log=True),
+                    "subsample": trial.suggest_float("subsample", 0.6, 1.0),
+                    "l2_leaf_reg": trial.suggest_float("l2_leaf_reg", 1.0, 10.0),
+                    "min_data_in_leaf": trial.suggest_int("min_data_in_leaf", 10, 100),
+                    "verbose": 0,
+                }
+            else:
+                return 0.0
+
+            try:
+                # 创建调参用的 dataset
+                tune_segments = {
+                    "train": (segments["train"][0], tune_train_end),
+                    "valid": (tune_valid_start, tune_valid_end),
+                    "test": segments["test"],
+                }
+                _, tune_dataset = create_custom_dataset(
+                    instruments=CONFIG["instruments"],
+                    feature_cache=feature_cache,
+                    selected_feature_names=window_selected_factors,
+                    start_time=segments["train"][0],
+                    end_time=segments["test"][1],
+                    fit_start_time=segments["train"][0],
+                    fit_end_time=tune_train_end,
+                    segments=tune_segments,
+                    model_type=CONFIG["model_type"],
+                    normalize_features=CONFIG["normalize_features"],
+                    neutralize_features=CONFIG["neutralize_features"],
+                    renormalize_features_after_neutralize=CONFIG["renormalize_features_after_neutralize"],
+                    normalize_labels=CONFIG["normalize_labels"],
+                    neutralize_labels=CONFIG["neutralize_labels"],
+                    use_dynamic_filter=CONFIG.get("use_dynamic_filter", False),
+                )
+
+                # 训练模型
+                if _mt == "lgb":
+                    model = train_lgb_model(tune_dataset, params=params)
+                elif _mt == "xgb":
+                    model = train_xgb_model(tune_dataset, params=params)
+                elif _mt == "cat":
+                    model = train_catboost_model(tune_dataset, params=params)
+                else:
+                    return 0.0
+
+                if model is None:
+                    return 0.0
+
+                # 验证集预测
+                valid_frame = tune_dataset.prepare("valid", data_key=DataHandlerLP.DK_L)
+                if "label" in valid_frame.columns.get_level_values(0):
+                    actual_label = valid_frame["label"].squeeze()
+                    if isinstance(actual_label, pd.DataFrame):
+                        actual_label = actual_label.iloc[:, 0]
+
+                    pred = model.predict(tune_dataset, segment="valid")
+                    if isinstance(pred, pd.DataFrame):
+                        pred = pred.iloc[:, 0]
+
+                    common_idx = actual_label.index.intersection(pred.index)
+                    if len(common_idx) > 50:
+                        ic_val, _ = spearmanr(pred.loc[common_idx], actual_label.loc[common_idx])
+                        if np.isnan(ic_val):
+                            return 0.0
+                        return ic_val
+            except Exception:
+                return 0.0
+
+            return 0.0
+
+        # 运行优化
+        study = optuna.create_study(direction="maximize", sampler=optuna.samplers.TPESampler(seed=42))
+        study.optimize(objective, n_trials=n_trials, show_progress_bar=False)
+
+        # 保存最优参数
+        best_p = study.best_params
+        best_score = study.best_value
+        best_params[model_type] = best_p
+
+        print(f"      {model_type} 最优 IC: {best_score:.4f}")
+        print(f"      最优参数: {best_p}")
+
+    print(f"\n    [Optuna] 超参搜索完成")
+    return best_params
 
 
 """
@@ -936,6 +1419,8 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
     selected_models = list(CONFIG.get("train_models", ["lgb", "xgb", "cat"]))
     model_params = CONFIG.get("model_params", {})
     model_ic_history: dict[str, list[float]] = {}
+    # Optuna 超参搜索结果（第一个窗口搜索后，后续窗口复用）
+    best_hyperparams: dict | None = None
 
     # 跨窗口因子追踪
     all_window_selected_factors: dict[str, list[str]] = {}
@@ -943,6 +1428,8 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
     # [P1] 窗口级标签缓存——消除重复 D.features() 调用
     window_label_cache: dict[str, pd.Series] = {}
     test_label_cache: dict[str, pd.Series] = {}
+    # [跨窗口稳定 IC] 各窗口因子 IC 历史（供后续窗口粗筛使用）
+    window_ic_history: list[dict[str, float]] = []
 
     for window_idx, window in enumerate(CONFIG["rolling_windows"]):
         window_name = window["name"]
@@ -960,18 +1447,53 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         }
 
         # ---- [P1 Step 1] 窗口独立因子 IC 粗筛 ----
-        print(f"\n  [Step 1] {window_name} 独立因子 IC 粗筛 (训练期数据)...")
-        window_selected_factors = _batch_factor_ic_selection(
-            feature_cache=global_feature_cache,
-            label_expr=label_expr,
-            label_name=label_name,
-            train_start=segments["train"][0],
-            train_end=segments["train"][1],
-            out_dir=CONFIG.get("output_dir", "."),
-            batch_size=20,
-            top_k=top_k,
-            stride=stride,
-        )
+        # 粗筛到 top_k * 2 个因子，作为后续嵌入法精选的候选池
+        # [对齐筛选端] 若配置了 preselected_factors_file（select_factors.py 跨窗口精选结果），
+        # 直接以其为候选池，跳过全量 243 因子 IC 粗筛，确保训练与筛选因子口径一致。
+        coarse_top_k = max(top_k * 2, 100)
+        preselected_file = CONFIG.get("preselected_factors_file")
+        window_selected_factors = None
+        if preselected_file:
+            _ps_path = os.path.join(os.path.dirname(__file__), preselected_file)
+            if not os.path.exists(_ps_path):
+                _ps_path = preselected_file
+            if os.path.exists(_ps_path):
+                try:
+                    _ps_df = pd.read_csv(_ps_path)
+                    if "factor_name" in _ps_df.columns:
+                        _preselected = [str(x) for x in _ps_df["factor_name"].tolist() if str(x) != "nan"]
+                    elif _ps_df.shape[1] >= 1:
+                        _preselected = [str(x) for x in _ps_df.iloc[:, 1].tolist() if str(x) != "nan"]
+                    else:
+                        _preselected = []
+                    # 过滤为全局缓存中实际可用的因子
+                    _avail = set(global_feature_cache.factor_names)
+                    _usable = [f for f in _preselected if f in _avail]
+                    print(f"\n  [Step 1] 使用筛选端精选因子池 (preselected: {len(_preselected)} 个, "
+                          f"缓存可用: {len(_usable)} 个, 来自 {os.path.basename(_ps_path)})")
+                    if len(_usable) >= 3:
+                        window_selected_factors = _usable
+                    else:
+                        print(f"  [警告] preselected 可用因子过少({len(_usable)})，回退到 IC 粗筛")
+                except Exception as _e:
+                    print(f"  [警告] 读取 preselected 文件失败({_e})，回退到 IC 粗筛")
+            else:
+                print(f"  [警告] preselected 文件不存在: {_ps_path}，回退到 IC 粗筛")
+
+        if window_selected_factors is None:
+            print(f"\n  [Step 1] {window_name} 独立因子 IC 粗筛 (训练期数据, top_k={coarse_top_k})...")
+            window_selected_factors = _batch_factor_ic_selection(
+                feature_cache=global_feature_cache,
+                label_expr=label_expr,
+                label_name=label_name,
+                train_start=segments["train"][0],
+                train_end=segments["train"][1],
+                out_dir=CONFIG.get("output_dir", "."),
+                batch_size=20,
+                top_k=coarse_top_k,
+                stride=stride,
+                ic_history=window_ic_history,
+            )
 
         if not window_selected_factors:
             print(f"  [警告] {window_name} 无可选因子，跳过该窗口")
@@ -981,78 +1503,430 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         for i, fname in enumerate(window_selected_factors, 1):
             print(f"      {i}. {fname}")
 
-        # ---- [P1 Step 2] 因子冗余检测 ----
-        factor_redun_conf = CONFIG.get("factor_redundancy_check", {})
-        if factor_redun_conf.get("enabled", False) and len(window_selected_factors) > 5:
-            corr_threshold = factor_redun_conf.get("correlation_threshold", 0.90)
-            print(f"\n  [Step 2] 因子冗余检测 (相关性 > {corr_threshold})...")
+        # ---- [自适应] 根据初始因子数动态调整 top_k ----
+        # 确保无论初始因子多少，都有合理的筛选比例和最终数量
+        n_initial = len(window_selected_factors)
+        if n_initial >= top_k * 2:
+            # 因子充足：使用配置的 top_k
+            effective_top_k = top_k
+            print(f"\n  [自适应] 因子充足 ({n_initial} 个)，top_k = {effective_top_k}")
+        else:
+            # 因子较少：动态调整为因子数的 60%，至少保留 3 个
+            effective_top_k = max(int(n_initial * 0.6), 3)
+            print(f"\n  [自适应] 因子较少 ({n_initial} 个)，动态调整 top_k = {effective_top_k} (60% 比例)")
 
-            # 从特征缓存获取窗口训练期的因子数据
-            feat_data = global_feature_cache.get_warehouse_df(
-                window_selected_factors,
-                start_time=segments["train"][0],
-                end_time=segments["train"][1],
-            )
+        # ---- [Step 1.2] 因子正交化（行业+市值中性化） ----
+        # [AQR 标准] 对因子做 Ridge 回归中性化，剥离行业和市值暴露，确保选出的是纯 Alpha
+        neutralized_feat_df = None  # 存储中性化后的数据，供后续步骤使用
+        neut_conf = CONFIG.get("factor_neutralization", {})
+        if neut_conf.get("enabled", False) and len(window_selected_factors) > 2:
+            print(f"\n  [Step 1.2] 因子正交化 (行业+市值 Ridge 中性化)...")
+            
+            try:
+                # 获取因子数据
+                neut_feat_data = global_feature_cache.get_warehouse_df(
+                    window_selected_factors,
+                    start_time=segments["train"][0],
+                    end_time=segments["train"][1],
+                )
+                
+                if not neut_feat_data.empty:
+                    if isinstance(neut_feat_data.columns, pd.MultiIndex):
+                        neut_feat_data.columns = neut_feat_data.columns.get_level_values(1)
+                    
+                    # 构建 MultiIndex 列（CSNeutralize 需要 fields_group 结构）
+                    neut_df = neut_feat_data.copy()
+                    neut_df.columns = pd.MultiIndex.from_product(
+                        [['feature'], neut_df.columns]
+                    )
+                    
+                    # 执行中性化（复用项目标准实现）
+                    from qlworks.processors.neutralize import CSNeutralize
+                    neutralizer = CSNeutralize(
+                        fields_group="feature",
+                        industry_field=neut_conf.get("industry_field", "sw_l1"),
+                        market_cap_field=neut_conf.get("market_cap_field", "circ_mv"),
+                        log_mc=neut_conf.get("log_mc", True),
+                    )
+                    neut_result = neutralizer(neut_df)
+                    
+                    # 提取中性化后的因子
+                    neutralized_feat_df = neut_result['feature'].copy()
+                    
+                    # 获取标签，计算中性化前后的 IC 对比
+                    neut_label_series, window_label_cache = _load_window_labels(
+                        all_instruments, label_expr,
+                        segments["train"][0], segments["train"][1],
+                        window_label_cache,
+                    )
+                    neut_label_series = neut_label_series.rename(label_name)
+                    
+                    # 计算中性化后的 IC
+                    neut_combined = neutralized_feat_df.join(
+                        neut_label_series.rename("_neut_label"), how="inner"
+                    ).dropna()
+                    
+                    if len(neut_combined) > 50:
+                        from scipy.stats import spearmanr
+                        neut_ic_list = []
+                        for col in neutralized_feat_df.columns:
+                            ic_val, _ = spearmanr(
+                                neut_combined[col], neut_combined["_neut_label"]
+                            )
+                            if not np.isnan(ic_val):
+                                neut_ic_list.append((col, abs(ic_val)))
+                        
+                        # 按中性化后的 |IC| 降序排序
+                        neut_ic_list.sort(key=lambda x: x[1], reverse=True)
+                        
+                        # 只保留中性化后仍有预测力的因子（|IC| > 0.005）
+                        min_ic = neut_conf.get("min_ic_after_neutralize", 0.005)
+                        significant_neut = [name for name, ic in neut_ic_list if ic > min_ic]
+                        
+                        # [自适应] 至少保留 30% 的因子，且不少于 2 个
+                        min_neut_keep = max(int(len(window_selected_factors) * 0.3), 2)
+                        if len(significant_neut) >= min_neut_keep:
+                            print(f"      中性化后有效因子: {len(significant_neut)}/{len(window_selected_factors)} "
+                                  f"(|IC| > {min_ic})")
+                            print(f"      中性化后 Top 5:")
+                            for name, ic in neut_ic_list[:5]:
+                                print(f"        {name}: |IC|={ic:.4f}")
+                            
+                            # 按中性化后的 IC 重新排序筛选
+                            window_selected_factors = significant_neut
+                            # 同步更新中性化数据的列顺序
+                            neutralized_feat_df = neutralized_feat_df[window_selected_factors]
+                        else:
+                            print(f"      [WARNING] 中性化后有效因子过少 ({len(significant_neut)})，保留原结果；"
+                                  f"后续置换检验/共线性/ICIR 将使用原始(未中性化)因子数据")
+                            neutralized_feat_df = None
+                    else:
+                        print(f"      [WARNING] 样本不足 ({len(neut_combined)})，跳过中性化 IC 计算；"
+                              f"后续步骤将使用原始因子数据")
+                        neutralized_feat_df = None
+                else:
+                    print(f"      因子数据为空，跳过中性化")
+                    neutralized_feat_df = None
+            except Exception as e:
+                print(f"      [WARNING] 因子正交化失败: {e}，保留原筛选结果；"
+                      f"后续步骤将使用原始因子数据")
+                neutralized_feat_df = None
+                import traceback
+                _tb = traceback.format_exc().strip().split("\n")
+                _last_frames = [l for l in _tb if "File " in l][-3:]
+                if _last_frames:
+                    print(f"      [诊断] 最后 3 帧:")
+                    for _f in _last_frames:
+                        print(f"        {_f.strip()}")
+
+        # ---- [Step 1.5] 置换检验（Permutation Test） ----
+        # [Lopez de Prado 标准] 验证因子显著性，回答"这个 IC 是真的还是运气？"
+        # [注] 若 factor_neutralization 开启，优先使用中性化后数据检验；否则用原始因子数据
+        perm_conf = CONFIG.get("permutation_test", {})
+        if perm_conf.get("enabled", False) and len(window_selected_factors) > 0:
+            n_perms = perm_conf.get("n_permutations", 200)
+            pvalue_thresh = perm_conf.get("pvalue_threshold", 0.05)
+            print(f"\n  [Step 1.5] 置换检验 (n_permutations={n_perms}, p<{pvalue_thresh})...")
+            
+            try:
+                # [注] 若 factor_neutralization 开启，优先使用中性化后数据
+                if neutralized_feat_df is not None and len(neutralized_feat_df.columns) > 0:
+                    perm_feat_data = neutralized_feat_df.copy()
+                    print(f"      [使用中性化后因子数据]")
+                else:
+                    # 回退到原始因子数据
+                    perm_feat_data = global_feature_cache.get_warehouse_df(
+                        window_selected_factors,
+                        start_time=segments["train"][0],
+                        end_time=segments["train"][1],
+                    )
+                    if not perm_feat_data.empty:
+                        if isinstance(perm_feat_data.columns, pd.MultiIndex):
+                            perm_feat_data.columns = perm_feat_data.columns.get_level_values(1)
+                
+                if not perm_feat_data.empty:
+                    
+                    # 获取标签
+                    perm_label_series, window_label_cache = _load_window_labels(
+                        all_instruments, label_expr,
+                        segments["train"][0], segments["train"][1],
+                        window_label_cache,
+                    )
+                    perm_label_series = perm_label_series.rename(label_name)
+                    
+                    # 合并并对齐
+                    perm_combined = perm_feat_data.join(
+                        perm_label_series.rename("_perm_label"), how="inner"
+                    ).dropna()
+                    
+                    if len(perm_combined) > 50:
+                        feat_cols = [c for c in perm_combined.columns if c != "_perm_label"]
+                        X_perm = perm_combined[feat_cols].values
+                        y_perm = perm_combined["_perm_label"].values
+                        n_samples = len(y_perm)
+                        
+                        # 计算真实 IC（Spearman = Pearson on ranks, 批量计算）
+                        from scipy.stats import rankdata
+                        n_factors = X_perm.shape[1]
+                        
+                        # 预排名 X（不变，只排一次，大幅减少重复计算）
+                        X_ranked = np.apply_along_axis(rankdata, 0, X_perm).astype(np.float64)
+                        X_centered = X_ranked - np.mean(X_ranked, axis=0)
+                        X_std = np.std(X_ranked, axis=0, ddof=1)
+                        X_std[X_std == 0] = 1.0  # 防除零
+                        
+                        def _spearman_batch(y_vec):
+                            """向量化 Spearman: 预排名的 X vs 原始 y，一次矩阵乘完成所有因子"""
+                            y_r = rankdata(y_vec).astype(np.float64)
+                            y_c = y_r - np.mean(y_r)
+                            y_s = np.std(y_r, ddof=1)
+                            if y_s == 0:
+                                return np.zeros(n_factors)
+                            return (X_centered.T @ y_c) / ((n_samples - 1) * X_std * y_s)
+                        
+                        real_ic = _spearman_batch(y_perm)
+                        
+                        # 置换检验：外层置换无法避免，内层已向量化为矩阵乘
+                        rng = np.random.RandomState(42)
+                        perm_ic_matrix = np.zeros((n_perms, n_factors))
+                        
+                        for p in range(n_perms):
+                            y_shuffled = y_perm[rng.permutation(n_samples)]
+                            perm_ic_matrix[p, :] = _spearman_batch(y_shuffled)
+                        
+                        # 计算 p 值（双尾检验）
+                        p_values = np.mean(np.abs(perm_ic_matrix) >= np.abs(real_ic), axis=0)
+                        
+                        # 筛选显著因子
+                        significant_mask = p_values < pvalue_thresh
+                        significant_factors = [
+                            feat_cols[i] for i in range(len(feat_cols)) 
+                            if significant_mask[i]
+                        ]
+                        
+                        n_sig = len(significant_factors)
+                        print(f"      显著因子: {n_sig}/{len(feat_cols)} (p<{pvalue_thresh})")
+                        
+                        # 打印不显著的因子（供参考）
+                        non_sig = [
+                            (feat_cols[i], p_values[i], real_ic[i]) 
+                            for i in range(len(feat_cols)) 
+                            if not significant_mask[i]
+                        ]
+                        if non_sig:
+                            non_sig_sorted = sorted(non_sig, key=lambda x: x[1])
+                            print(f"      不显著因子 (Top 5):")
+                            for fname, pval, ic in non_sig_sorted[:5]:
+                                print(f"        {fname}: IC={ic:.4f}, p={pval:.4f}")
+                        
+                        # 只保留显著因子（如果至少还有 5 个）
+                        # [自适应] 至少保留 50% 的因子，且不少于 3 个
+                        min_perm_keep = max(int(len(feat_cols) * 0.5), 3)
+                        if n_sig >= min_perm_keep:
+                            # 保持与 IC 排序的一致性
+                            window_selected_factors = [
+                                f for f in window_selected_factors if f in significant_factors
+                            ]
+                            print(f"      置换检验后保留 {len(window_selected_factors)} 个显著因子")
+                        else:
+                            print(f"      显著因子过少 ({n_sig})，保留原筛选结果")
+                    else:
+                        print(f"      样本不足 ({len(perm_combined)})，跳过置换检验")
+                else:
+                    print(f"      因子数据为空，跳过置换检验")
+            except Exception as e:
+                print(f"      置换检验失败: {e}，保留原筛选结果")
+                import traceback
+                _tb = traceback.format_exc().strip().split("\n")
+                _last_frames = [l for l in _tb if "File " in l][-3:]
+                if _last_frames:
+                    print(f"      [诊断] 最后 3 帧:")
+                    for _f in _last_frames:
+                        print(f"        {_f.strip()}")
+
+        # ---- [P1 Step 2] 共线性去除（复用 selection.py 标准实现） ----
+        # [AQR 标准] Spearman 相关性共线性过滤，保留 IC 更高的因子
+        # [注] 若 factor_neutralization 开启，优先使用中性化后数据计算相关性
+        from qlworks.models.selection import remove_collinear_features
+        factor_redun_conf = CONFIG.get("factor_redundancy_check", {})
+        if factor_redun_conf.get("enabled", False) and len(window_selected_factors) > 3:
+            corr_threshold = factor_redun_conf.get("correlation_threshold", 0.90)
+            print(f"\n  [Step 2] 共线性去除 (Spearman > {corr_threshold})...")
+
+            # [注] 若 factor_neutralization 开启，优先使用中性化后数据
+            if neutralized_feat_df is not None and len(neutralized_feat_df.columns) > 0:
+                # 只保留当前选中的因子
+                common_cols = [c for c in window_selected_factors if c in neutralized_feat_df.columns]
+                feat_data = neutralized_feat_df[common_cols].copy()
+                print(f"      [使用中性化后因子数据]")
+            else:
+                # 回退到原始因子数据
+                feat_data = global_feature_cache.get_warehouse_df(
+                    window_selected_factors,
+                    start_time=segments["train"][0],
+                    end_time=segments["train"][1],
+                )
+                if not feat_data.empty:
+                    if isinstance(feat_data.columns, pd.MultiIndex):
+                        feat_data.columns = feat_data.columns.get_level_values(1)
 
             if not feat_data.empty:
-                if isinstance(feat_data.columns, pd.MultiIndex):
-                    feat_data.columns = feat_data.columns.get_level_values(1)
-
                 # 降采样以加速计算（大样本时）
                 feat_data_clean = feat_data.dropna()
-                if len(feat_data_clean) > 5000:
+                if len(feat_data_clean) > 10000:
                     if isinstance(feat_data_clean.index, pd.MultiIndex):
                         feat_data_clean = feat_data_clean.groupby(
                             level='datetime', group_keys=False
                         ).apply(lambda x: x.sample(max(1, int(len(x) * 0.2)), random_state=42))
-                    if len(feat_data_clean) > 5000:
-                        feat_data_clean = feat_data_clean.sample(5000, random_state=42)
+                    if len(feat_data_clean) > 10000:
+                        feat_data_clean = feat_data_clean.sample(10000, random_state=42)
 
-                # 计算相关系数矩阵
-                corr_matrix = feat_data_clean.corr().abs()
-                upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-                high_corr_pairs = upper_tri.stack()
-                high_corr_pairs = high_corr_pairs[high_corr_pairs > corr_threshold]
-                high_corr_pairs = high_corr_pairs.sort_values(ascending=False)
+                # 按 IC 排序重排列（确保 remove_collinear_features 保留 IC 更高的因子）
+                feat_data_clean = feat_data_clean[window_selected_factors]
 
-                # 基于 |IC| 分数做 tiebreaker（保留 IC 更高的因子）
-                # IC 分数来自上一步的 _batch_factor_ic_selection 结果
-                to_drop = set()
-                for (col1, col2), _ in high_corr_pairs.items():
-                    if col1 in to_drop or col2 in to_drop:
-                        continue
-                    # 按列表顺序：越靠前的因子 |IC| 越大
-                    idx1 = window_selected_factors.index(col1) if col1 in window_selected_factors else 999
-                    idx2 = window_selected_factors.index(col2) if col2 in window_selected_factors else 999
-                    if idx1 <= idx2:
-                        to_drop.add(col2)
-                    else:
-                        to_drop.add(col1)
-
-                if to_drop:
-                    kept = [f for f in window_selected_factors if f not in to_drop]
-                    print(f"      剔除 {len(to_drop)} 个冗余因子: {sorted(to_drop)}")
+                # 调用标准共线性去除（Spearman 极速版）
+                feat_filtered = remove_collinear_features(
+                    feat_data_clean, 
+                    threshold=corr_threshold, 
+                    method="spearman"
+                )
+                
+                kept = list(feat_filtered.columns)
+                removed = [f for f in window_selected_factors if f not in kept]
+                
+                # [自适应 min_keep 保护] 至少保留 50% 的因子，且不少于 3 个
+                min_keep_collinear = max(int(len(window_selected_factors) * 0.5), 3)
+                if len(kept) < min_keep_collinear:
+                    print(f"      [警告] 共线性剔除后仅剩 {len(kept)} 个，低于最小保留数 {min_keep_collinear}")
+                    print(f"      为避免因子过少，保留原筛选结果（{len(window_selected_factors)} 个）")
+                    # 不更新 window_selected_factors，保留原结果
+                elif removed:
+                    print(f"      剔除 {len(removed)} 个高共线性因子")
                     print(f"      保留 {len(kept)} 个")
                     window_selected_factors = kept
                 else:
-                    print(f"      无高相关因子对")
+                    print(f"      无高共线性因子对")
             else:
-                print(f"      因子数据为空，跳过冗余检测")
+                print(f"      因子数据为空，跳过共线性检测")
+
+        # ---- [Step 2.5] 嵌入法精选（LightGBM Feature Importance） ----
+        # [Renaissance 标准] 用 LightGBM 的 feature importance 精选因子
+        # 相比单因子 IC 排序，嵌入法能捕捉因子间的交互效应和非线性关系
+        fs_conf = CONFIG.get("feature_selection", {})
+        # [自适应] 因子数 > effective_top_k 且至少 5 个时才运行嵌入法
+        if fs_conf.get("method") == "embedded" and len(window_selected_factors) > effective_top_k and len(window_selected_factors) >= 5:
+            embed_algo = fs_conf.get("algo", "lightgbm")
+            print(f"\n  [Step 2.5] 嵌入法精选 (algo={embed_algo}, top_k={effective_top_k})...")
+            
+            try:
+                # [注] 若 factor_neutralization 开启，优先使用中性化后因子数据
+                if neutralized_feat_df is not None and len(neutralized_feat_df.columns) > 0:
+                    # 只保留当前窗口选中的因子（修复列不同步问题）
+                    common_cols = [c for c in window_selected_factors if c in neutralized_feat_df.columns]
+                    embed_feat_data = neutralized_feat_df[common_cols].copy()
+                    print(f"      [使用中性化后因子数据, {len(common_cols)} 个因子]")
+                else:
+                    # 回退到原始因子数据
+                    embed_feat_data = global_feature_cache.get_warehouse_df(
+                        window_selected_factors,
+                        start_time=segments["train"][0],
+                        end_time=segments["train"][1],
+                    )
+                
+                if not embed_feat_data.empty:
+                    if isinstance(embed_feat_data.columns, pd.MultiIndex):
+                        embed_feat_data.columns = embed_feat_data.columns.get_level_values(1)
+                    
+                    # 获取标签（复用缓存）
+                    embed_label_series, window_label_cache = _load_window_labels(
+                        all_instruments, label_expr,
+                        segments["train"][0], segments["train"][1],
+                        window_label_cache,
+                    )
+                    embed_label_series = embed_label_series.rename(label_name)
+                    
+                    # 合并特征和标签
+                    embed_combined = embed_feat_data.join(
+                        embed_label_series.rename("_embed_label"), how="inner"
+                    )
+                    
+                    if len(embed_combined) > 100:
+                        # 准备数据（处理缺失值）
+                        x_train_embed, y_train_embed, _ = prepare_feature_selection_data(
+                            embed_combined, label_col="_embed_label"
+                        )
+                        
+                        # 嵌入法精选（LightGBM）
+                        fs_result = cached_select_features(
+                            x_train_embed, y_train_embed,
+                            method="embedded",
+                            algo=embed_algo,
+                            threshold=0.0,  # 用 max_features 控制数量
+                            model_kwargs={
+                                "max_features": effective_top_k,
+                                "n_estimators": 200,
+                                "learning_rate": 0.05,
+                                "max_depth": 5,
+                                "num_leaves": 15,
+                                "subsample": 0.7,
+                                "colsample_bytree": 0.7,
+                                "importance_type": "gain",
+                                "verbose": -1,
+                            },
+                            use_cache=True,
+                        )
+                        
+                        selected_embedded = fs_result.selected_features
+                        if len(selected_embedded) > 0:
+                            # 只保留在候选池中的因子（防御性检查）
+                            selected_embedded = [f for f in selected_embedded if f in window_selected_factors]
+                            if len(selected_embedded) >= max(effective_top_k // 2, 3):
+                                print(f"      嵌入法选中 {len(selected_embedded)} 个因子")
+                                # 打印 Top 10
+                                top10 = selected_embedded[:10]
+                                print(f"      Top 10: {', '.join(top10)}")
+                                window_selected_factors = selected_embedded
+                            else:
+                                print(f"      嵌入法选中因子过少 ({len(selected_embedded)})，保留原筛选结果")
+                        else:
+                            print(f"      嵌入法无选中因子，保留原筛选结果")
+                    else:
+                        print(f"      样本不足 ({len(embed_combined)})，跳过嵌入法精选")
+                else:
+                    print(f"      因子数据为空，跳过嵌入法精选")
+            except Exception as e:
+                print(f"      嵌入法精选失败: {e}，保留原筛选结果")
+                import traceback
+                _tb = traceback.format_exc().strip().split("\n")
+                _last_frames = [l for l in _tb if "File " in l][-3:]
+                if _last_frames:
+                    print(f"      [诊断] 最后 3 帧:")
+                    for _f in _last_frames:
+                        print(f"        {_f.strip()}")
 
         # ---- [P1 Step 3] ICIR 稳定性检测 ----
+        # [自适应] 至少 5 个因子就运行，min_keep 动态调整
         icir_conf = CONFIG.get("icir_stability_check", {})
-        if icir_conf.get("enabled", False) and len(window_selected_factors) > max(top_k // 2, 3):
+        if icir_conf.get("enabled", False) and len(window_selected_factors) >= 5:
             rolling_w = icir_conf["rolling_window"]
             keep_ratio = icir_conf["keep_ratio"]
-            min_keep = max(int(len(window_selected_factors) * keep_ratio), 3)
-            print(f"\n  [Step 3] ICIR 稳定性检测 (rolling={rolling_w}d, 保留率>{keep_ratio}, 至少{min_keep}个)...")
+            # min_keep：硬保底最少保留数，不基于 keep_ratio 叠加
+            min_keep_at_least = 3
+            print(f"\n  [Step 3] ICIR 稳定性检测 (rolling={rolling_w}d, 保留率>{keep_ratio}, 至少{min_keep_at_least}个)...")
 
-            # 获取窗口训练期因子数据
-            icir_feat_data = global_feature_cache.get_warehouse_df(
-                window_selected_factors,
-                start_time=segments["train"][0],
-                end_time=segments["train"][1],
-            )
+            # [注] 若 factor_neutralization 开启，优先使用中性化后数据
+            if neutralized_feat_df is not None and len(neutralized_feat_df.columns) > 0:
+                # 只保留当前选中的因子
+                common_cols = [c for c in window_selected_factors if c in neutralized_feat_df.columns]
+                icir_feat_data = neutralized_feat_df[common_cols].copy()
+                print(f"      [使用中性化后因子数据, {len(common_cols)} 个因子]")
+            else:
+                # 回退到原始因子数据
+                icir_feat_data = global_feature_cache.get_warehouse_df(
+                    window_selected_factors,
+                    start_time=segments["train"][0],
+                    end_time=segments["train"][1],
+                )
 
             if not icir_feat_data.empty:
                 if isinstance(icir_feat_data.columns, pd.MultiIndex):
@@ -1070,49 +1944,39 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                     icir_label_series = icir_label_series.rename(label_name)
 
                     # 对齐因子和标签数据，计算日频截面 IC
-                    # [P0修复3] 使用 DataFrame.join 替代 boolean indexing，
-                    # 彻底绕过 pandas MultiIndex boolean 对齐问题
+                    # [P0修复3] 向量化重写：先统一索引顺序（instrument 在前），
+                    # 再 join 对齐，最后按日分组一次性计算截面 Spearman IC。
+                    # 彻底绕开 MultiIndex boolean mask 对齐问题（Unalignable 异常根因）。
+                    icir_feat_data = icir_feat_data.sort_index()
+                    if icir_feat_data.index.names[0] != "instrument":
+                        icir_feat_data = icir_feat_data.swaplevel().sort_index()
+                    _lab_aligned_ser = icir_label_series.sort_index()
+                    if _lab_aligned_ser.index.names[0] != "instrument":
+                        _lab_aligned_ser = _lab_aligned_ser.swaplevel().sort_index()
+
                     combined = icir_feat_data.join(
-                        icir_label_series.rename("_icir_label"), how="inner"
+                        _lab_aligned_ser.rename("_icir_label"), how="inner"
                     )
                     if len(combined) > rolling_w // 2:
-                        icir_feat_data = combined.drop(columns=["_icir_label"])
                         icir_labels = combined["_icir_label"]
+                        feat_cols = [c for c in combined.columns if c != "_icir_label"]
 
-                        # 计算每日截面 Spearman IC
-                        daily_ic_data = []
-                        for dt, day_feat in icir_feat_data.groupby(level='datetime'):
-                            if dt not in icir_labels.index.get_level_values('datetime'):
+                        # 按日分组：对每个因子与标签计算截面 Spearman IC
+                        daily_ic_list = []
+                        for col in feat_cols:
+                            _sub = combined[[col, "_icir_label"]].dropna()
+                            if len(_sub) < 20:
                                 continue
-                            day_label = icir_labels.xs(dt, level='datetime')
-                            day_ic = {}
-                            for col in day_feat.columns:
-                                # [P0修复3c] day_feat 索引为 MultiIndex(instrument, datetime)，
-                                # day_label 索引为纯 instrument，需提取 instrument 级别再求交集
-                                _feat_instr = day_feat.index.get_level_values('instrument')
-                                common_instr = _feat_instr.intersection(day_label.index)
-                                if len(common_instr) < 20:
-                                    continue
-                                # 用 reindex 确保两边 instrument 顺序一致
-                                _lab_aligned = day_label.reindex(common_instr).dropna()
-                                _feat_subset = day_feat.loc[
-                                    _feat_instr.isin(common_instr), col
-                                ]
-                                # feat 按 instrument 重排以对齐 label
-                                _feat_instr_sub = _feat_subset.index.get_level_values('instrument')
-                                _feat_aligned = _feat_subset.groupby(_feat_instr_sub).first()
-                                _feat_aligned = _feat_aligned.reindex(_lab_aligned.index)
-                                valid_mask = _feat_aligned.notna() & _lab_aligned.notna()
-                                if valid_mask.sum() >= 20:
-                                    day_ic[col] = compute_ic(
-                                        _feat_aligned[valid_mask],
-                                        _lab_aligned[valid_mask]
-                                    )
-                            if day_ic:
-                                daily_ic_data.append(pd.Series(day_ic, name=dt))
+                            _ics = _sub.groupby(level="datetime").apply(
+                                lambda g: compute_ic(g[col], g["_icir_label"])
+                                if len(g) >= 20 else np.nan
+                            )
+                            _ics = _ics.dropna()
+                            if not _ics.empty:
+                                daily_ic_list.append(_ics.rename(col))
 
-                        if daily_ic_data:
-                            daily_ic_df = pd.concat(daily_ic_data, axis=1).T
+                        if daily_ic_list:
+                            daily_ic_df = pd.concat(daily_ic_list, axis=1)
 
                             # 滚动 ICIR: rolling_mean(IC) / rolling_std(IC) * sqrt(252)
                             rolling_mean = daily_ic_df.rolling(window=rolling_w, min_periods=rolling_w // 2).mean()
@@ -1123,7 +1987,7 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                             pos_ratio = (rolling_icir > 0).sum() / rolling_icir.notna().sum()
                             pos_ratio = pos_ratio.fillna(0).sort_values(ascending=False)
 
-                            keep_count = max(int(len(pos_ratio) * keep_ratio), min_keep)
+                            keep_count = max(int(len(pos_ratio) * keep_ratio), min_keep_at_least)
                             stable_factors = pos_ratio.head(keep_count).index.tolist()
                             removed_ic = [f for f in window_selected_factors if f not in stable_factors]
 
@@ -1153,6 +2017,11 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         for i, fname in enumerate(window_selected_factors, 1):
             print(f"      {i}. {fname}")
 
+        # [防御] 因子筛选后空值检查：所有筛选步骤可能导致因子被全部剔除
+        if not window_selected_factors:
+            print(f"  [警告] {window_name} 筛选后无可选因子，跳过该窗口")
+            continue
+
         # ---- [Step 4] 创建数据集 ----
         print(f"\n  [Step 4] 创建 {window_name} 数据集...")
         _, dataset_sub = create_custom_dataset(
@@ -1172,13 +2041,16 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
             neutralize_labels=CONFIG["neutralize_labels"],
             use_dynamic_filter=CONFIG.get("use_dynamic_filter", False),
         )
-
-        train_frame_window = dataset_sub.prepare("train")
+        # [P0 修复] 训练帧必须用 DK_L（learn_processors）获取！
+        # 默认 DK_I 只走 infer_processors（特征 CSQuantileNorm + Fillna），
+        # 标签保持原始收益尺度，导致 normalize_labels / neutralize_labels 完全失效，
+        # 模型退化为"原始收益预测"（raw_score mean≈0.0047），信号与未来收益 IC≈0，回测亏损。
+        train_frame_window = dataset_sub.prepare("train", data_key=DataHandlerLP.DK_L)
         print(f"    >>> 训练集: {train_frame_window.shape[0]} 行 x {train_frame_window.shape[1]} 列")
 
         valid_frame = None
         try:
-            valid_frame = dataset_sub.prepare("valid")
+            valid_frame = dataset_sub.prepare("valid", data_key=DataHandlerLP.DK_L)
             print(f"    >>> 验证集: {valid_frame.shape}")
         except Exception as e:
             print(f"      [警告] 验证集准备失败: {e}")
@@ -1209,15 +2081,72 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
             infer_data_key=DataHandlerLP.DK_I,
             valid_frame=valid_frame,
         )
+        print(f"    [DEBUG] wrap_dataset_with_cached_train_frame 完成")
 
         del train_frame_window
         gc.collect()
 
-        # ---- [Step 5] Purged K-Fold 训练 ----
+        # ---- [Step 4.5] Optuna 超参搜索 ----
+        # [一线机构标准] 贝叶斯优化自动搜索超参，第一个窗口搜索后后续窗口复用
+        hp_conf = CONFIG.get("hyperparam_search", {})
+        if hp_conf.get("enabled", False) and best_hyperparams is None:
+            n_trials = hp_conf.get("n_trials_per_model", 20)
+            hp_objective = hp_conf.get("objective", "icir")
+            hp_method = hp_conf.get("method", "optuna")
+
+            if hp_method == "optuna":
+                print(f"\n  [Step 4.5] Optuna 超参搜索 (n_trials={n_trials})...")
+                try:
+                    best_hp = _optuna_tune_hyperparams(
+                        dataset=dataset_sub,
+                        feature_cache=global_feature_cache,
+                        selected_models=selected_models,
+                        bundle_all=bundle_all,
+                        CONFIG=CONFIG,
+                        segments=segments,
+                        window_selected_factors=window_selected_factors,
+                        n_trials=n_trials,
+                        objective=hp_objective,
+                    )
+                    if best_hp:
+                        best_hyperparams = best_hp
+                        # 用最优参数更新 model_params
+                        for mt, params in best_hp.items():
+                            if mt in model_params:
+                                model_params[mt].update(params)
+                            else:
+                                model_params[mt] = params
+                        print(f"      超参搜索完成，已更新模型参数")
+                except Exception as e:
+                    print(f"      超参搜索失败: {e}，使用默认参数")
+                    best_hyperparams = {}
+            elif hp_method == "coarse_grid":
+                # 粗网格搜索（原有逻辑，此处不展开）
+                pass
+
+        # ---- [Step 5] 交叉验证训练 ----
         print(f"\n  [Step 5] {window_name} 模型训练...")
+        cpcv_cfg = CONFIG.get("cpcv", {})
         purged_cfg = CONFIG.get("purged_kfold", {})
 
-        if purged_cfg.get("enabled", False):
+        if cpcv_cfg.get("enabled", False):
+            # CPCV 组合式交叉验证（更严格，计算量更大）
+            cv_models = _cpcv_train(
+                dataset=dataset_sub,
+                train_models_config=CONFIG,
+                model_params=model_params,
+                selected_models=selected_models,
+                cpcv_config=cpcv_cfg,
+                bundle_all=bundle_all,
+                CONFIG=CONFIG,
+                window_name=window_name,
+                feature_cache=global_feature_cache,
+                segments=segments,
+                window_selected_factors=window_selected_factors,
+            )
+            cv_method = "CPCV"
+        elif purged_cfg.get("enabled", False):
+            # Purged K-Fold（默认，平衡速度与严谨性）
             cv_models = _purged_kfold_train(
                 dataset=dataset_sub,
                 train_models_config=CONFIG,
@@ -1231,14 +2160,16 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                 segments=segments,
                 window_selected_factors=window_selected_factors,  # [P0修复]
             )
+            cv_method = "Purged K-Fold"
         else:
             cv_models = None
+            cv_method = "Standard"
 
         if cv_models:
             models = cv_models
-            print(f"    >>> Purged K-Fold 训练完成: {len(models)} 个模型")
+            print(f"    >>> {cv_method} 训练完成: {len(models)} 个模型")
         else:
-            # 标准训练（无 Purged K-Fold）
+            # 标准训练（无交叉验证）
             models = []
             if "lgb" in selected_models:
                 print("    - LightGBM...")
@@ -1247,105 +2178,68 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                 print("    - XGBoost...")
                 models.append(train_xgb_model(dataset_sub, params=model_params.get("xgb")))
             if "cat" in selected_models:
-                print("    - CatBoost (GPU)...")
+                print("    - CatBoost (CPU, 避免与 LGB/XGB GPU 资源冲突)...")
                 models.append(train_catboost_model(dataset_sub, params=model_params.get("cat")))
 
         if not models:
             print(f"    [警告] {window_name} 无可用模型，跳过预测")
-            del dataset_sub, global_feature_cache
+            del dataset_sub, models  # 注意：global_feature_cache 是全窗口共享数据底座，不可删除
             gc.collect()
             continue
 
-        # ---- [Step 6] 模型 IC 加权（按模型类型分组追踪，兼容 CV/非CV） ----
-        # [P0修复] 使用模型类型名（lgb/xgb/cat）作为 EWMA-IC 键，
-        # 而非索引（model_0/model_1），消除 CV/非CV 模式间的不一致
-        model_ic_weights = []
-        # [P0修复2] 健壮检测 valid_frame 是否包含标签列。
-        # Qlib DatasetH.prepare() 在不同 handler 配置下可能返回：
-        # - MultiIndex 列: ("feature", col) / ("label", col)
-        # - flat 列名: 直接使用字段名
-        # 需要兼容两种格式。
-        _has_label = False
+        # ---- [Step 6] 等权集成（消除验证集过拟合） ----
+        # [Two Sigma 标准] 纯等权集成：不基于验证集 IC 优化权重，避免验证集污染
+        # 验证集 IC 仅作为诊断信息输出，不参与权重计算
+        n_models = len(models)
+        equal_weights = [1.0 / n_models] * n_models
+
+        # 诊断：计算验证集 IC（仅用于监控，不参与权重）
         if valid_frame is not None:
+            _has_label = False
             if isinstance(valid_frame.columns, pd.MultiIndex):
                 _has_label = "label" in valid_frame.columns.get_level_values(0)
             else:
                 _has_label = any("LABEL" in str(c).upper() for c in valid_frame.columns)
-        if valid_frame is not None and _has_label:
-            if isinstance(valid_frame.columns, pd.MultiIndex):
-                actual_label = valid_frame["label"].squeeze()
-            else:
-                _label_cols = [c for c in valid_frame.columns if "LABEL" in str(c).upper()]
-                actual_label = valid_frame[_label_cols[0]] if _label_cols else valid_frame.iloc[:, -1]
-            if isinstance(actual_label, pd.DataFrame):
-                actual_label = actual_label.iloc[:, 0]
-
-            # 按模型类型聚合验证 IC
-            type_ic_map: dict[str, list[float]] = {}
-            for m_idx, model in enumerate(models):
-                try:
-                    val_pred = model.predict(dataset_sub, segment="valid")
-                    if isinstance(val_pred, pd.DataFrame):
-                        val_pred = val_pred.iloc[:, 0]
-                    aligned_actual = actual_label.reindex(val_pred.index).dropna()
-                    valid_pred_aligned = val_pred.reindex(aligned_actual.index).dropna()
-                    common_idx = aligned_actual.index.intersection(valid_pred_aligned.index)
-
-                    if len(common_idx) >= 30:
-                        ic_val = compute_ic(valid_pred_aligned.loc[common_idx], aligned_actual.loc[common_idx])
-                        m_type = _infer_model_type(model)
-                        type_ic_map.setdefault(m_type, []).append(ic_val)
-                except Exception:
-                    pass
-
-            # 各类型取平均 IC，再计算 EWMA
-            for m_type in selected_models:
-                ic_list = type_ic_map.get(m_type, [])
-                if ic_list:
-                    mean_ic = np.mean(ic_list)
-                    ewma_ic = compute_ic_ewma(model_ic_history, m_type, mean_ic, half_life=4)
-                    model_ic_weights.append(max(ewma_ic, 0.0))
-                    print(f"      [{m_type}] 验证 IC={mean_ic:.4f} (n={len(ic_list)}), EWMA-IC={ewma_ic:.4f}")
+            
+            if _has_label:
+                if isinstance(valid_frame.columns, pd.MultiIndex):
+                    actual_label = valid_frame["label"].squeeze()
                 else:
-                    # 该类型在 CV 中全部失败，用历史平均或等权
-                    fallback_ic = compute_ic_ewma(model_ic_history, m_type, 0.0, half_life=4)
-                    model_ic_weights.append(max(fallback_ic, 1.0 / len(selected_models) * 0.5))
-                    print(f"      [{m_type}] 无有效验证IC, fallback={model_ic_weights[-1]:.4f}")
-        else:
-            model_ic_weights = [1.0 / len(selected_models)] * len(selected_models)
-            # [诊断] 输出 valid_frame 列结构，便于追踪为何 EWMA-IC 未计算
-            _col_info = "无 MultiIndex" if not isinstance(valid_frame.columns, pd.MultiIndex) else f"level0={list(valid_frame.columns.get_level_values(0).unique())}" if valid_frame is not None else "valid_frame=None"
-            print(f"      [权重诊断] valid_frame 列结构: {_col_info}, 使用等权 fallback")
+                    _label_cols = [c for c in valid_frame.columns if "LABEL" in str(c).upper()]
+                    actual_label = valid_frame[_label_cols[0]] if _label_cols else valid_frame.iloc[:, -1]
+                if isinstance(actual_label, pd.DataFrame):
+                    actual_label = actual_label.iloc[:, 0]
 
-        # 归一化权重
-        weights_arr = np.array(model_ic_weights, dtype=float)
-        if weights_arr.sum() > 0:
-            model_ic_weights = (weights_arr / weights_arr.sum()).tolist()
-        else:
-            model_ic_weights = [1.0 / len(selected_models)] * len(selected_models)
+                type_ic_map: dict[str, list[float]] = {}
+                for m_idx, model in enumerate(models):
+                    try:
+                        val_pred = model.predict(dataset_sub, segment="valid")
+                        if isinstance(val_pred, pd.DataFrame):
+                            val_pred = val_pred.iloc[:, 0]
+                        aligned_actual = actual_label.reindex(val_pred.index).dropna()
+                        valid_pred_aligned = val_pred.reindex(aligned_actual.index).dropna()
+                        common_idx = aligned_actual.index.intersection(valid_pred_aligned.index)
+                        if len(common_idx) >= 30:
+                            ic_val = compute_ic(valid_pred_aligned.loc[common_idx], aligned_actual.loc[common_idx])
+                            m_type = _infer_model_type(model)
+                            type_ic_map.setdefault(m_type, []).append(ic_val)
+                    except Exception:
+                        pass
 
-        # [P0修复] CV模式下 models 数量可能 > selected_models 数量（每类多折）。
-        # 将按类型计算的权重扩展到每个模型：同类型所有折叠共享同一权重。
-        if len(models) > len(model_ic_weights):
-            # 按模型类型统计每类模型数量
-            type_count: dict[str, int] = {}
-            for m in models:
-                m_type = _infer_model_type(m)
-                type_count[m_type] = type_count.get(m_type, 0) + 1
-            expanded_weights = []
-            for m_type in selected_models:
-                count = type_count.get(m_type, 0)
-                w = model_ic_weights[selected_models.index(m_type)] if m_type in selected_models else 0.0
-                expanded_weights.extend([w] * count)
-            model_ic_weights = expanded_weights
-            print(f"      集成权重 (CV展开): {[f'{w:.3f}' for w in model_ic_weights]}")
+                for m_type in selected_models:
+                    ic_list = type_ic_map.get(m_type, [])
+                    if ic_list:
+                        mean_ic = np.mean(ic_list)
+                        print(f"      [{m_type}] 验证 IC={mean_ic:.4f} (n={len(ic_list)}) [仅诊断]")
+                    else:
+                        print(f"      [{m_type}] 无有效验证IC [仅诊断]")
 
-        print(f"      集成权重: {[f'{w:.3f}' for w in model_ic_weights]}")
+        print(f"      集成权重: 等权 ({n_models} 个模型, 各 {1.0/n_models:.3f})")
 
         # ---- 质量闸门 ----
         gate_cfg = CONFIG.get("window_quality_gate", {})
         if gate_cfg.get("enabled", True):
-            healthy_count = sum(1 for w in model_ic_weights if w > 1e-6)
+            healthy_count = sum(1 for w in equal_weights if w > 1e-6)
             min_healthy = gate_cfg.get("min_healthy_models", 2)
             min_samples = gate_cfg.get("min_valid_samples", 100)
 
@@ -1365,7 +2259,7 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
 
         # ---- [Step 7] 预测 + 后处理 ----
         print(f"\n  [Step 7] {window_name} 测试集预测...")
-        predictions = predict_ensemble_models(models, dataset_sub, segment="test", model_weights=model_ic_weights)
+        predictions = predict_ensemble_models(models, dataset_sub, segment="test", model_weights=equal_weights)
 
         if isinstance(predictions, pd.Series):
             predictions = predictions.to_frame("score")
@@ -1420,7 +2314,7 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
             "n_factors": len(window_selected_factors),
             "n_models": len(models),
             "n_predictions": len(predictions),
-            "model_weights": model_ic_weights,
+            "model_weights": equal_weights,
         }
 
         # 如果有实际标签，计算测试集 IC
@@ -1448,6 +2342,14 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
 
         all_window_performance[window_name] = window_perf
         all_predictions.append(predictions)
+
+        # [断点续跑] 每窗口完成后增量保存预测结果，防止中途崩溃丢失已计算结果
+        _incr_path = Path(__file__).parent / f"score_tree_{window_name}.csv"
+        try:
+            predictions.to_csv(_incr_path)
+            print(f"    [增量保存] → {_incr_path}")
+        except Exception as _e:
+            print(f"    [增量保存] 失败: {_e}")
 
         print(f"    >>> {window_name} 完成: {len(predictions)} 条预测")
 
@@ -1702,24 +2604,6 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
         if ic_val is not None:
             quality = "优秀" if abs(ic_val) >= 0.04 else "良好" if abs(ic_val) >= 0.02 else "一般"
             print(f"  {wn}: IC={ic_val:.4f} ({quality}), {len(factors)} 因子")
-
-    # P2d. 等权基准对比
-    print(f"\n[P2d] 模型集成方式对比:")
-    has_ewma = any(
-        perf.get('model_weights')
-        and max(perf['model_weights']) - min(perf['model_weights']) > 0.05
-        for perf in all_window_performance.values()
-    )
-    has_equal = any(
-        perf.get('model_weights')
-        and max(perf['model_weights']) - min(perf['model_weights']) <= 0.05
-        for perf in all_window_performance.values()
-    )
-    for wn, perf in all_window_performance.items():
-        weights = perf.get('model_weights', [])
-        if weights:
-            print(f"  {wn}: 权重={[f'{w:.3f}' for w in weights]} "
-                  f"({'EWMA加权' if max(weights)-min(weights) > 0.05 else '等权'})")
 
     # =========================================================================
     # [6] 保存输出

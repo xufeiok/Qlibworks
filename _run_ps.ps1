@@ -1,1 +1,0 @@
-& "E:\Conda_env\Qlib_env\python.exe" "e:\Quant\Qlibworks\scripts\training\train_from_selected.py" 2>&1 | Out-File -FilePath "e:\Quant\Qlibworks\_ps_out.txt" -Encoding utf8

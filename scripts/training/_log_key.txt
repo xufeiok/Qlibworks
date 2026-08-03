@@ -1,0 +1,51 @@
+11: === 多因子树模型集成训练流水线（Pro 版） ===
+27: [2] 构建因子库 (Factor Library)...
+28: >>> 加载完成: 160 个因子表达式, 标签: LABEL_5D (5日跨夜动量)
+191: [动态池过滤-直读模式] main_board (filter_pipe 留待 processor 管线处理)
+192: [静态池过滤-文件直读] main_board.txt: 3,371 只股票 (PIT格式)
+193: >>> 动态过滤: 开启
+196: === 滚动窗口 [1/4]: Test_2023 ===
+198: 验证: 2022-01-01 ~ 2022-12-20
+199: 测试: 2023-01-01 ~ 2023-12-31
+202: [Step 1] Test_2023 独立因子 IC 粗筛 (训练期数据)...
+204: [标签] 加载完成: 683,451 条, 239 个交易日
+213: [筛选完成] Top 20 因子 (|IC| 范围: 0.0732 ~ 0.0970)
+215: >>> Test_2023 初筛因子 (20 个):
+237: [Step 2] 因子冗余检测 (相关性 > 0.9)...
+238: 剔除 13 个冗余因子: ['Alpha19', 'Alpha20', 'Alpha31', 'Alpha34', 'Alpha65', 'Alpha66', 'Alpha71', 'MA10', 'MA20', 'MA30', 'MA5', 'ROC5', 'short_reversal']
+241: >>> Test_2023 最终因子 (7 个):
+250: [Step 4] 创建 Test_2023 数据集...
+268: >>> 验证集: (735409, 8)
+270: [Step 5] Test_2023 模型训练...
+272: [Purged K-Fold] n_splits=3, purge=11d
+274: [CV fold 1/3] train=[2020-01-02, 2020-06-16], valid=[2020-07-03, 2020-12-24]
+292: [LGB] 验证标签: valid=333631/333631, mean=0.500178, std=0.288674
+293: Training until validation scores don't improve for 50 rounds
+334: [CV fold 2/3] train=[2020-01-02, 2020-12-10], valid=[2020-12-25, 2021-06-24]
+352: [LGB] 验证标签: valid=344194/344194, mean=0.500173, std=0.288674
+353: Training until validation scores don't improve for 50 rounds
+395: [CV fold 3/3] train=[2020-01-02, 2021-06-09], valid=[2021-06-25, 2021-12-17]
+413: [LGB] 验证标签: valid=352293/352293, mean=0.500169, std=0.288675
+414: Training until validation scores don't improve for 50 rounds
+455: [CV 完成] 9 个模型 (来自 3 折叠)
+456: >>> Purged K-Fold 训练完成: 9 个模型
+457: [lgb] 验证 IC=0.0768 (n=3), EWMA-IC=0.0768
+458: [xgb] 验证 IC=0.0802 (n=3), EWMA-IC=0.0802
+459: [cat] 验证 IC=0.0799 (n=3), EWMA-IC=0.0799
+462: [闸门] Test_2023 通过: 735409 样本, 9/9 健康模型
+464: [Step 7] Test_2023 测试集预测...
+468: [测试 IC] Test_2023 rank IC = 0.0281
+469: >>> Test_2023 完成: 770074 条预测
+472: === 滚动窗口 [2/4]: Test_2024 ===
+474: 验证: 2023-01-01 ~ 2023-12-20
+475: 测试: 2024-01-01 ~ 2024-12-31
+478: [Step 1] Test_2024 独立因子 IC 粗筛 (训练期数据)...
+480: [标签] 加载完成: 712,760 条, 239 个交易日
+489: [筛选完成] Top 20 因子 (|IC| 范围: 0.0661 ~ 0.0896)
+491: >>> Test_2024 初筛因子 (20 个):
+513: [Step 2] 因子冗余检测 (相关性 > 0.9)...
+514: 剔除 8 个冗余因子: ['Alpha132', 'Alpha71', 'MA20', 'QTLD30', 'QTLD60', 'QTLU60', 'SUMN30', 'SUMN60']
+517: [Step 3] ICIR 稳定性检测 (rolling=60d, 保留率>0.8, 至少9个)...
+519: ICIR 检测异常: Unalignable boolean Series provided as indexer (index of the boolean Series and of the indexed object do not match).，跳过
+525: >>> Test_2024 最终因子 (12 个):
+539: [Step 4] 创建 Test_2024 数据集...

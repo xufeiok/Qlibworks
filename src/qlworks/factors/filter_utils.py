@@ -371,14 +371,16 @@ def _check_qlib_available():
 
 
 def filter_untradeable_labels(label_df, instruments, start_time, end_time):
-    """剔除无法买入的标签样本（涨跌停 / 一字板）。
+    """剔除无法买入的标签样本（涨跌停 / 一字板 / 持仓期停牌）。
 
-    根据策略 T+1 开盘买入、T+5 收盘卖出的执行规则，检查 T+1 开盘时
-    是否涨跌停无法成交或出现一字板跳空，将无法执行交易的样本标签设为 NaN。
+    根据策略 T+1 开盘买入、T+5 收盘卖出的执行规则，检查：
+    1. T+1 开盘时是否涨跌停无法成交或出现一字板跳空
+    2. T+5 收盘时是否停牌（成交量=0，收盘价可能为停牌前价格）
 
     检测逻辑：
     1. 跳空检测：T+1 开盘相对 T 收盘涨跌幅 ≥ ±9%
     2. 一字板检测：T+1 全天 high==low（无成交/无对手盘）
+    3. 持仓期末停牌检测：T+5 成交量=0（收盘价不可靠）
 
     参数：
     - label_df: 标签 DataFrame，MultiIndex(datetime, instrument) 或 plain index
@@ -438,6 +440,26 @@ def filter_untradeable_labels(label_df, instruments, start_time, end_time):
             untradeable = untradeable | (one_liner[one_liner.columns[0]] == True)
     except Exception:
         pass  # 一字板检测失败不影响主流程
+
+    # 持仓期末停牌检测：T+5 成交量=0 时收盘价为停牌前价格，标签不可靠
+    # Ref($volume, -5) 取 T+5 日成交量
+    try:
+        vol_t5 = D.features(
+            instruments, ["Ref($volume, -5) == 0"],
+            start_time=start_time, end_time=end_time, freq="day",
+        )
+        if vol_t5 is not None and not vol_t5.empty:
+            if isinstance(vol_t5.columns, pd.MultiIndex):
+                vol_t5.columns = vol_t5.columns.droplevel(1)
+            vol_t5 = vol_t5.reindex(price_df.index, fill_value=False)
+            t5_suspended = vol_t5[vol_t5.columns[0]] == True
+            untradeable = untradeable | t5_suspended
+            _susp_n = t5_suspended.sum()
+            if _susp_n > 0:
+                print(f"      [停牌检测] 剔除 {_susp_n} 个 T+5 停牌样本 "
+                      f"({start_time} ~ {end_time})")
+    except Exception:
+        pass  # 停牌检测失败不影响主流程
 
     # 标注不可交易
     label_df_clean.loc[untradeable[untradeable].index, label_name] = float("nan")

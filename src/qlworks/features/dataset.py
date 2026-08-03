@@ -62,9 +62,18 @@ class CustomFeatureCache:
     ) -> Optional[pd.Series]:
         """从 parquet 文件加载单个因子数据，返回 (instrument, datetime) MultiIndex Series。"""
         dfs = []
+        # [性能优化] 只读必要列（instrument/datetime/值列），避免整表解压进内存；
+        # 因子数多（数百个）时可将内存峰值降低数倍。列缺失时回退全读，保证兼容。
+        read_cols = ["instrument", "datetime", meta["value_col_name"]] if meta.get("value_col_name") else None
         for file_path in meta["files"]:
             try:
-                df = pd.read_parquet(file_path)
+                if read_cols is not None:
+                    try:
+                        df = pd.read_parquet(file_path, columns=read_cols)
+                    except (KeyError, ValueError):
+                        df = pd.read_parquet(file_path)
+                else:
+                    df = pd.read_parquet(file_path)
             except Exception as e:
                 print(f"    [警告] 读取 {file_path} 失败：{e}")
                 continue
@@ -162,20 +171,13 @@ class CustomFeatureCache:
         if not series_list:
             return pd.DataFrame()
 
-        # 构建联合索引并合并
-        index_parts = []
-        for s in series_list:
-            idx_df = s.index.to_frame(index=False)
-            index_parts.append(idx_df)
-
-        index_frame = (
-            pd.concat(index_parts, ignore_index=True)
-            .drop_duplicates()
-            .sort_values(["instrument", "datetime"], kind="mergesort")
-        )
-        target_index = pd.MultiIndex.from_frame(index_frame)
-
-        df = pd.concat(series_list, axis=1, sort=False).reindex(target_index)
+        # [内存优化] 原实现：先 concat 所有因子的索引并 drop_duplicates 构建
+        # 联合索引再 reindex，241 因子 × 数百万行会生成数 GB 临时数组，
+        # 全量因子加载时实测触发 MemoryError。
+        # 现改为直接 concat(axis=1) 对齐（各 Series 已 lexsort，pandas 内部
+        # 逐对 union），避免一次性构建超大 index_frame，峰值内存大幅下降。
+        df = pd.concat(series_list, axis=1, sort=False)
+        df = df.sort_index()
         df.index.names = ["instrument", "datetime"]
         df.columns = pd.MultiIndex.from_product([["feature"], df.columns])
         if not df.index.is_monotonic_increasing:
@@ -776,6 +778,7 @@ def _build_processors(
     normalize_labels: bool = False,
     neutralize_labels: bool = False,
     symmetric_orthogonalization: bool = False,
+    neutralize_industry_field: str = "sw_l1",
 ) -> tuple[list, list]:
     """
     工厂函数：根据模型流派和中性化需求构建 Processor 流水线。
@@ -817,7 +820,9 @@ def _build_processors(
         label_neutralize = {
             "class": "CSNeutralize",
             "module_path": "qlworks.processors.neutralize",
-            "kwargs": {"fields_group": "label"},
+            "kwargs": {"fields_group": "label",
+                       "industry_field": neutralize_industry_field,
+                       "market_cap_field": "circ_mv"},
         }
         base_learn.append(label_neutralize)
 
@@ -852,7 +857,9 @@ def _build_processors(
         feat_neutralize = {
             "class": "CSNeutralize",
             "module_path": "qlworks.processors.neutralize",
-            "kwargs": {"fields_group": "feature"},
+            "kwargs": {"fields_group": "feature",
+                       "industry_field": neutralize_industry_field,
+                       "market_cap_field": "circ_mv"},
         }
         # 中性化前先补齐缺失，避免回归残差化阶段因 NaN 失稳
         pre_fill_value = 0.5 if model_type == "tree" else 0
@@ -995,6 +1002,7 @@ def create_custom_dataset(
     segments: Optional[Dict[str, tuple]] = None,
     use_dynamic_filter: bool = False,
     symmetric_orthogonalization: bool = False,
+    neutralize_industry_field: str = "sw_l1",
 ):
     """
     功能概述：
@@ -1055,6 +1063,7 @@ def create_custom_dataset(
             normalize_labels=normalize_labels,
             neutralize_labels=neutralize_labels,
             symmetric_orthogonalization=symmetric_orthogonalization,
+            neutralize_industry_field=neutralize_industry_field,
         )
     
     segments = segments or {
