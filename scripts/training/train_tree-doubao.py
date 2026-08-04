@@ -48,6 +48,7 @@ from qlworks.models.training import (
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
+from qlworks.processors.neutralize import _fetch_features_direct
 from qlworks.factors.filter_utils import filter_codes_post, filter_untradeable_labels, apply_label_filter
 import qlib
 from _config import resolve_runtime_config
@@ -88,7 +89,7 @@ LOCAL_CONFIG = {
     # [对齐筛选端] 使用 select_factors.py 输出的跨窗口精选因子作为候选池，
     # 跳过窗口内全量 243 因子 IC 粗筛，保证训练端与筛选端因子口径一致。
     # 设为 None 则回退到原有的"窗口内跨窗口稳定 IC 粗筛"逻辑。
-    "preselected_factors_file": "selected_factors_20260802_014720_selected.csv",
+    "preselected_factors_file": "",
     "normalize_features": True,  # 特征截面分位数化（树模型推荐）
     "neutralize_features": False,  # [AQR修正] 树模型不推荐特征中性化（可通过特征交互学习行业效应）
     "renormalize_features_after_neutralize": False,  # 树模型不需要再标准化
@@ -316,7 +317,6 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
     返回:
     - selected_names: 按稳定 IC 降序排列的 top_k 因子名列表
     """
-    from qlib.data import D
     import gc
 
     factor_names = feature_cache.factor_names
@@ -334,7 +334,7 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
     for i in range(0, len(all_instruments), batch_size_instr):
         batch_inst = all_instruments[i:i+batch_size_instr]
         try:
-            _df = D.features(
+            _df = _fetch_features_direct(
                 batch_inst,
                 [label_expr],
                 start_time=train_start,
@@ -357,6 +357,9 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
         label_dates = label_dates[::stride]
         label_series = label_series[label_series.index.get_level_values("datetime").isin(label_dates)]
     print(f"    [标签] 加载完成: {len(label_series):,} 条, {len(label_dates)} 个交易日")
+    print(f"    [标签-诊断] index names={label_series.index.names}, "
+          f"datetime dtype={label_series.index.get_level_values('datetime').dtype}, "
+          f"样本: {label_series.index.get_level_values('datetime')[:3].tolist()}")
 
     # 分批计算 IC
     all_ic_results = {}
@@ -368,6 +371,7 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
 
         batch_df = feature_cache.get_warehouse_df(batch_names, start_time=train_start, end_time=train_end)
         if batch_df.empty:
+            print(f"    [诊断] batch_df 为空！selected_names={batch_names[:5]}...")
             continue
 
         # 规范化列名
@@ -377,6 +381,9 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
 
         common_index = batch_df.index.intersection(label_series.index)
         if len(common_index) < 100:
+            print(f"    [诊断] common_index 过短 ({len(common_index)}), "
+                  f"batch_df idx 样本: {batch_df.index[:3].tolist() if len(batch_df)>0 else 'EMPTY'}, "
+                  f"batch_df datetime dtype={batch_df.index.get_level_values('datetime').dtype if len(batch_df)>0 else 'N/A'}")
             continue
 
         batch_df = batch_df.loc[common_index]
@@ -1095,7 +1102,6 @@ def _compute_ic_decay(feature_cache, selected_factors, instruments, train_start,
     返回:
     - decay_df: DataFrame, 行=horizon, 列=factor, 值=IC
     """
-    from qlib.data import D
 
     print(f"\n    [IC 衰减分析] horizons={horizons}")
 
@@ -1114,7 +1120,7 @@ def _compute_ic_decay(feature_cache, selected_factors, instruments, train_start,
             label_frames = []
             for i in range(0, len(instruments), 500):
                 batch_inst = instruments[i:i+500]
-                _df = D.features(batch_inst, [label_expr], start_time=train_start, end_time=train_end, freq="day")
+                _df = _fetch_features_direct(batch_inst, [label_expr], start_time=train_start, end_time=train_end, freq="day")
                 if _df is not None and not _df.empty:
                     label_frames.append(_df)
 
@@ -1164,7 +1170,6 @@ def _compute_group_ic(predictions_df, actual_label_series, analysis_type="indust
     返回:
     - group_ic: {group_name: IC_value} 或空 dict
     """
-    from qlib.data import D
 
     if predictions_df.empty or actual_label_series.empty:
         return {}
@@ -1193,7 +1198,7 @@ def _compute_group_ic(predictions_df, actual_label_series, analysis_type="indust
             for i in range(0, len(all_instruments), batch_size):
                 batch_inst = all_instruments[i:i+batch_size]
                 try:
-                    _df = D.features(batch_inst, ['$sw_l1'], start_time=ref_date, end_time=ref_date)
+                    _df = _fetch_features_direct(batch_inst, ['$sw_l1'], start_time=ref_date, end_time=ref_date)
                     if _df is not None and not _df.empty:
                         ind_frames.append(_df)
                 except Exception:
@@ -1231,7 +1236,7 @@ def _compute_group_ic(predictions_df, actual_label_series, analysis_type="indust
                 batch_inst = all_instruments[i:i+500]
                 try:
                     ref_d = str(sample_dates[0].date()) if sample_dates else "2024-01-01"
-                    _df = D.features(
+                    _df = _fetch_features_direct(
                         batch_inst, ['$market_cap'],
                         start_time=ref_d,
                         end_time=str(sample_dates[-1].date()) if sample_dates else "2024-12-31"
@@ -1289,8 +1294,6 @@ def _load_window_labels(instruments, label_expr, train_start, train_end,
     返回:
     - (label_series, updated_cache)
     """
-    from qlib.data import D
-
     cache_key = f"{train_start}_{train_end}"
     if label_cache is not None and cache_key in label_cache:
         return label_cache[cache_key], label_cache
@@ -1300,7 +1303,7 @@ def _load_window_labels(instruments, label_expr, train_start, train_end,
     for i in range(0, len(instruments), 500):
         batch_inst = instruments[i:i+500]
         try:
-            _df = D.features(
+            _df = _fetch_features_direct(
                 batch_inst, [label_expr],
                 start_time=train_start, end_time=train_end, freq="day",
             )
@@ -2527,10 +2530,9 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                             last_window_test["test"][0], last_window_test["test"][1],
                         )
                 except Exception:
-                    from qlib.data import D
                     label_frames = []
                     for i in range(0, len(all_instruments), 500):
-                        _df = D.features(all_instruments[i:i+500], [label_expr],
+                        _df = _fetch_features_direct(all_instruments[i:i+500], [label_expr],
                                          start_time=segments["test"][0],
                                          end_time=segments["test"][1], freq="day")
                         if _df is not None and not _df.empty:

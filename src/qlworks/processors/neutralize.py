@@ -2,9 +2,50 @@ import pandas as pd
 import numpy as np
 import logging
 from qlib.data.dataset.processor import Processor
+from qlib.data.data import ExpressionD
 from sklearn.linear_model import Ridge
 
 _logger = logging.getLogger(__name__)
+
+
+def _fetch_features_direct(instruments, fields, start_time, end_time, freq='day'):
+    """绕过 D.features() 的 ParallelExt 缺陷（Windows spawn 多进程下
+    Operators 模块不可见导致 SyntaxError），直接用 ExpressionD.expression()
+    逐 instrument 逐 field 取值。返回与 D.features() 相同格式的 DataFrame
+    （MultiIndex: instrument x datetime, columns=fields 原始字符串）。"""
+    import pandas as pd
+
+    result_parts = []
+    for inst in instruments:
+        inst_data = {}
+        for f in fields:
+            try:
+                series = ExpressionD.expression(inst, f, start_time, end_time, freq)
+                inst_data[f] = series
+            except Exception:
+                inst_data[f] = pd.Series(dtype=float)
+
+        df_inst = pd.DataFrame(inst_data)
+        if df_inst.empty or len(df_inst) == 0:
+            continue
+        df_inst.index.name = 'datetime'
+        df_inst['instrument'] = inst
+        df_inst = df_inst.reset_index().set_index(['instrument', 'datetime'])
+        result_parts.append(df_inst)
+
+    if not result_parts:
+        return pd.DataFrame(columns=fields)
+
+    result = pd.concat(result_parts).sort_index()
+    # datetime 层统一转 Timestamp（ExpressionD.expression 返回的 index 可能是 str，
+    # 与 parquet 缓存的 pd.Timestamp 类型不一致会导致 MultiIndex.intersection 返回空集）
+    dt_level = result.index.names.index('datetime') if 'datetime' in result.index.names else -1
+    if dt_level >= 0:
+        new_levels = list(result.index.levels)
+        new_levels[dt_level] = pd.to_datetime(new_levels[dt_level])
+        result.index = result.index.set_levels(new_levels)
+    return result
+
 
 class CSNeutralize(Processor):
     """
@@ -28,36 +69,28 @@ class CSNeutralize(Processor):
         _logger.debug("Fetching exposures (industry, market_cap) for robust Ridge neutralization...")
         
         # 2. 从 Qlib 拉取行业和市值数据
-        from qlib.data import D
         instruments = df.index.get_level_values('instrument').unique().tolist()
         start_time = df.index.get_level_values('datetime').min()
         end_time = df.index.get_level_values('datetime').max()
         
-        try:
-            fields = [f"${self.industry_field}", f"${self.market_cap_field}"]
-            exposures = D.features(
-                instruments, 
-                fields, 
-                start_time=start_time, 
-                end_time=end_time, 
-                freq='day'
-            )
-            exposures.columns = ['industry', 'market_cap']
-            
-            if df.index.names != exposures.index.names:
-                exposures = exposures.swaplevel()
-            exposures = exposures.reindex(df.index)
-            
-            # 市值对数化处理
-            if self.log_mc:
-                exposures['market_cap'] = np.where(exposures['market_cap'] <= 0, np.nan, exposures['market_cap'])
-                exposures['market_cap'] = np.log(exposures['market_cap'])
-                
-        except Exception as e:
-            _logger.warning("Failed to fetch exposure data (%s). Falling back to mean-centering.", e)
+        fields = [f"${self.industry_field}", f"${self.market_cap_field}"]
+        exposures = _fetch_features_direct(instruments, fields, start_time, end_time, freq='day')
+        if exposures.empty:
+            _logger.warning("行业/市值暴露度数据为空，回退均值中心化。")
             neutralized_data = data.groupby(level="datetime").apply(lambda x: x - x.mean())
             df.loc[:, (self.fields_group, data.columns)] = neutralized_data.astype(np.float32).values
             return df
+        
+        exposures.columns = ['industry', 'market_cap']
+        
+        if df.index.names != exposures.index.names:
+            exposures = exposures.swaplevel()
+        exposures = exposures.reindex(df.index)
+        
+        # 市值对数化处理
+        if self.log_mc:
+            exposures['market_cap'] = np.where(exposures['market_cap'] <= 0, np.nan, exposures['market_cap'])
+            exposures['market_cap'] = np.log(exposures['market_cap'])
 
         _logger.debug("Running Ridge cross-sectional neutralization for group: %s...", self.fields_group)
 

@@ -78,7 +78,7 @@ from qlworks.features.builder import FeatureBundle
 from qlworks.features.dataset import build_custom_feature_cache
 from qlworks.models import cached_select_features
 from qlworks.processors.quantile_norm import CSQuantileNorm
-from qlworks.processors.neutralize import CSNeutralize
+from qlworks.processors.neutralize import CSNeutralize, _fetch_features_direct
 from qlworks.factors.filter_utils import (
     filter_codes_post,
     filter_untradeable_labels as _filter_untradeable_fn,  # 别名避免与 _prepare_window_data 参数名冲突
@@ -116,11 +116,11 @@ CONFIG = {
 
     # ── 股票池与过滤（与 train_from_selected.py 对齐）──
     "instruments": "csi500",
-    "use_dynamic_filter": True,
-    "filter_new_stocks": True,
-    "filter_st": True,
-    "filter_delisted": True,        # [P1-3] 退市两阶段过滤：逐日 date > delist_date 剔除（全期早退市/期内退市天然覆盖）
-    "filter_untradeable_labels": True,  # [P0-3] 涨跌停/一字板/持仓期停牌不可交易样本剔除（与训练端 filter_untradeable_labels 对齐）
+    "use_dynamic_filter": True,        # [P0-1] 特征缓存构建时启用 Qlib 动态过滤器：逐日剔除停牌/未上市等不可交易股票
+    "filter_new_stocks": True,         # [P1-3] 后置过滤：剔除上市不足 250 日的次新股
+    "filter_st": True,                 # [P1-3] 后置过滤：剔除 ST/风险警示股票
+    "filter_delisted": True,           # [P1-3] 退市两阶段过滤：逐日 date > delist_date 剔除（全期早退市/期内退市天然覆盖）
+    "filter_untradeable_labels": True, # [P0-3] 涨跌停/一字板/持仓期停牌不可交易样本剔除（与训练端 filter_untradeable_labels 对齐）
 
     # ── 滚动窗口因子筛选 ──
     "rolling_windows": [
@@ -201,7 +201,7 @@ CONFIG = {
     # ── [第十层：跨窗口共线性精简 - AQR 级] ──
     "collinearity_reduction": True,          # 是否启用跨窗口层次聚类共线性精简
     "correlation_start": "2022-01-01",       # 相关性计算起始日期
-    "correlation_end": "2024-06-30",         # 相关性计算结束日期
+    "correlation_end": "2023-12-20",         # 相关性计算结束日期（对齐缓存上限=最晚窗口训练期结束日，超出部分被静默截断）
     "cluster_rho_threshold": 0.6,            # 聚类阈值（|rho| > 此值视为同族）
     "max_per_cluster": 2,                    # 每族最多保留因子数
     "cross_cluster_rho_threshold": 0.85,     # 跨族二次检查阈值
@@ -530,23 +530,11 @@ def apply_neutralization(
 
     try:
         # 从 Qlib 拉取行业和市值数据
-        # [Windows 修复] 分批调用 D.features 避免 ParallelExt 死锁（同 _prepare_window_data）
+        # [Windows 修复] 绕过 D.features() 的 ParallelExt 缺陷，用 _fetch_features_direct 直接取值
         fields = [f"${industry_field}", f"${market_cap_field}"]
-        expo_parts = []
-        _BATCH_SIZE = 500
-        for _i in range(0, len(instruments), _BATCH_SIZE):
-            _batch = instruments[_i:_i + _BATCH_SIZE]
-            _part = D.features(
-                _batch, fields,
-                start_time=start_time,
-                end_time=end_time,
-                freq='day'
-            )
-            if _part is not None and not _part.empty:
-                expo_parts.append(_part)
-        if not expo_parts:
+        exposures = _fetch_features_direct(instruments, fields, start_time, end_time, freq='day')
+        if exposures.empty:
             raise ValueError("行业/市值数据为空")
-        exposures = pd.concat(expo_parts)
         exposures.columns = ['industry', 'market_cap']
 
         # 调整索引顺序
@@ -1980,9 +1968,9 @@ def _prepare_window_data(
             full_train_frame = full_train_frame[_keep_mask]
             print(f"    [标签去极值] MAD 3σ 剔除 {_n_dropped:,} 个极端收益样本")
 
-    # [P0-1修复] 标签管线与训练端 DK_L 对齐：CSNeutralize(label) → CSQuantileNorm(label)
-    # 先中性化（Ridge 剥离行业/市值 Beta 取纯 alpha 残差），再截面分位数化 → [0,1]，
-    # 与 dataset.py _build_processors 中 neutralize_labels=True + normalize_labels=True 顺序完全一致。
+    # [P0-1修复] 筛选端额外做 CSNeutralize(label) → CSQuantileNorm(label) 取纯 alpha 口径；
+    # 训练端因本地缺行业字段，neutralize_labels=False（仅 CSQuantileNorm）。
+    # CSNeutralize 失败时回退原始标签，此时两端均不中性化（Rank IC 对单调变换不变，差异可忽略）。
     _t40 = _time.time()
     try:
         y_mi = full_train_frame[[label_name]].copy()
@@ -2032,7 +2020,7 @@ def reduce_factor_collinearity(
     window_details: List[pd.DataFrame],
     n_windows: int,
     correlation_start: str = "2022-01-01",
-    correlation_end: str = "2024-06-30",
+    correlation_end: str = "2023-12-20",
     cluster_rho_threshold: float = 0.6,
     max_per_cluster: int = 2,
     cross_cluster_rho_threshold: float = 0.85,
@@ -2268,6 +2256,7 @@ def _aggregate_across_windows(
     window_details: List[pd.DataFrame],
     n_windows: int,
     min_window_ratio: float,
+    window_names: Optional[List[str]] = None,
 ) -> pd.DataFrame:
     """
     跨窗口聚合：因子在 >= min_window_ratio 的窗口中入选则最终选中。
@@ -2337,6 +2326,14 @@ def _aggregate_across_windows(
                     direction = 1 if n_pos > n_neg else -1
                     direction_consistency = float(max(n_pos, n_neg) / len(ic_hist))
 
+            # 诊断指标：最早被选中的窗口（用于判断新确认因子是否回填早期窗口）
+            earliest_win = ""
+            if sel_history and window_names and len(window_names) == len(sel_history):
+                for i, sel in enumerate(sel_history):
+                    if sel:
+                        earliest_win = window_names[i]
+                        break
+
             final_rows.append({
                 "category": cat_name,
                 "factor_name": fname,
@@ -2346,6 +2343,7 @@ def _aggregate_across_windows(
                 "composite_score": round(avg_importance, 4),
                 "n_windows_selected": n_selected,
                 "total_windows": n_windows,
+                "earliest_selected_window": earliest_win,
                 "meaning": f.get("meaning", ""),
                 "source_file": f.get("source_file", ""),
             })
@@ -2552,6 +2550,7 @@ def main():
         window_details=window_details,
         n_windows=n_windows,
         min_window_ratio=CONFIG["min_window_ratio"],
+        window_names=[w["name"] for w in rolling_windows],
     )
 
     # ── 跨窗口共线性精简（AQR 级层次聚类）──
@@ -2562,7 +2561,7 @@ def main():
             window_details=window_details,
             n_windows=n_windows,
             correlation_start=CONFIG.get("correlation_start", "2022-01-01"),
-            correlation_end=CONFIG.get("correlation_end", "2024-06-30"),
+            correlation_end=CONFIG.get("correlation_end", "2023-12-20"),
             cluster_rho_threshold=CONFIG.get("cluster_rho_threshold", 0.6),
             max_per_cluster=CONFIG.get("max_per_cluster", 2),
             cross_cluster_rho_threshold=CONFIG.get("cross_cluster_rho_threshold", 0.85),
