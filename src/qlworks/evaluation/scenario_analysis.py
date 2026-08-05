@@ -105,7 +105,7 @@ def _calc_bucket_ls_stats(
     label_horizon: int = 5,
     cost: float = 0.001,
 ) -> dict:
-    q_df = quantile_returns(df, factor_col, label_col, quantiles)
+    q_df = quantile_returns(df, factor_col, label_col, quantiles, need_instruments=False)
     if q_df.empty:
         return {"annual_return": 0, "sharpe": 0, "max_drawdown": 0, "monotonicity": 0}
     mono = calc_monotonicity_score(q_df)

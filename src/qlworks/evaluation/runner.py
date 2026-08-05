@@ -354,7 +354,7 @@ ORDER BY p.ts_code, p.trade_date"""
         ic_stats["monotonicity"] = round(mono, 4)
 
         # 3a. 分层净值曲线（10条分位组累计净值）
-        decile_nav = calc_group_cumulative_returns(q_df) if not q_df.empty else pd.DataFrame()
+        decile_nav = calc_group_cumulative_returns(q_df, config.label_horizon) if not q_df.empty else pd.DataFrame()
         logger.info(f"[{factor_name}] 分层回测完成, shape={decile_nav.shape}")
 
         # 使用配置中的滑点参数（入场+出场+冲击成本），而非固定 cost

@@ -988,6 +988,11 @@ td {{ font-size: 14px; }}
                 best_horizon = hpr_df.loc[hpr_df["ls_return"].abs().idxmax(), "horizon"]
             else:
                 best_horizon = 5
+            # 动态定位最高分位列：hpr_df 的最高组列名为 q{quantiles-1}_mean（如 quantiles=10 → q9_mean）
+            q_cols = [c for c in hpr_df.columns
+                      if str(c).startswith("q") and str(c).endswith("_mean") and str(c)[1:-5].isdigit()]
+            qN_col = max(q_cols, key=lambda c: int(str(c)[1:-5])) if q_cols else "qN_mean"
+            qN_label = f"Q{int(str(qN_col)[1:-5]) + 1}收益" if q_cols else "QN收益"
             html += f"""<div class="section">
   <h2>多期持有收益分析</h2>
   <div class="chart-container">{self._hpr_plot(hpr_df)}</div>
@@ -995,7 +1000,7 @@ td {{ font-size: 14px; }}
     最佳调仓周期: <strong>{int(best_horizon)} 日</strong> &nbsp;|&nbsp;
   </div>
   <div style="margin-top:12px">
-    <table><tr><th>持有期</th><th>Q1收益</th><th>Q5收益</th><th>多空收益</th><th>单调性</th></tr>"""
+    <table><tr><th>持有期</th><th>Q1收益</th><th>{qN_label}</th><th>多空收益</th><th>单调性</th></tr>"""
             def _safe_pct(v):
                 import math as _m
                 if v is None:
@@ -1008,7 +1013,7 @@ td {{ font-size: 14px; }}
             for _, row in hpr_df.iterrows():
                 ls = _safe_pct(row.get("ls_return", 0))
                 q0 = _safe_pct(row.get("q0_mean", 0))
-                q5 = _safe_pct(row.get("q4_mean", row.get("q3_mean", 0)))
+                q5 = _safe_pct(row.get(qN_col, 0))
                 html += f"<tr><td>{int(row['horizon'])}日</td><td>{q0}</td><td>{q5}</td><td>{ls}</td><td>{row.get('monotonicity',0):.4f}</td></tr>"
             html += """</table>
   </div>

@@ -47,6 +47,9 @@ from qlworks.factors.filter_utils import filter_codes_post
 from qlworks.models import cached_select_features
 from qlworks.processors.quantile_norm import CSQuantileNorm
 from qlworks.config import QLIB_DATA_DIR
+from qlworks.evaluation.selector import (
+    check_redundancy, check_icir_stability, aggregate_across_windows,
+)
 import qlib
 from qlib.data import D
 
@@ -203,14 +206,6 @@ def build_global_bundle(factors_by_cat: Dict[str, List[Dict]], label_expr: str, 
         label_fields=[label_expr],
         label_names=[label_name],
     )
-
-
-def _vectorized_daily_ic(train_frame: pd.DataFrame, factor_cols: List[str], label_col: str) -> pd.DataFrame:
-    """向量化逐日 IC 计算 - groupby().corr() 替代逐日 apply(corrwith)。"""
-    all_cols = factor_cols + [label_col]
-    corr_matrices = train_frame.groupby(level='datetime')[all_cols].corr(method='spearman')
-    daily_ic = corr_matrices.xs(label_col, level=1, axis=0)[factor_cols]
-    return daily_ic
 
 
 def _apply_cs_rank_norm(df: pd.DataFrame) -> pd.DataFrame:
@@ -389,62 +384,48 @@ def run_single_category_selection(
     scores = fs_result.feature_scores
     selected_factor_names = list(selected_set)
 
-    # 冗余检测：来自 x_train 的因子间相关
+    # 冗余检测：来自 x_train 的因子间相关（逻辑收敛于 selector.check_redundancy）
     if redundancy_check and len(selected_factor_names) > 5:
         print(f"    [冗余检测] 阈值={redundancy_threshold}，检测 {len(selected_factor_names)} 个入选因子...")
         feat_in_data = [c for c in selected_factor_names if c in x_train.columns]
         if len(feat_in_data) > 5:
             try:
-                corr_mat = x_train[feat_in_data].corr(method='spearman').abs()
-                redundant_pairs = []
-                for i in range(len(corr_mat.columns)):
-                    for j in range(i + 1, len(corr_mat.columns)):
-                        c1, c2 = corr_mat.columns[i], corr_mat.columns[j]
-                        if corr_mat.iloc[i, j] > redundancy_threshold:
-                            redundant_pairs.append((c1, c2, corr_mat.iloc[i, j]))
-                if redundant_pairs:
-                    importance_map = dict(zip(scores.index, scores.values))
-                    to_drop = set()
-                    for c1, c2, corr_val in redundant_pairs:
-                        if c1 in to_drop or c2 in to_drop:
-                            continue
-                        imp1 = abs(importance_map.get(c1, 0))
-                        imp2 = abs(importance_map.get(c2, 0))
-                        drop_f = c2 if imp2 < imp1 else c1
-                        keep_f = c1 if drop_f == c2 else c2
-                        to_drop.add(drop_f)
-                        print(f"      冗余对: {c1}(imp={imp1:.4f}) vs {c2}(imp={imp2:.4f}) → 保留 {keep_f}，剔除 {drop_f}")
-                    selected_factor_names = [f for f in selected_factor_names if f not in to_drop]
-                    selected_set = set(selected_factor_names)
-                    print(f"      冗余检测完成: 剔除 {len(to_drop)} 个冗余因子，保留 {len(selected_factor_names)} 个")
+                importance_map = {k: abs(v) for k, v in zip(scores.index, scores.values)}
+                kept = check_redundancy(
+                    x_train[feat_in_data], feat_in_data,
+                    threshold=redundancy_threshold,
+                    rank=importance_map,
+                )
+                to_drop = set(selected_factor_names) - set(kept)
+                selected_factor_names = kept
+                selected_set = set(selected_factor_names)
+                print(f"      冗余检测完成: 剔除 {len(to_drop)} 个冗余因子，保留 {len(selected_factor_names)} 个")
+                if to_drop:
+                    for f in sorted(to_drop):
+                        imp = abs(importance_map.get(f, 0))
+                        print(f"      冗余剔除: {f}(imp={imp:.4f})")
             except Exception as e:
                 print(f"      [跳过] 冗余检测异常: {e}")
 
-    # [Citadel] ICIR 稳定性校验（使用 x_train + y_train 构建面板）
+    # [Citadel] ICIR 稳定性校验（使用 x_train + y_train 构建面板，逻辑收敛于 selector.check_icir_stability）
     if icir_stability and len(selected_factor_names) > 5:
         print(f"    [ICIR 稳定校验] 窗口={icir_rolling_window}d, keep_ratio={icir_keep_ratio}...")
         try:
             icir_feat = [c for c in selected_factor_names if c in x_train.columns]
             if len(icir_feat) > 5:
-                # 构建含标签的综合面板
-                combined_frame = x_train[icir_feat].copy()
-                combined_frame[label_name] = y_train
-                daily_ic = _vectorized_daily_ic(combined_frame, icir_feat, label_name)
-                if not daily_ic.empty and len(daily_ic) > icir_rolling_window // 2:
-                    rolling_mean = daily_ic.rolling(window=icir_rolling_window, min_periods=icir_rolling_window // 2).mean()
-                    rolling_std = daily_ic.rolling(window=icir_rolling_window, min_periods=icir_rolling_window // 2).std()
-                    rolling_icir = rolling_mean / rolling_std.replace(0, np.nan)
-                    pos_ratio = (rolling_icir > 0).sum() / rolling_icir.notna().sum()
-                    pos_ratio = pos_ratio.fillna(0).sort_values(ascending=False)
-                    keep_count = max(int(len(pos_ratio) * icir_keep_ratio), min(top_k, len(pos_ratio)))
-                    stable_factors = pos_ratio.head(keep_count).index.tolist()
-                    dropped = len(selected_factor_names) - len(stable_factors)
-                    if dropped > 0:
-                        print(f"      ICIR 检测: {dropped} 个不稳定因子被剔除")
-                        selected_factor_names = stable_factors
-                        selected_set = set(selected_factor_names)
+                stable_factors = check_icir_stability(
+                    x_train[icir_feat], y_train, icir_feat,
+                    rolling_window=icir_rolling_window,
+                    keep_ratio=icir_keep_ratio,
+                    min_keep=min(top_k, len(icir_feat)),
+                )
+                dropped = len(selected_factor_names) - len(stable_factors)
+                if dropped > 0:
+                    print(f"      ICIR 检测: {dropped} 个不稳定因子被剔除")
+                    selected_factor_names = stable_factors
+                    selected_set = set(selected_factor_names)
                 else:
-                    print(f"      daily_ic 仅 {len(daily_ic)} 行，不足 {icir_rolling_window // 2}，跳过")
+                    print(f"      所有因子 ICIR 稳定，无需剔除")
         except Exception as e:
             print(f"      [跳过] ICIR 稳定校验异常: {e}")
 
@@ -736,7 +717,8 @@ def main():
         print("\n[错误] 没有任何窗口完成因子筛选")
         sys.exit(1)
 
-    min_wins = max(1, int(n_windows * CONFIG["min_window_ratio"]))
+    # 向上取整保证"过半窗口"语义，与 selector.aggregate_across_windows 口径一致
+    min_wins = max(1, int(np.ceil(n_windows * CONFIG["min_window_ratio"])))
     print(f"\n{'=' * 60}")
     print(f"  跨窗口聚合（需要 >= {min_wins}/{n_windows} 窗口入选）")
     print(f"{'=' * 60}")
@@ -744,21 +726,24 @@ def main():
     final_rows = []
     for cat_name in sorted(categories.keys()):
         cat_factors = categories[cat_name]
+        # 跨窗口入选判定收敛于 selector.aggregate_across_windows
+        # （{fname: [bool,...]} 输入与 window_selections[cat] 结构一致）
+        agg = aggregate_across_windows(
+            window_selections.get(cat_name, {}),
+            min_window_ratio=CONFIG["min_window_ratio"],
+        )
         for f in cat_factors:
             fname = f["name"]
-            sel_history = window_selections.get(cat_name, {}).get(fname, [])
             imp_history = window_importances.get(cat_name, {}).get(fname, [])
-
-            n_selected = sum(sel_history) if sel_history else 0
             avg_importance = float(np.mean(imp_history)) if imp_history else 0.0
-            final_selected = n_selected >= min_wins
+            info = agg.get(fname, {"selected": False, "n_selected": 0})
 
             final_rows.append({
                 "category": cat_name,
                 "factor_name": fname,
-                "selected": final_selected,
+                "selected": bool(info["selected"]),
                 "importance": round(avg_importance, 4),
-                "n_windows_selected": n_selected,
+                "n_windows_selected": info["n_selected"],
                 "total_windows": n_windows,
                 "meaning": f.get("meaning", ""),
                 "source_file": f.get("source_file", ""),
