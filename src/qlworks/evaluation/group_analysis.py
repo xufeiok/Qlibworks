@@ -84,10 +84,14 @@ def quantile_returns(
     label_col: str,
     quantiles: int = _N_GROUPS,
     group_col: Optional[str] = None,
+    need_instruments: bool = True,
 ) -> pd.DataFrame:
     """每日分层收益率（使用 rank 分位数，更稳定）。
 
     返回 DataFrame with columns: datetime, quantile, mean, count, instruments
+
+    Args:
+        need_instruments: 是否收集每层成分股列表（仅主评测换手率需要；场景测试传 False 可显著加速）
     """
     rows = []
     for dt, grp in df.groupby("datetime"):
@@ -117,7 +121,10 @@ def quantile_returns(
             stats = result.groupby("quantile")["return"].agg(["mean", "count"]).reset_index()
             stats["datetime"] = dt
             # 记录每层的成分股列表用于精确换手率
-            stats["instruments"] = result.groupby("quantile")["instrument"].apply(list).values
+            if need_instruments:
+                stats["instruments"] = result.groupby("quantile")["instrument"].apply(list).values
+            else:
+                stats["instruments"] = None
             rows.append(stats)
         except Exception:
             continue
@@ -269,14 +276,14 @@ def calc_holding_period_returns(
             "horizon": h,
             "q0_mean": q_means.get(0, 0),
             f"q{quantiles - 1}_mean": q_means.get(quantiles - 1, 0),
-            "ls_return": ls_ret - cost_bps / 10000.0 * 252,  # net of slippage
+            "ls_return": ls_ret - 2 * cost_bps / 10000.0,  # net of slippage（单期双边成本，与 long_short_returns 的 2*cost 一致）
             "monotonicity": mono,
             "n_days": q_df["datetime"].nunique() if not q_df.empty else 0,
         })
 
     return pd.DataFrame(results) if results else pd.DataFrame()
 
-def calc_group_cumulative_returns(q_df: pd.DataFrame) -> pd.DataFrame:
+def calc_group_cumulative_returns(q_df: pd.DataFrame, label_horizon: int = 5) -> pd.DataFrame:
     """计算每个分位组的累计净值曲线（分层净值曲线）。
 
     q_df 包含 datetime / quantile / mean 三列（扁平格式）。
@@ -286,6 +293,13 @@ def calc_group_cumulative_returns(q_df: pd.DataFrame) -> pd.DataFrame:
     这是「分层净值曲线」的数据基础，用于直观观察：
       - 分层是否长期分化（G10 >> G1）
       - 是否阶段性失效（某时间段所有组混在一起）
+
+    Args:
+        label_horizon: 标签收益率对应的持有期（交易日）。mean 列是多期
+                       forward return（如 5 日标签），必须转为日频等效
+                       （mean / label_horizon）再 cumprod，否则 5 日收益
+                       按日复利会把净值虚高到离谱（曾出现 G10 上万倍）。
+                       与 calc_ls_stats 的 daily_equiv 处理保持一致。
     """
     if q_df.empty:
         return pd.DataFrame()
@@ -294,13 +308,14 @@ def calc_group_cumulative_returns(q_df: pd.DataFrame) -> pd.DataFrame:
     piv = q_df.pivot_table(index="datetime", columns="quantile", values="mean", aggfunc="mean")
     piv = piv.sort_index()
 
-    # 将多期标签收益转为日频等效（与 calc_ls_stats 保持一致）
-    # 从已有的 label_horizon 无法获取，这里保守不缩放，用原始 cumprod
-    # 因为报告显示的是相对趋势而非绝对年化，不影响分层分化判断
-    # 关键：用 fillna(0) 替代 dropna()，避免尾部因 label_horizon 产生的 NaN 导致大量数据被丢弃
-    # 若某天某分组无成分股（mean=NaN），视同当日收益为 0，不中断累计净值
-    piv = piv.fillna(0.0)
-    cum = (1 + piv).cumprod()
+    # 将多期标签收益转为日频等效（与 calc_ls_stats 保持一致），
+    # 避免多期标签按日复利导致的净值虚高。
+    daily_equiv = piv / label_horizon if label_horizon > 1 else piv
+    # 若某天某分组无成分股（mean=NaN），视同当日收益为 0，不中断累计净值。
+    # 注：极端 label=-1（-100%）转日频等效后为 -1/label_horizon，
+    #     (1+该值)>0，不会再出现 cumprod 归零后永久为 0 的现象。
+    daily_equiv = daily_equiv.fillna(0.0)
+    cum = (1 + daily_equiv).cumprod()
     cum.columns = [f"G{int(c)+1}" for c in cum.columns]
     return cum
 

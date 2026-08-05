@@ -1,4 +1,4 @@
-﻿import os
+import os
 import sys
 import warnings
 import argparse
@@ -35,6 +35,10 @@ from qlworks.features.dataset import (
 from qlworks.models.training import (
     train_lgb_model, train_xgb_model, train_catboost_model,
     predict_ensemble_models, compute_ic, compute_ic_ewma
+)
+from qlworks.evaluation.selector import (
+    compute_factor_ics, check_redundancy, check_icir_stability,
+    select_top_by_abs,
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
@@ -351,24 +355,17 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
             batch_df = batch_df.loc[_mask]
             labels = labels.loc[_mask]
 
-        for col in batch_df.columns:
-            feat = batch_df[col].dropna()
-            lab = labels.reindex(feat.index).dropna()
-            common = feat.index.intersection(lab.index)
-            if len(common) < 50:
-                continue
-            try:
-                ic_val = compute_ic(feat.loc[common], lab.loc[common])
-                all_ic_results[col] = ic_val
-            except Exception:
-                all_ic_results[col] = 0.0
+        # 逐列计算 Spearman IC（逻辑收敛于 selector.compute_factor_ics）
+        batch_ics = compute_factor_ics(batch_df, labels, min_samples=50)
+        for col, ic_val in batch_ics.items():
+            all_ic_results[col] = ic_val
 
         del batch_df
         gc.collect()
 
-    # 按 |IC| 降序取 top_k
-    ic_df = pd.Series(all_ic_results).sort_values(key=abs, ascending=False)
-    selected = list(ic_df.head(top_k).index)
+    # 按 |IC| 降序取 top_k（逻辑收敛于 selector.select_top_by_abs）
+    ic_df = pd.Series(all_ic_results)
+    selected = select_top_by_abs(ic_df, top_k)
     if selected:
         print(f"    [筛选完成] Top {len(selected)} 因子 (|IC| 范围: "
               f"{abs(ic_df[selected[-1]]):.4f} ~ {abs(ic_df[selected[0]]):.4f})")
@@ -1008,29 +1005,16 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                     if len(feat_data_clean) > 5000:
                         feat_data_clean = feat_data_clean.sample(5000, random_state=42)
 
-                # 计算相关系数矩阵
-                corr_matrix = feat_data_clean.corr().abs()
-                upper_tri = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
-                high_corr_pairs = upper_tri.stack()
-                high_corr_pairs = high_corr_pairs[high_corr_pairs > corr_threshold]
-                high_corr_pairs = high_corr_pairs.sort_values(ascending=False)
-
-                # 基于 |IC| 分数做 tiebreaker（保留 IC 更高的因子）
-                # IC 分数来自上一步的 _batch_factor_ic_selection 结果
-                to_drop = set()
-                for (col1, col2), _ in high_corr_pairs.items():
-                    if col1 in to_drop or col2 in to_drop:
-                        continue
-                    # 按列表顺序：越靠前的因子 |IC| 越大
-                    idx1 = window_selected_factors.index(col1) if col1 in window_selected_factors else 999
-                    idx2 = window_selected_factors.index(col2) if col2 in window_selected_factors else 999
-                    if idx1 <= idx2:
-                        to_drop.add(col2)
-                    else:
-                        to_drop.add(col1)
+                # 冗余检测（逻辑收敛于 selector.check_redundancy；沿用 pearson 以保持原行为）
+                # tie-break: 按 window_selected_factors 顺序（越靠前 |IC| 越大），保留靠前者
+                kept = check_redundancy(
+                    feat_data_clean, window_selected_factors,
+                    threshold=corr_threshold,
+                    method="pearson",
+                )
+                to_drop = set(window_selected_factors) - set(kept)
 
                 if to_drop:
-                    kept = [f for f in window_selected_factors if f not in to_drop]
                     print(f"      剔除 {len(to_drop)} 个冗余因子: {sorted(to_drop)}")
                     print(f"      保留 {len(kept)} 个")
                     window_selected_factors = kept
@@ -1069,74 +1053,21 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                     )
                     icir_label_series = icir_label_series.rename(label_name)
 
-                    # 对齐因子和标签数据，计算日频截面 IC
-                    # [P0修复3] 使用 DataFrame.join 替代 boolean indexing，
-                    # 彻底绕过 pandas MultiIndex boolean 对齐问题
-                    combined = icir_feat_data.join(
-                        icir_label_series.rename("_icir_label"), how="inner"
+                    # ICIR 稳定性检测（逻辑收敛于 selector.check_icir_stability；
+                    # 向量化逐日截面 IC，等价于原逐日循环）
+                    stable_factors = check_icir_stability(
+                        icir_feat_data, icir_label_series, window_selected_factors,
+                        rolling_window=rolling_w,
+                        keep_ratio=keep_ratio,
+                        min_keep=min_keep,
                     )
-                    if len(combined) > rolling_w // 2:
-                        icir_feat_data = combined.drop(columns=["_icir_label"])
-                        icir_labels = combined["_icir_label"]
-
-                        # 计算每日截面 Spearman IC
-                        daily_ic_data = []
-                        for dt, day_feat in icir_feat_data.groupby(level='datetime'):
-                            if dt not in icir_labels.index.get_level_values('datetime'):
-                                continue
-                            day_label = icir_labels.xs(dt, level='datetime')
-                            day_ic = {}
-                            for col in day_feat.columns:
-                                # [P0修复3c] day_feat 索引为 MultiIndex(instrument, datetime)，
-                                # day_label 索引为纯 instrument，需提取 instrument 级别再求交集
-                                _feat_instr = day_feat.index.get_level_values('instrument')
-                                common_instr = _feat_instr.intersection(day_label.index)
-                                if len(common_instr) < 20:
-                                    continue
-                                # 用 reindex 确保两边 instrument 顺序一致
-                                _lab_aligned = day_label.reindex(common_instr).dropna()
-                                _feat_subset = day_feat.loc[
-                                    _feat_instr.isin(common_instr), col
-                                ]
-                                # feat 按 instrument 重排以对齐 label
-                                _feat_instr_sub = _feat_subset.index.get_level_values('instrument')
-                                _feat_aligned = _feat_subset.groupby(_feat_instr_sub).first()
-                                _feat_aligned = _feat_aligned.reindex(_lab_aligned.index)
-                                valid_mask = _feat_aligned.notna() & _lab_aligned.notna()
-                                if valid_mask.sum() >= 20:
-                                    day_ic[col] = compute_ic(
-                                        _feat_aligned[valid_mask],
-                                        _lab_aligned[valid_mask]
-                                    )
-                            if day_ic:
-                                daily_ic_data.append(pd.Series(day_ic, name=dt))
-
-                        if daily_ic_data:
-                            daily_ic_df = pd.concat(daily_ic_data, axis=1).T
-
-                            # 滚动 ICIR: rolling_mean(IC) / rolling_std(IC) * sqrt(252)
-                            rolling_mean = daily_ic_df.rolling(window=rolling_w, min_periods=rolling_w // 2).mean()
-                            rolling_std = daily_ic_df.rolling(window=rolling_w, min_periods=rolling_w // 2).std()
-                            rolling_icir = rolling_mean / rolling_std.replace(0, np.nan) * np.sqrt(252)
-
-                            # ICIR 正向天数占比
-                            pos_ratio = (rolling_icir > 0).sum() / rolling_icir.notna().sum()
-                            pos_ratio = pos_ratio.fillna(0).sort_values(ascending=False)
-
-                            keep_count = max(int(len(pos_ratio) * keep_ratio), min_keep)
-                            stable_factors = pos_ratio.head(keep_count).index.tolist()
-                            removed_ic = [f for f in window_selected_factors if f not in stable_factors]
-
-                            if removed_ic:
-                                print(f"      剔除 {len(removed_ic)} 个 ICIR 不稳定因子: {removed_ic}")
-                                print(f"      保留 {len(stable_factors)} 个 ICIR 稳定因子")
-                                window_selected_factors = stable_factors
-                            else:
-                                print(f"      所有因子 ICIR 稳定，无需剔除")
-                        else:
-                            print(f"      日频 IC 数据不足，跳过 ICIR 检测")
+                    removed_ic = [f for f in window_selected_factors if f not in stable_factors]
+                    if removed_ic:
+                        print(f"      剔除 {len(removed_ic)} 个 ICIR 不稳定因子: {removed_ic}")
+                        print(f"      保留 {len(stable_factors)} 个 ICIR 稳定因子")
+                        window_selected_factors = stable_factors
                     else:
-                        print(f"      对齐后样本不足 ({len(combined)} < {rolling_w // 2})，跳过 ICIR 检测")
+                        print(f"      所有因子 ICIR 稳定，无需剔除")
                 except Exception as e:
                     import traceback
                     _tb_lines = traceback.format_exc().strip().split("\n")
