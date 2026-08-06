@@ -13,10 +13,24 @@ from qlworks.backtest.industry import apply_industry_constraint_pit, load_indust
 from qlworks.config import QLIB_DATA_DIR
 from qlworks.live.targets import build_daily_target_positions
 from qlworks.live.tree_strategy import DEFAULT_LIVE_STRATEGY, get_live_strategy_config
+from qlworks.pipeline_config import (
+    FILTER_ST, FILTER_NEW_STOCKS, FILTER_SUSPENDED,
+)
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parents[1]
+
+# qlib 幂等初始化标志（避免 industry_neutral 与停牌剔除重复 init 造成的重置开销）
+_QLIB_INITED = False
+
+
+def _ensure_qlib() -> None:
+    """确保 qlib 已初始化（幂等）。"""
+    global _QLIB_INITED
+    if not _QLIB_INITED:
+        qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn", mute_warning=True)
+        _QLIB_INITED = True
 
 
 def _resolve_live_context(
@@ -67,7 +81,7 @@ def generate_targets(
     target_date = pd.Timestamp(trade_date).normalize() if trade_date else score_df["datetime"].max()
 
     if config["industry_neutral"]:
-        qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn")
+        _ensure_qlib()
         instruments = score_df["instrument"].dropna().unique().tolist()
         industry_maps = load_industry_maps_pit(instruments, target_date, target_date)
         constrained = apply_industry_constraint_pit(
@@ -84,11 +98,37 @@ def generate_targets(
         score_df["score"] = score_df["industry_score"]
         score_df.drop(columns=["industry_score"], inplace=True)
 
-    # [Filter] 过滤次新股
+    # [Filter] 过滤次新股 + ST（引用 pipeline_config 统一开关；
+    # 日期须用已解析的 target_date，而非可能为 None 的原始参数）
     from qlworks.factors.filter_utils import filter_codes_post
     _all = score_df.index.get_level_values("instrument").unique().tolist() if isinstance(score_df.index, pd.MultiIndex) else score_df["instrument"].unique().tolist()
-    _fi = filter_codes_post(_all, trade_date, filter_new_stocks=True, filter_st=False)
+    _filter_date = str(target_date.date())
+    _fi = filter_codes_post(_all, _filter_date, filter_new_stocks=FILTER_NEW_STOCKS, filter_st=FILTER_ST)
     score_df = score_df[score_df.index.get_level_values("instrument").isin(set(_fi))] if isinstance(score_df.index, pd.MultiIndex) else score_df[score_df["instrument"].isin(set(_fi))]
+
+    # [数据质量] 剔除目标日停牌股（volume=0 当日无法成交，防选入后挂单失败）。
+    # 训练端评分输出只剔 ST/次新/退市，未剔当日停牌；此处补齐与回测端一致的防线
+    if FILTER_SUSPENDED:
+        try:
+            _ensure_qlib()
+            from qlib.data import D as _D
+            _vol = _D.features(_fi, ["$volume"], _filter_date, _filter_date)
+            if _vol is not None and not _vol.empty:
+                if isinstance(_vol.columns, pd.MultiIndex):
+                    _vol.columns = _vol.columns.droplevel(1)
+                _vol_flat = _vol.reset_index()
+                _vol_flat["instrument"] = _vol_flat["instrument"].astype(str).str.lower()
+                _vol_flat["volume"] = pd.to_numeric(_vol_flat.iloc[:, -1], errors="coerce").fillna(0.0)
+                _susp = set(_vol_flat.loc[_vol_flat["volume"] == 0, "instrument"])
+                if _susp:
+                    _before = len(score_df)
+                    _sel = ~score_df["instrument"].astype(str).str.lower().isin(_susp)
+                    score_df = score_df[_sel]
+                    print(f"    [停牌剔除] 目标日停牌 {len(_susp)} 只，剔除 {_before - len(score_df)} 行")
+            else:
+                print("    [警告] 目标日行情缺失，跳过停牌剔除")
+        except Exception as _e:
+            print(f"    [警告] 停牌剔除失败（{_e}），跳过")
     target_df = build_daily_target_positions(
         score_df=score_df,
         trade_date=target_date,

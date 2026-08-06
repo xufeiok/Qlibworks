@@ -482,18 +482,20 @@ def update_factor_registry(registry_path, factor_name, eval_result, ic_stats, ls
 
 
 def handle_candidate_pool_entry(factor_name, ic_stats, ls_stats, config=None):
-    """处理候选因子池。"""
-    from .candidate_pool import CandidatePool
-    cfg = config or DEFAULT_CONFIG
-    pool = CandidatePool(cfg.registry_dir)
-    metrics = {
-        "ic_mean": abs(ic_stats.get("ic_mean", 0)),
-        "ic_positive_ratio": ic_stats.get("ic_positive_ratio", ic_stats.get("win_rate", 0)),
-        "ir": ic_stats.get("icir", 0),
-        "ic_std": ic_stats.get("ic_std", 0),
-        "sharpe": ls_stats.get("sharpe", 0),
-        "monotonicity": ls_stats.get("monotonicity", 0),
-        "missing_rate": 0.0, "n_years": 5.0, "valid_pct": 1.0,
-    }
-    screening = pool.full_screening(metrics)
-    pool.add_candidate(factor_name, metrics, screening)
+    """候选池写入已收敛至 admit_to_multifactor.py 单一通道（P0-1）。
+
+    evaluate() 只更新 registry.json 与 qualified_factors 分档，
+    不再直接写候选池，避免旁路绕过三关准入（相关性/边际贡献/方向一致）
+    导致无效因子混入训练因子池。
+
+    如需入池，请执行：
+      python scripts/evaluation/admit_to_multifactor.py --factor {factor_name}
+    """
+    import logging
+    logger = logging.getLogger("run_eval")
+    ic_mean = ic_stats.get("ic_mean", 0)
+    icir = ic_stats.get("icir", 0)
+    logger.info(
+        f"[{factor_name}] 评测完成 (IC={ic_mean:.4f}, ICIR={icir:.2f})。"
+        f"候选池准入请执行 admit_to_multifactor.py --factor {factor_name}"
+    )

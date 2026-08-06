@@ -78,7 +78,7 @@ _ROOT_DIR = _BASE_DIR.parent
 DEFAULT_CONFIG = EvalConfig(
     qualified_dir=str(_BASE_DIR / "qualified_factors"),
     report_dir=str(_BASE_DIR / "reports"),
-    registry_dir=str(_ROOT_DIR / "factor_registry"),
+    registry_dir=str(_ROOT_DIR / "factor_data" / "registry"),
     factor_library_dir=str(_ROOT_DIR / "factor_library"),
     robustness_sub_periods=[
         ("2018-01-01", "2019-12-31"),

@@ -931,7 +931,6 @@ factors:
   data_source: qlib
   meaning: 当日涨跌幅超过9.5%时取反，否则为0
   ref: A股特有现象
-  lifecycle_stage: active
 - name: HIGH0
   category: 归一化价格 (Price)
   expression:
@@ -1218,7 +1217,6 @@ factors:
   data_source: qlib
   meaning: 在申万一级行业内做Z-score标准化的6个月动量
   ref: Asness et al. (2013)
-  lifecycle_stage: active
 - name: KLEN
   category: 量价K线 (K-Bar)
   expression:
@@ -1613,7 +1611,6 @@ factors:
   data_source: qlib
   meaning: 过去6个月收益率，捕捉中期动量效应
   ref: Jegadeesh & Titman (1993)
-  lifecycle_stage: active
 - name: MOM_ACCEL
   version: '1.0'
   category: momentum
@@ -1633,7 +1630,6 @@ factors:
   data_source: qlib
   meaning: 近期3个月动量减去过去6个月动量，衡量动量加速度
   ref: Chaves (2012)
-  lifecycle_stage: exploration
 - name: OPEN0
   category: 归一化价格 (Price)
   expression:
@@ -2234,7 +2230,6 @@ factors:
   data_source: qlib
   meaning: 过去20个交易日收益率取负，捕捉短期反转效应
   ref: Jegadeesh & Titman (1993)
-  lifecycle_stage: active
 - name: STR_5d
   version: '1.0'
   category: reversal
@@ -2255,7 +2250,6 @@ factors:
   data_source: qlib
   meaning: 过去5个交易日收益率取负，捕捉超短期反转效应
   ref: Lehmann (1990)
-  lifecycle_stage: active
 - name: SUMD10
   category: 滚动时间窗口 (Rolling)
   expression:
@@ -2605,7 +2599,6 @@ factors:
   data_source: qlib
   meaning: 过去60日收益率标准差取负，捕捉波动率反转效应
   ref: French et al. (1987)
-  lifecycle_stage: exploration
 - name: VSTD5
   category: 滚动时间窗口 (Rolling)
   expression:

@@ -26,7 +26,6 @@ class LifecycleManager:
         if not registry_dir:
             from .config import DEFAULT_CONFIG
             registry_dir = DEFAULT_CONFIG.registry_dir
-            registry_dir = str(Path(__file__).resolve().parents[1] / "factor_registry")
         self.registry_dir = Path(registry_dir)
         self.registry_dir.mkdir(parents=True, exist_ok=True)
         self._log_path = self.registry_dir / "lifecycle_log.json"

@@ -292,8 +292,14 @@ ORDER BY p.ts_code, p.trade_date"""
         return df.sort_values(["datetime", "instrument"]).reset_index(drop=True)
 
     def evaluate(self, factor_name, df, extra_config=None,
-                 category="satellite", skip_candidate_pool=False):
-        """对单因子执行完整评测流水线。"""
+                 category="satellite", skip_candidate_pool=True):
+        """对单因子执行完整评测流水线。
+
+        Args:
+            skip_candidate_pool: 默认 True（P0-1 单一准入通道）。
+                候选池仅由 admit_to_multifactor.py 三关检验写入，
+                evaluate() 只写 registry + qualified_factors 分档。
+        """
         config = self.config
         if extra_config:
             for k, v in extra_config.items():

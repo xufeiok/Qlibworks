@@ -3,6 +3,7 @@ import sys
 import warnings
 import argparse
 import copy
+import json
 
 # MLflow 在某些环境下会尝试写 Roaming 目录，Qlib 导入前先限制
 os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
@@ -48,23 +49,30 @@ from qlworks.models.training import (
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
-from qlworks.processors.neutralize import _fetch_features_direct
+from qlworks.processors.neutralize import _fetch_features_direct, CSNeutralize
+from qlworks.processors.quantile_norm import CSQuantileNorm
 from qlworks.factors.filter_utils import filter_codes_post, filter_untradeable_labels, apply_label_filter
+from qlworks.pipeline_config import (
+    LABEL_EXPR, LABEL_NAME, INSTRUMENTS, START_TIME, END_TIME,
+    REDUNDANCY_THRESHOLD, ICIR_WINDOW, ICIR_KEEP_RATIO, TOP_K,
+    FILTER_ST, FILTER_NEW_STOCKS,
+)
 import qlib
 from _config import resolve_runtime_config
 
 # ==============================================================================
 # [全局配置]
 # 可通过 `--config-source yaml` 切换使用 scripts/training/configs/ 下的 YAML 配置
+# 共享键（标签/股票池/时间/阈值）引用 pipeline_config 单一事实源，跨脚本自动对齐
 # ==============================================================================
 DEFAULT_YAML_CONFIG_NAME = "tree_2025"
 LOCAL_CONFIG = {
     # 股票池：使用本地 instruments/main_board.txt
     # main_board 包含 600/601/603/000 开头的主板股票，支持 PIT 格式
     # 如需全市场测试，改为 all.txt 即可
-    "instruments": "main_board", 
-    "start_time": "2020-01-01",
-    "end_time": "2025-12-31",
+    "instruments": INSTRUMENTS, 
+    "start_time": START_TIME,
+    "end_time": END_TIME,
     
     # --- 预处理配置 ---
     # 不同模型流派的最佳实践：
@@ -82,8 +90,8 @@ LOCAL_CONFIG = {
     # 5) neutralize_labels: 标签中性化
     #    - 剥离行业/市值效应，提取纯 alpha 标签
     "model_type": "tree",  # 模型流派 (tree / linear / nn)
-    "label_fields": ["Ref($close, -5) / Ref($open, -1) - 1"],  # T+1开盘买入, T+5收盘卖出
-    "label_names": ["LABEL_5D"],  # 标签名称
+    "label_fields": [LABEL_EXPR],  # T+1开盘买入, T+5收盘卖出（共享配置）
+    "label_names": [LABEL_NAME],  # 标签名称（共享配置）
     "factor_files": ["reversal_momentum_factors","quality_factors","style_factors","price_volume_factors","risk_factors","sentiment_factors","other_factors",],  # 因子配置文件
     "factor_cache_names": [],  # DuckDB + Parquet 预计算因子回退
     # [对齐筛选端] 使用 select_factors.py 输出的跨窗口精选因子作为候选池，
@@ -96,8 +104,8 @@ LOCAL_CONFIG = {
     "normalize_labels": True,  # 标签截面 rank 归一化 → [0,1]（通过 Processor 管线在每个 fold 内独立执行，消除前视偏差）
     "neutralize_labels": True,  # 标签中性化：剥离行业/市值效应，提取纯 alpha 标签
     "use_dynamic_filter": True,  # 启用流动性过滤（成交量>0 + 近20日均成交额>500万），涨跌停/一字板/持仓期停牌过滤已移至 filter_untradeable_labels
-    "filter_new_stocks": True,   # 过滤上市不满 250 日次新股
-    "filter_st": True,           # 过滤 ST 股票
+    "filter_new_stocks": FILTER_NEW_STOCKS,  # 过滤上市不满 250 日次新股（pipeline_config 统一开关）
+    "filter_st": FILTER_ST,                  # 过滤 ST 股票（pipeline_config 统一开关）
     
     # 标签可交易性过滤（剔除涨跌停无法买入的样本）
     "filter_untradeable_labels": True,
@@ -135,7 +143,7 @@ LOCAL_CONFIG = {
             "test":  ("2025-01-01", "2025-12-31"),
         }
     ],
-    "top_k_factors": 60,  # 每窗口保留的因子数量（嵌入法精选后）
+    "top_k_factors": TOP_K,  # 每窗口保留的因子数量（嵌入法精选后；共享配置）
     "feature_selection_date_stride": 2,  # IC 采样跨步（2=隔日采样）
     "train_models": ["lgb", "xgb", "cat"],
     "model_params": {
@@ -185,12 +193,12 @@ LOCAL_CONFIG = {
     },
     "factor_redundancy_check": {
         "enabled": True,                   # [AQR 标准] 因子冗余剔除
-        "correlation_threshold": 0.90,     # 相关系数阈值
+        "correlation_threshold": REDUNDANCY_THRESHOLD,  # 相关系数阈值（共享配置）
     },
     "icir_stability_check": {
         "enabled": True,                   # [Citadel Alpha Lab 标准] ICIR 稳定性
-        "rolling_window": 60,              # 滚动窗口
-        "keep_ratio": 0.8,                 # ICIR 正向占比要求
+        "rolling_window": ICIR_WINDOW,     # 滚动窗口（共享配置）
+        "keep_ratio": ICIR_KEEP_RATIO,     # ICIR 正向占比要求（共享配置）
     },
     "hyperparam_search": {
         "enabled": False,  # 默认关闭以加速（需要 Optuna，耗时较长）
@@ -297,6 +305,49 @@ def build_effective_local_config(base_config: dict | None = None, latest_date: s
 # [辅助函数] 因子 IC 批量筛选
 # ==============================================================================
 
+def _read_preselected_factors(path: str) -> list:
+    """读取精选因子名单，支持两种来源（P1-6 候选池=训练因子池）：
+
+    1. candidate_pool.json（Alpha Book）：仅导出 status=admitted 的因子名单
+    2. select_factors.py 输出的 CSV（selected_factors_*.csv，含 factor_name 列）
+
+    返回因子名列表；读取失败返回空列表（调用方回退到 IC 粗筛）。
+    """
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            head = f.read(4096)
+    except Exception:
+        return []
+
+    stripped = head.lstrip()
+    if stripped.startswith("{"):
+        # ── 候选池 Alpha Book JSON ──
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                pool = json.load(f)
+            names = []
+            for e in pool.get("factors", []):
+                status = e.get("status")
+                if status not in (None, "admitted"):
+                    continue
+                names.append(e["name"])
+            if pool.get("_meta", {}).get("set_version"):
+                print(f"      [候选池] 因子集版本: {pool['_meta']['set_version']}")
+            return names
+        except Exception:
+            return []
+    # ── CSV 兼容（select_factors.py 输出） ──
+    try:
+        _ps_df = pd.read_csv(path)
+        if "factor_name" in _ps_df.columns:
+            return [str(x) for x in _ps_df["factor_name"].tolist() if str(x) != "nan"]
+        if _ps_df.shape[1] >= 1:
+            return [str(x) for x in _ps_df.iloc[:, 1].tolist() if str(x) != "nan"]
+        return []
+    except Exception:
+        return []
+
+
 def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_start, train_end,
                                 out_dir=None, batch_size=20, top_k=60, stride=2, ic_history=None):
     """按 batch_size 分批计算因子 IC，避免 OOM。
@@ -350,7 +401,18 @@ def _batch_factor_ic_selection(feature_cache, label_expr, label_name, train_star
 
     label_df = pd.concat(label_frames)
     label_df.index.names = ["instrument", "datetime"]
-    label_series = label_df[label_df.columns[0]].sort_index()
+    # [P0-对齐] 标签 DK_L 管线：与训练端 neutralize_labels / 精选端 select_factors.py 逐位对齐。
+    # 裸收益标签混入市值/行业 beta，与训练端纯 alpha 标签口径错位 → 此处剥离风格暴露。
+    label_mi = label_df[[label_df.columns[0]]].copy()
+    label_mi.columns = pd.MultiIndex.from_tuples([("label", label_name)])
+    label_mi = CSNeutralize(
+        fields_group="label",
+        industry_field="sw_l1",
+        market_cap_field="circ_mv",
+        log_mc=True,
+    ).__call__(label_mi)
+    label_mi = CSQuantileNorm(fields_group="label").__call__(label_mi)
+    label_series = label_mi[("label", label_name)].sort_index()
     label_series = label_series.rename(label_name)
     label_dates = label_series.index.get_level_values("datetime").unique()
     if stride > 1:
@@ -1451,8 +1513,9 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
 
         # ---- [P1 Step 1] 窗口独立因子 IC 粗筛 ----
         # 粗筛到 top_k * 2 个因子，作为后续嵌入法精选的候选池
-        # [对齐筛选端] 若配置了 preselected_factors_file（select_factors.py 跨窗口精选结果），
-        # 直接以其为候选池，跳过全量 243 因子 IC 粗筛，确保训练与筛选因子口径一致。
+        # [对齐筛选端] 若配置了 preselected_factors_file（select_factors.py 跨窗口精选结果，
+        # 或候选池 candidate_pool.json — Alpha Book，P1-6），直接以其为候选池，
+        # 跳过全量 243 因子 IC 粗筛，确保训练与筛选因子口径一致。
         coarse_top_k = max(top_k * 2, 100)
         preselected_file = CONFIG.get("preselected_factors_file")
         window_selected_factors = None
@@ -1462,13 +1525,7 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                 _ps_path = preselected_file
             if os.path.exists(_ps_path):
                 try:
-                    _ps_df = pd.read_csv(_ps_path)
-                    if "factor_name" in _ps_df.columns:
-                        _preselected = [str(x) for x in _ps_df["factor_name"].tolist() if str(x) != "nan"]
-                    elif _ps_df.shape[1] >= 1:
-                        _preselected = [str(x) for x in _ps_df.iloc[:, 1].tolist() if str(x) != "nan"]
-                    else:
-                        _preselected = []
+                    _preselected = _read_preselected_factors(_ps_path)
                     # 过滤为全局缓存中实际可用的因子
                     _avail = set(global_feature_cache.factor_names)
                     _usable = [f for f in _preselected if f in _avail]

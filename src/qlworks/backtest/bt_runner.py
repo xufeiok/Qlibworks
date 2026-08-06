@@ -30,6 +30,7 @@ except ImportError:
     SuperPlot = None
 
 from .bt_strategy import QlibPandasData, EnhancedQlibStrategy, AShareCommission
+from qlworks.pipeline_config import FILTER_ST, FILTER_NEW_STOCKS
 
 
 def _print_backtest_report(strat, initial_cash: float, final_value: float) -> None:
@@ -171,10 +172,14 @@ def run_qlib_backtrader(
     # 确定回测日期范围（使用预测数据中的实际交易日，避免引入非交易日的 NaN）
     full_calendar = pred_df.index.get_level_values('datetime').unique().sort_values()
 
-    # [Filter] 预处理：剔除上市不满250日的新股
+    # [Filter] 预处理：剔除上市不满250日的新股 + ST（引用 pipeline_config 统一开关）。
+    # 注：pred_df 上游（训练端评分输出）已过滤 ST/次新/退市，此处为二次防线，消除单点依赖
     from qlworks.factors.filter_utils import filter_codes_post
     _all_instruments = pred_df.index.get_level_values("instrument").unique().tolist()
-    _filtered_instruments = filter_codes_post(_all_instruments, str(full_calendar[0].date()), filter_new_stocks=True, filter_st=False)
+    _filtered_instruments = filter_codes_post(
+        _all_instruments, str(full_calendar[0].date()),
+        filter_new_stocks=FILTER_NEW_STOCKS, filter_st=FILTER_ST,
+    )
     _filtered_set = set(_filtered_instruments)
     pred_df = pred_df[pred_df.index.get_level_values("instrument").isin(_filtered_set)]
     # 也从 price_df_dict 中移除被过滤的股票

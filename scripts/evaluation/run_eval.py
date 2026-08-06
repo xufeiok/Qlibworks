@@ -50,6 +50,7 @@ from qlworks.evaluation import FactorStore, DEFAULT_CONFIG
 from qlworks.evaluation.runner import FactorEvaluator
 from qlworks.factors import FactorLibraryManager
 from qlworks.config import QLIB_DATA_DIR
+from qlworks.pipeline_config import FILTER_LIMIT_UPDOWN, FILTER_SUSPENDED
 
 # ── 自动发现 instruments 目录下的可用股票池 ──
 _INSTRUMENTS_DIR = QLIB_DATA_DIR / "instruments"
@@ -57,9 +58,23 @@ _AVAILABLE_POOLS = sorted(f.stem for f in _INSTRUMENTS_DIR.glob("*.txt") if f.is
 
 
 def _collect_factors(args):
-    """从 YAML 因子库收集因子列表（含 duckdb_expr 用于自动计算）。"""
+    """从 YAML 因子库收集因子列表（含 duckdb_expr 用于自动计算）。
+
+    [P1-4] --factor-list：直接读取 screen_factors.py 粗筛输出名单
+    （screened_factors_*.txt，每行一个因子名），实现粗筛 → 深评漏斗衔接。
+    """
     m = FactorLibraryManager()
     factors = []
+
+    if args.factor_list:
+        names = _read_factor_list(args.factor_list)
+        for name in names:
+            info = _find_factor(m, name)
+            if info:
+                factors.append(info)
+            else:
+                logger.warning(f"{name}: 因子库中未找到定义，跳过")
+        return factors
 
     if args.factor:
         info = _find_factor(m, args.factor)
@@ -378,6 +393,33 @@ def show_status(store):
     print()
 
 
+def _read_factor_list(path: str) -> list:
+    """读取粗筛因子名单文件（txt 每行一个因子名；CSV 优先取 factor_name 列，否则第一列）。"""
+    p = Path(path)
+    if not p.exists():
+        logger.error(f"因子名单文件不存在: {path}")
+        return []
+    text = p.read_text(encoding="utf-8", errors="ignore")
+    names = []
+    if p.suffix.lower() == ".csv":
+        import csv
+        import io
+        rows = list(csv.reader(io.StringIO(text)))
+        if rows and rows[0] and "factor_name" in rows[0]:
+            idx = rows[0].index("factor_name")
+        else:
+            idx = 0
+        for r in rows[1:]:
+            if r and r[idx].strip():
+                names.append(r[idx].strip())
+    else:
+        for line in text.splitlines():
+            line = line.strip()
+            if line and not line.startswith(("#", "//")):
+                names.append(line)
+    return names
+
+
 def main():
     parser = argparse.ArgumentParser(description="单因子评测系统（仓库优先 v3.0）")
     g = parser.add_mutually_exclusive_group()
@@ -386,8 +428,10 @@ def main():
     g.add_argument("--all", "-a", action="store_true", help="评测仓库中所有因子")
     g.add_argument("--status", "-s", action="store_true", help="查看仓库状态")
     g.add_argument("--demo", action="store_true", help="演示模式")
-    parser.add_argument("--pool", default="csi500",
-                        help=f"股票池，可选: {', '.join(_AVAILABLE_POOLS)} (default: csi500)")
+    parser.add_argument("--factor-list", type=str, default=None,
+                        help="粗筛输出名单（screen_factors.py 生成的 screened_factors_*.txt，每行一个因子名），评测该名单内因子")
+    parser.add_argument("--pool", default="main_board",
+                        help=f"股票池，可选: {', '.join(_AVAILABLE_POOLS)} (default: main_board，与训练端 train_tree-doubao.py 对齐)")
     parser.add_argument("--start", default="2018-01-01")
     parser.add_argument("--end", default="2025-12-31")
     parser.add_argument("--recompute", action="store_true",
@@ -396,7 +440,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="仅列出因子，不评测")
     args = parser.parse_args()
 
-    if not any([args.factor, args.category, args.all, args.demo, args.status]):
+    if not any([args.factor, args.category, args.all, args.demo, args.status, args.factor_list]):
         parser.print_help()
         return
 
@@ -466,6 +510,51 @@ def main():
             df_label = evaluator._load_labels(args.start, args.end)
             if df_label is not None:
                 df = df.join(df_label, how="inner")
+
+            # [数据质量] 标签可交易性过滤（与粗筛/精选/训练端一致）：
+            # 涨跌停/一字板/持仓期停牌样本标签置 NaN，避免评测统计来自不可交易样本
+            if FILTER_LIMIT_UPDOWN:
+                from qlworks.factors.filter_utils import filter_untradeable_labels
+                label_col = evaluator.config.label_name
+                if label_col in df.columns:
+                    inst_list = df.index.get_level_values("instrument").unique().tolist()
+                    label_clean = filter_untradeable_labels(
+                        df[[label_col]].copy(), inst_list,
+                        str(args.start)[:10], str(args.end)[:10],
+                    )
+                    if label_clean is not None:
+                        df[label_col] = label_clean[label_col]
+
+            # [数据质量] 补充 volume / change_pct 列：
+            # 使评测端 filter_ashare_constraints（涨跌停/停牌过滤）真正生效——
+            # 原实现因 df 缺这两列而静默失效（if 条件恒不满足，一条数据都没过滤）
+            if FILTER_SUSPENDED or evaluator.config.limit_up_pct is not None:
+                try:
+                    import qlib as _q
+                    from qlib.config import REG_CN as _REG_CN
+                    from qlib.data import D as _D
+                    if not evaluator._qinited:
+                        _q.init(provider_uri=str(QLIB_DATA_DIR), region=_REG_CN)
+                        evaluator._qinited = True
+                    inst_list = df.index.get_level_values("instrument").unique().tolist()
+                    _extra = _D.features(
+                        inst_list,
+                        ["$volume", "Ref($close, 1) / $close - 1"],
+                        str(args.start)[:10], str(args.end)[:10],
+                    )
+                    if _extra is not None and not _extra.empty:
+                        if isinstance(_extra.columns, pd.MultiIndex):
+                            _extra.columns = _extra.columns.droplevel(1)
+                        _extra = _extra.rename(columns={
+                            "$volume": "volume",
+                            "Ref($close, 1) / $close - 1": "change_pct",
+                        })
+                        if df.index.names != _extra.index.names:
+                            _extra = _extra.swaplevel()
+                        df["volume"] = _extra["volume"]
+                        df["change_pct"] = _extra["change_pct"]
+                except Exception as _e:
+                    logger.warning(f"[数据质量] volume/change_pct 加载失败（{_e}），涨跌停/停牌过滤保持不生效")
 
             # 补充 mkt_cap + industry（场景压力测试/控制变量对冲必需）
             df = _enrich_with_extra_fields(df, args.start, args.end, logger=logger)

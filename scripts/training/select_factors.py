@@ -22,6 +22,7 @@ import warnings
 import yaml
 from pathlib import Path
 from datetime import datetime
+import json
 from typing import List, Dict, Optional, Tuple
 
 os.environ['MLFLOW_ALLOW_FILE_STORE'] = 'true'
@@ -43,12 +44,19 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from qlworks.features.builder import FeatureBundle
 from qlworks.features.dataset import build_custom_feature_cache
-from qlworks.factors.filter_utils import filter_codes_post
+from qlworks.factors.filter_utils import filter_codes_post, filter_untradeable_labels
 from qlworks.models import cached_select_features
+from qlworks.models.training import compute_ic
 from qlworks.processors.quantile_norm import CSQuantileNorm
+from qlworks.processors.neutralize import CSNeutralize
 from qlworks.config import QLIB_DATA_DIR
 from qlworks.evaluation.selector import (
     check_redundancy, check_icir_stability, aggregate_across_windows,
+)
+from qlworks.pipeline_config import (
+    LABEL_EXPR, LABEL_NAME, INSTRUMENTS,
+    REDUNDANCY_THRESHOLD, ICIR_WINDOW, ICIR_KEEP_RATIO,
+    FILTER_ST, FILTER_NEW_STOCKS, FILTER_LIMIT_UPDOWN,
 )
 import qlib
 from qlib.data import D
@@ -82,11 +90,56 @@ CONFIG = {
     "algo": "lightgbm",
     "min_factors": 3,
 
-    # --- 股票池与过滤（与 train_from_selected.py 对齐）---
-    "instruments": "main_board",
+    # --- 股票池与过滤（引用 pipeline_config 单一事实源，与粗筛/评测/训练/实盘一致）---
+    "instruments": INSTRUMENTS,
     "use_dynamic_filter": True,
-    "filter_new_stocks": True,
-    "filter_st": True,
+    "filter_new_stocks": FILTER_NEW_STOCKS,
+    "filter_st": FILTER_ST,
+    "filter_untradeable_labels": FILTER_LIMIT_UPDOWN,  # 涨跌停/一字板/持仓期停牌标签置 NaN
+
+    # --- 标签 DK_L 管线（与训练端 train_tree-doubao.py 的 neutralize_labels 逐位对齐）---
+    # CSNeutralize(industry+mv) → CSQuantileNorm(label)，剥离风格暴露得到纯 alpha 标签。
+    # 树模型路线下因子侧不做中性化（neutralize_features=False），"纯 alpha"口径由标签侧保证。
+    "industry_field": "sw_l1",        # 行业分类字段（CSNeutralize 从 Qlib 拉取 $sw_l1）
+    "market_cap_field": "circ_mv",    # 市值字段（CSNeutralize 从 Qlib 拉取 $circ_mv）
+    "log_mc": True,                   # 市值对数化（中性化解释变量用 log 市值）
+
+    # --- [P2-整合] 输入源：候选池白名单（Alpha Book，评测+三关准入后的因子）---
+    # 精选端只评估"单因子评测→三关准入"通过的因子，杜绝漏斗绕过；
+    # 白名单仅过滤 factor_library yaml 的加载结果（保留 8 MECE 分类学与表达式）。
+    "pool_whitelist": True,           # 仅对 candidate_pool.json 中 status=admitted 因子做精选
+    "pool_path": None,                # 候选池路径（None=默认 factor_data/registry/candidate_pool.json）
+
+    # --- [P2-整合] IC 粗筛（来自 train_tree-doubao 跨窗口稳定 IC + stride）---
+    # 嵌入法前先按 Spearman IC 粗筛类别内因子，消除低 IC 噪声因子的干扰；
+    # 跨窗口稳定 IC：要求方向与历史窗口一致（同号占比>=0.5）并按均值|IC|打分。
+    "ic_coarse": {
+        "enabled": True,
+        "stride": 2,                  # IC 采样隔日（降低序列自相关对 IC 的污染）
+        "top_k_ratio": 0.6,           # 类别内 IC 粗筛保留比例（作为嵌入法候选池）
+        "min_keep": 3,                # 至少保留因子数（IC 粗筛保底）
+        "stable_ic": True,            # 跨窗口稳定 IC（首窗口退化为单窗口 |IC|）
+    },
+
+    # --- [P2-整合] 置换检验（来自 train_tree-doubao，向量化批量 Spearman）---
+    # 对嵌入法选中的因子做显著性检验，剔除纯噪声因子（p >= 阈值）；
+    # 显著因子过少时保留原结果（min_keep 保护，防因子池崩空）。
+    "permutation_test": {
+        "enabled": True,
+        "n_permutations": 200,        # 置换次数（200 次足够 p 值精度）
+        "pvalue_threshold": 0.05,     # 双尾 p 值阈值
+        "min_keep": 3,                # 至少保留显著因子数
+    },
+
+    # --- [P2-整合] 自适应配额（来自 train_tree 自适应 top_k）---
+    # 嵌入法 max_features = min(max, max(min, ceil(len(候选) * ratio)))，
+    # 类别规模小时自动放宽，规模大时收紧，避免固定 top_k 造成类别间失衡。
+    "adaptive_top_k": {
+        "enabled": True,
+        "min": 3,
+        "max": 10,
+        "ratio": 0.6,
+    },
 
     # --- 滚动窗口因子筛选（训练期窗口与 train_from_selected.py 完全对齐）---
     # 每个窗口仅使用其 train 期数据做因子筛选，消除前瞻偏差。
@@ -105,24 +158,28 @@ CONFIG = {
         }
     ],
 
-    # 标签（与 train_from_selected.py 对齐）
-    "label_expr": "Ref($close, -5) / Ref($open, -1) - 1",
-    "label_name": "LABEL_5D",
+    # 标签（共享配置，与 screen_factors / train_tree-doubao / 评测端一致）
+    "label_expr": LABEL_EXPR,
+    "label_name": LABEL_NAME,
 
-    # 冗余检测
+    # 冗余检测（阈值引用 pipeline_config 单一事实源，与粗筛/训练端统一）
     "redundancy_check": True,
-    "redundancy_threshold": 0.95,
+    "redundancy_threshold": REDUNDANCY_THRESHOLD,
 
-    # ICIR 稳定性校验
+    # ICIR 稳定性校验（引用共享配置，与粗筛/训练端统一）
     "icir_stability": True,
-    "icir_window": 60,
-    "icir_keep_ratio": 0.9,
+    "icir_window": ICIR_WINDOW,
+    "icir_keep_ratio": ICIR_KEEP_RATIO,
 
     # 跨窗口聚合：因子在 >= min_window_ratio 比例的窗口中入选才最终选中
     "min_window_ratio": 0.5,
 
     # 输出：None 自动生成时间戳文件名
     "output": None,
+
+    # [P1-6] 精选结果回写候选池（Alpha Book）作为准入建议（不直接 admitted）
+    # 候选池的最终准入仍由 admit_to_multifactor.py 三关检验唯一决定。
+    "write_pool": False,
 
     # 缓存
     "clean_start": False,
@@ -294,6 +351,183 @@ def _compute_window_full_period(rolling_windows: List[Dict]) -> Tuple[str, str]:
     return min(all_starts), max(all_ends)
 
 
+def _load_pool_whitelist(pool_path: Optional[str] = None) -> Optional[set]:
+    """
+    从候选池（Alpha Book）读取 status=admitted 的因子名集合，作为精选白名单。
+
+    输入:
+    - pool_path: 候选池 JSON 路径（None=默认 factor_data/registry/candidate_pool.json）
+
+    输出:
+    - 返回 admitted 因子名 set；候选池缺失/解析失败/无 admitted 因子时返回 None
+      （调用方回退到全库加载，保证精选流程可运行）。
+    """
+    default_pool = (Path(__file__).resolve().parents[2]
+                    / "factor_data" / "registry" / "candidate_pool.json")
+    path = Path(pool_path) if pool_path else default_pool
+    if not path.exists():
+        print(f"  [白名单] 候选池不存在: {path}，跳过白名单过滤（回退全库因子）")
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            pool = json.load(f)
+        names = [e["name"] for e in pool.get("factors", [])
+                 if e.get("status") == "admitted"]
+        if not names:
+            print("  [白名单] 候选池无 admitted 因子，跳过白名单过滤（回退全库因子）")
+            return None
+        print(f"  [白名单] 候选池 admitted 因子 {len(names)} 个（来自 {path.name}）")
+        return set(names)
+    except Exception as e:
+        print(f"  [白名单] 候选池解析失败: {e}，跳过白名单过滤（回退全库因子）")
+        return None
+
+
+def _ic_coarse_select(
+    x_sub: pd.DataFrame,
+    y_sub: pd.Series,
+    factor_names: List[str],
+    ic_history: Optional[List[Dict]] = None,
+    stride: int = 2,
+    top_k_ratio: float = 0.6,
+    min_keep: int = 3,
+    stable_ic: bool = True,
+) -> Tuple[List[str], Dict[str, float]]:
+    """
+    类别内 IC 粗筛：逐因子计算与 DK_L 标签的 Spearman IC，
+    支持跨窗口稳定 IC（方向一致性 + 均值 |IC|）与隔日 stride 采样。
+
+    输入:
+    - x_sub: 类别因子矩阵（MultiIndex (datetime, instrument) × 因子列，已 CSRankNorm）
+    - y_sub: DK_L 标签 Series（与 x_sub 行对齐）
+    - factor_names: 类别内因子名列表（待粗筛）
+    - ic_history: 跨窗口 IC 历史（list of dict，每元素 = {因子名: 该窗口IC}，时间升序）
+    - stride: 隔日采样步长（降低序列自相关对 IC 的污染）
+    - top_k_ratio: 保留比例（候选数 = max(ceil(len * ratio), min_keep)）
+    - min_keep: 至少保留因子数
+    - stable_ic: 是否启用跨窗口稳定 IC 评分
+
+    输出:
+    - (候选因子名列表[按 IC 降序], 本窗口 {因子名: IC})
+    """
+    avail = [c for c in factor_names if c in x_sub.columns]
+    if not avail:
+        return [], {}
+    x_ic = x_sub[avail]
+    y_ic = y_sub
+
+    # stride 降采样：仅对 IC 计算的数据按日隔步采样（嵌入法仍用全量）
+    if stride > 1:
+        _dates = x_ic.index.get_level_values("datetime").unique()[::stride]
+        _mask = x_ic.index.get_level_values("datetime").isin(_dates)
+        x_ic = x_ic.loc[_mask]
+        y_ic = y_ic.loc[_mask]
+
+    # 逐因子 Spearman IC（列级独立 dropna，与粗筛/训练端 compute_ic 口径一致）
+    ics = {}
+    for col in avail:
+        feat = x_ic[col].dropna()
+        lab = y_ic.reindex(feat.index).dropna()
+        common = feat.index.intersection(lab.index)
+        if len(common) < 50:
+            continue
+        try:
+            ics[col] = compute_ic(feat.loc[common], lab.loc[common])
+        except Exception:
+            ics[col] = 0.0
+
+    # 跨窗口稳定 IC 评分：当前窗口方向与历史均值一致，且历史同号占比 >= 0.5
+    stable_score = {}
+    for factor, ic_val in ics.items():
+        score = abs(float(ic_val))
+        if stable_ic and ic_history:
+            hist_ics = [h.get(factor) for h in ic_history]
+            hist_ics = [x for x in hist_ics
+                        if x is not None and not (isinstance(x, float) and np.isnan(x))]
+            if len(hist_ics) > 0:
+                hist_mean = float(np.mean(hist_ics))
+                if np.sign(ic_val) != np.sign(hist_mean):
+                    continue  # 方向反转 → 不稳定，剔除
+                _all = hist_ics + [ic_val]
+                same_ratio = np.mean([1.0 if np.sign(x) == np.sign(ic_val) else 0.0 for x in _all])
+                if same_ratio < 0.5:
+                    continue
+                score = abs(float(np.mean(_all))) * same_ratio
+        stable_score[factor] = score
+
+    ranked = sorted(stable_score.keys(), key=lambda k: stable_score[k], reverse=True)
+    keep_n = max(int(np.ceil(len(ranked) * top_k_ratio)), min_keep) if ranked else 0
+    return ranked[:keep_n], ics
+
+
+def _permutation_significance(
+    x_sub: pd.DataFrame,
+    y_sub: pd.Series,
+    selected_names: List[str],
+    n_perms: int = 200,
+    pvalue_threshold: float = 0.05,
+    min_keep: int = 3,
+) -> List[str]:
+    """
+    置换检验：对选中的因子做双尾显著性检验（向量化批量 Spearman）。
+
+    输入:
+    - x_sub: 类别因子矩阵（含 selected_names 列）
+    - y_sub: DK_L 标签 Series（与 x_sub 行对齐）
+    - selected_names: 待检验因子名列表
+    - n_perms: 置换次数
+    - pvalue_threshold: 双尾 p 值阈值
+    - min_keep: 显著因子少于该值时保留原列表（防因子池崩空）
+
+    输出:
+    - 显著因子名列表（保序；显著不足时返回原列表）
+    """
+    from scipy.stats import rankdata
+
+    avail = [c for c in selected_names if c in x_sub.columns]
+    if len(avail) < 2:
+        return selected_names
+    comb = x_sub[avail].join(y_sub.rename("_y"), how="inner").dropna()
+    if len(comb) < 50:
+        return selected_names
+
+    feat_cols = [c for c in comb.columns if c != "_y"]
+    X = comb[feat_cols].values.astype(np.float64)
+    y = comb["_y"].values.astype(np.float64)
+    n_samples, n_factors = X.shape
+
+    # 预排名 X（不变，只排一次）+ 去中心化/标准化，后续每次置换只需一次矩阵乘
+    X_ranked = np.apply_along_axis(rankdata, 0, X)
+    X_centered = X_ranked - np.mean(X_ranked, axis=0)
+    X_std = np.std(X_ranked, axis=0, ddof=1)
+    X_std[X_std == 0] = 1.0
+
+    def _spearman_batch(y_vec: np.ndarray) -> np.ndarray:
+        y_r = rankdata(y_vec).astype(np.float64)
+        y_c = y_r - np.mean(y_r)
+        y_s = np.std(y_r, ddof=1)
+        if y_s == 0:
+            return np.zeros(n_factors)
+        return (X_centered.T @ y_c) / ((n_samples - 1) * X_std * y_s)
+
+    real_ic = _spearman_batch(y)
+    rng = np.random.RandomState(42)
+    perm_matrix = np.zeros((n_perms, n_factors))
+    for p in range(n_perms):
+        y_shuffled = y[rng.permutation(n_samples)]
+        perm_matrix[p, :] = _spearman_batch(y_shuffled)
+
+    p_values = np.mean(np.abs(perm_matrix) >= np.abs(real_ic), axis=0)
+    significant = [feat_cols[i] for i in range(n_factors) if p_values[i] < pvalue_threshold]
+
+    n_sig = len(significant)
+    print(f"    [置换检验] 显著 {n_sig}/{n_factors} 个 (p<{pvalue_threshold})")
+    if n_sig < min_keep:
+        print(f"    [置换检验] 显著因子过少({n_sig}<{min_keep})，保留原筛选结果")
+        return selected_names
+    return significant
+
+
 def run_single_category_selection(
     cat_name: str,
     factors: List[Dict],
@@ -308,6 +542,10 @@ def run_single_category_selection(
     icir_stability: bool = True,
     icir_rolling_window: int = 60,
     icir_keep_ratio: float = 0.9,
+    ic_history: Optional[List[Dict]] = None,   # [P2] 跨窗口 IC 历史（函数内 append 本窗口 IC）
+    ic_coarse_conf: Optional[Dict] = None,     # [P2] IC 粗筛配置（stride/稳定 IC/比例）
+    perm_conf: Optional[Dict] = None,          # [P2] 置换检验配置
+    adaptive_conf: Optional[Dict] = None,      # [P2] 自适应配额配置
 ) -> Optional[pd.DataFrame]:
     """
     在单个类别上运行特征选择。
@@ -315,11 +553,14 @@ def run_single_category_selection(
     [性能优化] 不再创建 Qlib dataset，直接从预准备的 x_train/y_train 中按因子名切片。
     CSRankNorm 已在主流程中运行一次，此处直接复用结果。
 
+    [P2-整合] 完整筛选链：IC 粗筛(跨窗口稳定 IC+stride) → 嵌入法(自适应 top_k)
+    → 置换检验(显著性) → 冗余检测 → ICIR 稳定校验。
+
     输入:
     - cat_name: 类别名称
     - factors: 该类别因子列表 [{name, expression, meaning, source_file}, ...]
     - x_train: 已标准化 (CSRankNorm) 的特征矩阵
-    - y_train: 标签 Series
+    - y_train: DK_L 标签 Series
     - fs_method, fs_algo, top_k: 特征选择参数
     - label_name: 标签列名（用于 ICIR 校验）
     - redundancy_check: 是否做冗余检测
@@ -327,6 +568,8 @@ def run_single_category_selection(
     - icir_stability: 是否做 ICIR 稳定性校验
     - icir_rolling_window: ICIR 滚动窗口天数
     - icir_keep_ratio: ICIR 保留比例
+    - ic_history: 跨窗口 IC 历史（list of dict，时间升序；本窗口 IC 会追加到列表尾）
+    - ic_coarse_conf / perm_conf / adaptive_conf: [P2-整合] 新增筛选阶段配置
     """
     cat_factor_names = [f["name"] for f in factors]
     print(f"    [筛选] {len(factors)} 个因子, top_k={top_k}...")
@@ -348,10 +591,44 @@ def run_single_category_selection(
                 })
         return pd.DataFrame(rows)
 
-    x_cat = x_train[available]
+    # [P2-整合] IC 粗筛：跨窗口稳定 IC + stride（候选池收缩，剔除低/不稳定 IC 因子）
+    ic_cfg = ic_coarse_conf or {}
+    perm_cfg = perm_conf or {}
+    adap_cfg = adaptive_conf or {}
+    coarse_pool = available
+    window_ic = {}
+    if ic_cfg.get("enabled", True) and len(available) > ic_cfg.get("min_keep", 3):
+        coarse_pool, window_ic = _ic_coarse_select(
+            x_cat, y_cat, available,
+            ic_history=ic_history,
+            stride=ic_cfg.get("stride", 2),
+            top_k_ratio=ic_cfg.get("top_k_ratio", 0.6),
+            min_keep=ic_cfg.get("min_keep", 3),
+            stable_ic=ic_cfg.get("stable_ic", True),
+        )
+        removed_coarse = len(available) - len(coarse_pool)
+        if removed_coarse > 0:
+            print(f"    [IC 粗筛] 剔除 {removed_coarse} 个低/不稳定 IC 因子，候选 {len(coarse_pool)} 个")
+        if len(coarse_pool) < 2:
+            coarse_pool = available  # 保护：粗筛后过少则回退全类别
+    # 记录本窗口 IC（供后续窗口跨窗口稳定 IC 判断）
+    if ic_history is not None and window_ic:
+        ic_history.append(window_ic)
+
+    x_cat = x_train[coarse_pool]
     y_cat = y_train
 
     print(f"      >>> {x_cat.shape[0]} 行, {x_cat.shape[1]} 个特征")
+
+    # [P2-整合] 自适应 top_k：随候选规模动态调整嵌入法 max_features
+    eff_top_k = top_k
+    if adap_cfg.get("enabled", True):
+        _a_min = adap_cfg.get("min", 3)
+        _a_max = adap_cfg.get("max", 10)
+        _a_ratio = adap_cfg.get("ratio", 0.6)
+        eff_top_k = min(_a_max, max(_a_min, int(np.ceil(len(coarse_pool) * _a_ratio))))
+        eff_top_k = min(eff_top_k, len(coarse_pool))
+    print(f"    [自适应] 候选 {len(coarse_pool)} 个, top_k={eff_top_k}")
 
     # 特征选择
     try:
@@ -359,21 +636,21 @@ def run_single_category_selection(
             fs_result = cached_select_features(
                 x_cat, y_cat,
                 method=fs_method, algo=fs_algo, threshold=0.0,
-                model_kwargs={"max_features": min(top_k, len(available)), "importance_type": "gain"},
+                model_kwargs={"max_features": min(eff_top_k, len(coarse_pool)), "importance_type": "gain"},
                 remove_collinearity=False,
             )
         elif fs_method == "filter":
             fs_result = cached_select_features(
                 x_cat, y_cat,
                 method=fs_method, algo=fs_algo,
-                k=min(top_k, len(available)),
+                k=min(eff_top_k, len(coarse_pool)),
                 remove_collinearity=False,
             )
         else:
             fs_result = cached_select_features(
                 x_cat, y_cat,
                 method=fs_method, algo=fs_algo,
-                model_kwargs={"max_features": min(top_k, len(available))},
+                model_kwargs={"max_features": min(eff_top_k, len(coarse_pool))},
                 remove_collinearity=False,
             )
     except Exception as e:
@@ -383,6 +660,19 @@ def run_single_category_selection(
     selected_set = set(fs_result.selected_features)
     scores = fs_result.feature_scores
     selected_factor_names = list(selected_set)
+
+    # [P2-整合] 置换检验：剔除纯噪声因子（p >= 阈值，双尾）
+    if perm_cfg.get("enabled", True) and len(selected_factor_names) >= 3:
+        try:
+            selected_factor_names = _permutation_significance(
+                x_cat, y_cat, selected_factor_names,
+                n_perms=perm_cfg.get("n_permutations", 200),
+                pvalue_threshold=perm_cfg.get("pvalue_threshold", 0.05),
+                min_keep=perm_cfg.get("min_keep", 3),
+            )
+            selected_set = set(selected_factor_names)
+        except Exception as e:
+            print(f"    [置换检验] 异常: {e}，保留原筛选结果")
 
     # 冗余检测：来自 x_train 的因子间相关（逻辑收敛于 selector.check_redundancy）
     if redundancy_check and len(selected_factor_names) > 5:
@@ -480,6 +770,10 @@ def _prepare_window_data(
     label_name: str,
     filter_new_stocks: bool = True,
     filter_st: bool = True,
+    filter_untradeable_labels: bool = True,
+    industry_field: str = "sw_l1",
+    market_cap_field: str = "circ_mv",
+    log_mc: bool = True,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     为单个滚动窗口准备训练数据：切片时间范围 → 合并标签 → 标准化 → 过滤。
@@ -514,6 +808,16 @@ def _prepare_window_data(
     if isinstance(label_raw.columns, pd.MultiIndex):
         label_raw.columns = label_raw.columns.droplevel(1)
     label_raw = label_raw.rename(columns={label_raw.columns[0]: label_name})
+
+    # [数据质量] 标签可交易性过滤（与粗筛/训练端一致）：
+    # 涨跌停/一字板/持仓期停牌样本标签置 NaN，避免精选结论来自不可交易样本
+    if filter_untradeable_labels:
+        label_raw = filter_untradeable_labels(
+            label_raw, global_feature_cache.resolved_instruments, train_start, train_end
+        )
+        if label_raw is None or label_raw.empty:
+            raise ValueError(f"标签 {label_expr} 经可交易性过滤后为空")
+
     label_flat = label_raw.reset_index()
     label_flat['instrument'] = label_flat['instrument'].str.lower()
     label_flat = label_flat.set_index(['datetime', 'instrument']).sort_index()
@@ -534,12 +838,91 @@ def _prepare_window_data(
     feature_cols = [c for c in full_train_frame.columns if c in all_factor_names]
     x_raw = full_train_frame[feature_cols].copy()
     x_norm = _apply_cs_rank_norm(x_raw)
-    y = full_train_frame[label_name].copy()
 
-    del warehouse_df, label_raw, label_flat, full_train_frame, x_raw
+    # [P0] 标签 DK_L 管线：与训练端 train_tree-doubao.py 的 neutralize_labels 逐位对齐。
+    #   ① CSNeutralize(industry+mv)：Ridge 回归剥离行业/市值风格暴露（纯 alpha 口径）
+    #   ② CSQuantileNorm(label)：截面分位化，消除收益分布偏度与极端值影响
+    #   若标签侧不剥离风格，模型/筛选 IC 会混入市值/行业 beta（与训练端标签错位）。
+    y_mi = full_train_frame[[label_name]].copy()
+    y_mi.columns = pd.MultiIndex.from_tuples([("label", label_name)])
+    y_mi = CSNeutralize(
+        fields_group="label",
+        industry_field=industry_field,
+        market_cap_field=market_cap_field,
+        log_mc=log_mc,
+    ).__call__(y_mi)
+    y_mi = CSQuantileNorm(fields_group="label").__call__(y_mi)
+    y = y_mi[("label", label_name)].rename(label_name)
+
+    # 中性化后无行业/市值暴露样本的标签为 NaN，与特征同步剔除保持行对齐
+    valid_mask = y.notna()
+    y = y[valid_mask]
+    x_norm = x_norm.loc[valid_mask]
+
+    del warehouse_df, label_raw, label_flat, full_train_frame, x_raw, y_mi
     gc.collect()
 
     return x_norm, y
+
+
+def _write_pool_suggestions(final_df: pd.DataFrame) -> None:
+    """[P1-6] 精选结果回写候选池（Alpha Book）建议区。
+
+    精选因子作为"准入建议"写入 candidate_pool.json 的 suggestions 区，
+    状态为 suggested，**不直接 admitted**——最终准入由
+    admit_to_multifactor.py 三关检验（相关性/边际贡献/方向一致）唯一决定。
+
+    输入：
+    - final_df: 跨窗口聚合结果（含 factor_name / importance / n_windows_selected 等列）
+    """
+    from datetime import datetime
+    pool_path = (Path(__file__).resolve().parents[2]
+                 / "factor_data" / "registry" / "candidate_pool.json")
+    if not pool_path.exists():
+        print(f"[write_pool] 候选池不存在: {pool_path}，跳过回写（先运行 admit_to_multifactor.py --build-all）")
+        return
+
+    selected = final_df[final_df["selected"]]
+    if selected.empty:
+        print("[write_pool] 无精选因子，跳过回写")
+        return
+
+    try:
+        with open(pool_path, "r", encoding="utf-8") as f:
+            pool = json.load(f)
+    except Exception as e:
+        print(f"[write_pool] 读取候选池失败({e})，跳过回写")
+        return
+
+    now = datetime.now().isoformat(timespec="seconds")
+    suggestions = pool.setdefault("suggestions", [])
+    existing_names = {s.get("name") for s in suggestions}
+    added = 0
+    for _, row in selected.iterrows():
+        name = row["factor_name"]
+        if name in existing_names:
+            continue
+        suggestions.append({
+            "name": name,
+            "category": row.get("category", ""),
+            "sub_category": row.get("sub_category", ""),
+            "importance": round(float(row.get("importance", 0)), 4),
+            "n_windows_selected": int(row.get("n_windows_selected", 0)),
+            "total_windows": int(row.get("total_windows", 0)),
+            "status": "suggested",          # 仅建议，待 admit 三关准入
+            "suggested_at": now,
+        })
+        existing_names.add(name)
+        added += 1
+
+    if added > 0:
+        pool["_meta"]["updated_at"] = now
+        with open(pool_path, "w", encoding="utf-8") as f:
+            json.dump(pool, f, ensure_ascii=False, indent=2)
+        print(f"[write_pool] 已回写 {added} 个精选因子建议至候选池: {pool_path}")
+        print("           建议因子需经 admit_to_multifactor.py 三关检验后方可 admitted（训练因子池）")
+    else:
+        print("[write_pool] 无新增建议因子（均已存在）")
 
 
 def main():
@@ -566,6 +949,23 @@ def main():
     if not categories:
         print("[错误] 未加载到任何因子")
         sys.exit(1)
+
+    # [P2-整合] 候选池白名单：仅保留"单因子评测→三关准入"通过的因子（Alpha Book）
+    if CONFIG.get("pool_whitelist", True):
+        whitelist = _load_pool_whitelist(CONFIG.get("pool_path"))
+        if whitelist is not None:
+            _before = sum(len(v) for v in categories.values())
+            categories = {
+                cat: [f for f in factors if f["name"] in whitelist]
+                for cat, factors in categories.items()
+            }
+            categories = {cat: fs for cat, fs in categories.items() if fs}
+            _after = sum(len(v) for v in categories.values())
+            print(f"    [白名单] 全库 {_before} → 准入 {_after} 个因子"
+                  f"（剔除 {_before - _after} 个未过评测/准入因子）")
+            if not categories:
+                print("[错误] 白名单过滤后无可用因子")
+                sys.exit(1)
 
     # 打印类别概览
     print(f"\n[3] 类别概览:")
@@ -601,6 +1001,8 @@ def main():
     window_selections: Dict[str, Dict[str, List[bool]]] = {}
     window_importances: Dict[str, Dict[str, List[float]]] = {}
     window_details: List[pd.DataFrame] = []
+    # [P2-整合] 跨窗口 IC 历史：{category: [{factor: ic}, ...窗口]}，供稳定 IC 粗筛使用
+    cat_ic_history: Dict[str, List[Dict]] = {}
 
     for win_idx, window in enumerate(rolling_windows):
         win_name = window["name"]
@@ -623,6 +1025,10 @@ def main():
                 label_name=CONFIG["label_name"],
                 filter_new_stocks=CONFIG["filter_new_stocks"],
                 filter_st=CONFIG["filter_st"],
+                filter_untradeable_labels=CONFIG.get("filter_untradeable_labels", True),
+                industry_field=CONFIG.get("industry_field", "sw_l1"),
+                market_cap_field=CONFIG.get("market_cap_field", "circ_mv"),
+                log_mc=CONFIG.get("log_mc", True),
             )
         except ValueError as e:
             print(f"    [跳过] 窗口数据准备失败: {e}")
@@ -672,6 +1078,10 @@ def main():
                 icir_stability=CONFIG["icir_stability"],
                 icir_rolling_window=CONFIG["icir_window"],
                 icir_keep_ratio=CONFIG["icir_keep_ratio"],
+                ic_history=cat_ic_history.setdefault(cat_name, []),
+                ic_coarse_conf=CONFIG.get("ic_coarse", {}),
+                perm_conf=CONFIG.get("permutation_test", {}),
+                adaptive_conf=CONFIG.get("adaptive_top_k", {}),
             )
 
             if df is not None:
@@ -795,6 +1205,10 @@ def main():
         detail_output = output_path.replace(".csv", "_by_window.csv")
         detail_df.to_csv(detail_output, index=False, encoding="utf-8-sig")
         print(f"  逐窗口明细已保存至: {detail_output}")
+
+    # [P1-6] 精选结果回写候选池（作为准入建议，不直接 admitted）
+    if CONFIG.get("write_pool"):
+        _write_pool_suggestions(final_df)
 
     print("=" * 60)
     print(f"  精选因子数: {selected_total} (跨 {n_windows} 窗口聚合)")

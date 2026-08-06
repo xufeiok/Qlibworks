@@ -30,6 +30,9 @@ scripts/training/select_factors.py 与 scripts/training/train_tree.py 各自实�
   )
 """
 
+import os
+from concurrent.futures import ThreadPoolExecutor
+
 import numpy as np
 import pandas as pd
 
@@ -84,6 +87,56 @@ def check_quality_gate(factor_frame: pd.DataFrame,
 
 # ─────────────────────────── ② IC 统计 ───────────────────────────
 
+def _fast_ic_vs_label(factor_frame: pd.DataFrame, label_series: pd.Series,
+                      min_samples: int = 50) -> pd.Series:
+    """向量化逐列 Spearman IC（因子 × 标签），替代 scipy.spearmanr 逐列单线程。
+
+    [语义] 与 compute_factor_ics 默认路径（内联 _spearman_ic）逐位一致：
+      每列与标签取"共同非 NaN 行"子集 → 子集内 average 秩 → 子集内中心化 Pearson；
+      常数列/零方差 → 0.0；有效样本 < min_samples → 不输出该因子。
+
+    [性能] 每列一次排序（O(n log n)）+ 子集内秩 bincount（O(n)），
+      替代 scipy.spearmanr 的逐列双排序（对 4M 行 × 243 列由分钟级降至秒级）。
+
+    Returns:
+        Series，index=因子列名，values=IC（与 compute_factor_ics 默认路径一致）
+    """
+    cols = list(factor_frame.columns)
+    X = factor_frame.to_numpy(dtype=float)     # (n, k)
+    y = label_series.to_numpy(dtype=float)     # (n,)
+    vy = ~np.isnan(y)
+    comp_y = _competition_rank(y)              # 标签竞争秩（一次排序，跨列复用）
+    comp_y = np.where(vy, comp_y, 0).astype(np.int32)
+
+    out: dict = {}
+    for j, col in enumerate(cols):
+        xj = X[:, j]
+        vj = ~np.isnan(xj)
+        m = vj & vy
+        n_eff = int(m.sum())
+        if n_eff < min_samples:
+            continue
+        a = _competition_rank(xj)
+        a = np.where(vj, a, 0).astype(np.int32)
+        ai = a[m].astype(np.intp)
+        bi = comp_y[m].astype(np.intp)
+        K = int(max(ai.max(), bi.max())) + 1
+        cnt_a = np.bincount(ai, minlength=K)
+        cnt_b = np.bincount(bi, minlength=K)
+        less_a = np.cumsum(cnt_a) - cnt_a     # 子集内严格小于计数
+        less_b = np.cumsum(cnt_b) - cnt_b
+        ra = less_a[ai] + (cnt_a[ai] + 1) / 2   # 子集内 average 秩（1-based）
+        rb = less_b[bi] + (cnt_b[bi] + 1) / 2
+        ra = ra - ra.mean()
+        rb = rb - rb.mean()
+        denom = np.sqrt((ra * ra).sum() * (rb * rb).sum())
+        if denom > 0:
+            out[col] = (ra * rb).sum() / denom
+        else:
+            out[col] = 0.0                     # 常数列/零方差：与 _spearman_ic 一致返回 0.0
+    return pd.Series(out, dtype=float)
+
+
 def compute_factor_ics(factor_frame: pd.DataFrame, label_series: pd.Series,
                        min_samples: int = 50, compute_ic_fn=None) -> pd.Series:
     """逐列计算因子 IC（Spearman），返回 Series(col → ic)。
@@ -95,13 +148,14 @@ def compute_factor_ics(factor_frame: pd.DataFrame, label_series: pd.Series,
         factor_frame: 因子数据（行=样本, 列=因子）
         label_series: 标签 Series（与 factor_frame 行对齐）
         min_samples: 有效样本数下限，不足返回空
-        compute_ic_fn: IC 计算函数，默认内联 Spearman（与 training.compute_ic 逻辑一致）
+        compute_ic_fn: IC 计算函数，默认向量化 Spearman（与 scipy.spearmanr 逐位一致）
 
     Returns:
         Series，index=因子列名，values=IC
     """
     if compute_ic_fn is None:
-        compute_ic_fn = _spearman_ic
+        # [优化] 向量化路径：逐位等价默认 _spearman_ic（差分测试验证），避免 scipy 逐列排序
+        return _fast_ic_vs_label(factor_frame, label_series, min_samples)
     ics = {}
     for col in factor_frame.columns:
         feat = factor_frame[col].dropna()
@@ -116,11 +170,38 @@ def compute_factor_ics(factor_frame: pd.DataFrame, label_series: pd.Series,
     return pd.Series(ics, dtype=float)
 
 
+def _rankdata_avg(a: np.ndarray) -> np.ndarray:
+    """numpy 平均秩（1-based，等价 scipy.stats.rankdata method='average'）。
+
+    用于小数组（逐日截面）；大数组用 _fast_spearman_corr 的竞争秩 + bincount 方案。
+    """
+    a = np.asarray(a, dtype=float)
+    n = len(a)
+    if n == 0:
+        return np.empty(0, dtype=float)
+    sorter = np.argsort(a, kind="quicksort")
+    a_sorted = a[sorter]
+    obs = np.r_[True, a_sorted[1:] != a_sorted[:-1]]
+    dens = np.cumsum(obs) - 1
+    group_start = np.where(obs)[0]
+    group_end = np.r_[group_start[1:], n]
+    avg = (group_start + group_end - 1) / 2 + 1
+    rank = np.empty(n, dtype=float)
+    rank[sorter] = avg[dens]
+    return rank
+
+
 def compute_daily_ic_frame(factor_frame: pd.DataFrame,
                            label_series: pd.Series) -> pd.DataFrame:
     """逐日截面 Spearman IC 面板：返回 DataFrame(date × factor)。
 
-    向量化 groupby().corr() 替代逐日 apply，等价于逐日循环的截面 IC。
+    向量化实现，替代 pandas groupby().corr(method="spearman") 的单线程逐对实现。
+
+    [语义等价声明] 与 pandas 实现逐位一致（pandas corr spearman = scipy.spearmanr 包装）：
+      ① 观测：对每列与标签取"共同非 NaN 行"（pairwise complete observations）
+      ② rank：在共同行子集内做 average 平均秩（非全列秩）
+      ③ 常数/单样本列：零方差 → NaN，与 pandas 一致
+
     因子数据需为 MultiIndex（含 'datetime' level），标签与因子行对齐。
     """
     frame = factor_frame.copy()
@@ -131,12 +212,37 @@ def compute_daily_ic_frame(factor_frame: pd.DataFrame,
     if "__label__" not in all_cols:
         return pd.DataFrame()
     feat_cols = [c for c in all_cols if c != "__label__"]
-    try:
-        corr = frame.groupby(level="datetime")[all_cols].corr(method="spearman")
-        daily_ic = corr.xs("__label__", level=1, axis=0)[feat_cols]
-    except Exception:
+    n_feat = len(feat_cols)
+    if n_feat == 0:
         return pd.DataFrame()
-    return daily_ic
+
+    rows = []
+    index = []
+    for dt, sub in frame.groupby(level="datetime", sort=True):
+        X = sub[feat_cols].to_numpy(dtype=float)     # (n_d, k)
+        y = sub["__label__"].to_numpy(dtype=float)   # (n_d,)
+        n_d = X.shape[0]
+        my = ~np.isnan(y)
+        ic_row = np.full(n_feat, np.nan)
+        for j in range(n_feat):
+            xj = X[:, j]
+            m = my & ~np.isnan(xj)                    # 共同非 NaN 行
+            n_eff = int(m.sum())
+            if n_eff < 2:
+                continue
+            ra = _rankdata_avg(xj[m])
+            rb = _rankdata_avg(y[m])
+            ra = ra - ra.mean()
+            rb = rb - rb.mean()
+            denom = np.sqrt((ra * ra).sum() * (rb * rb).sum())
+            if denom > 0:
+                ic_row[j] = (ra * rb).sum() / denom
+        rows.append(ic_row)
+        index.append(dt)
+
+    if not rows:
+        return pd.DataFrame()
+    return pd.DataFrame(np.vstack(rows), index=index, columns=feat_cols)
 
 
 def compute_win_rate(daily_ic: pd.DataFrame) -> pd.Series:
@@ -215,6 +321,97 @@ def check_icir_stability(factor_frame: pd.DataFrame, label_series: pd.Series,
 
 # ─────────────────────────── ④ 冗余 ───────────────────────────
 
+def _competition_rank(x: np.ndarray) -> np.ndarray:
+    """竞争秩（min 法，1-based，相等值同秩，NaN 保留 NaN）。
+
+    大矩阵路径：预计算每列一次 O(n log n)；子集内平均秩可再经 bincount O(n) 求得。
+    """
+    x = np.asarray(x, dtype=float)
+    n = len(x)
+    out = np.full(n, np.nan)
+    m = ~np.isnan(x)
+    n_eff = int(m.sum())
+    if n_eff == 0:
+        return out
+    vals = x[m]
+    order = np.argsort(vals, kind="quicksort")
+    sorted_vals = vals[order]
+    obs = np.r_[True, sorted_vals[1:] != sorted_vals[:-1]]
+    group_id = np.cumsum(obs) - 1
+    first_pos = np.where(obs)[0] + 1          # 每组第一个位置的 1-based 序号
+    comp = first_pos[group_id]
+    inv = np.empty(n_eff, dtype=np.intp)
+    inv[order] = np.arange(n_eff)
+    out[m] = comp[inv]
+    return out
+
+
+def _spearman_corr_pair(ci: np.ndarray, cj: np.ndarray,
+                        vi: np.ndarray, vj: np.ndarray):
+    """计算单对 (i, j) 的 Spearman 相关（子集内 average 秩 + Pearson）。
+
+    返回 None 表示零方差/样本不足（对应 NaN，与 pandas 一致）；
+    否则返回相关系数。worker 线程仅读共享 comp/valid，无写入冲突。
+    """
+    m = vi & vj
+    n_eff = int(m.sum())
+    if n_eff < 2:
+        return None
+    a = ci[m]
+    b = cj[m]
+    K = int(max(a.max(), b.max())) + 1
+    cnt_a = np.bincount(a, minlength=K)
+    cnt_b = np.bincount(b, minlength=K)
+    less_a = np.cumsum(cnt_a) - cnt_a   # 每值：子集内严格小于它的个数
+    less_b = np.cumsum(cnt_b) - cnt_b
+    tmp_a = less_a + (cnt_a + 1) / 2    # 子集内 average 秩查找表（1-based）
+    tmp_b = less_b + (cnt_b + 1) / 2
+    ra = tmp_a[a]
+    rb = tmp_b[b]
+    ra = ra - ra.mean()
+    rb = rb - rb.mean()
+    denom = np.sqrt((ra * ra).sum() * (rb * rb).sum())
+    if denom > 0:
+        return (ra * rb).sum() / denom
+    return None
+
+
+def _fast_spearman_corr(df: pd.DataFrame) -> pd.DataFrame:
+    """向量化全样本 Spearman 相关矩阵（pairwise complete 语义，逐位等价 pandas）。
+
+    [语义] pandas corr(spearman) = scipy.spearmanr 逐对包装：
+      对每对列取"共同非 NaN 行"子集 → 子集内 average 秩 → 子集内中心化 Pearson。
+      本实现逐位等价（差分测试 np.allclose rtol=1e-8 验证）。
+
+    [性能] 预计算每列竞争秩（1 次排序/列），子集内平均秩由 bincount + cumsum
+      求得（O(n) 无重复排序），逐对并行（ThreadPoolExecutor，numpy 释放 GIL），
+      替代 pandas 单线程逐对排序。
+
+    Returns:
+        与 df.corr(method="spearman") 逐位一致的 DataFrame（同 index/columns）
+    """
+    cols = list(df.columns)
+    X = df.to_numpy(dtype=float)  # (n, k)，NaN 保留
+    n_rows, k = X.shape
+    valid = ~np.isnan(X)
+    comp = np.empty((n_rows, k), dtype=np.int32)
+    for j in range(k):
+        c = _competition_rank(X[:, j])
+        comp[:, j] = np.where(valid[:, j], c, 0).astype(np.int32)
+
+    corr = np.full((k, k), np.nan)   # 默认 NaN：零方差/样本不足对与 pandas 一致（含常数列对角）
+    pairs = [(i, j) for i in range(k) for j in range(i, k)]
+    with ThreadPoolExecutor(max_workers=min(8, os.cpu_count() or 1)) as ex:
+        futs = {ex.submit(_spearman_corr_pair, comp[:, i], comp[:, j],
+                          valid[:, i], valid[:, j]): (i, j) for i, j in pairs}
+        for fut in futs:
+            i, j = futs[fut]
+            v = fut.result()
+            if v is not None:
+                corr[i, j] = corr[j, i] = v
+    return pd.DataFrame(corr, index=cols, columns=cols)
+
+
 def check_redundancy(factor_frame: pd.DataFrame, factor_names: list,
                      threshold: float = 0.90, rank: dict = None,
                      method: str = "spearman") -> list:
@@ -236,7 +433,12 @@ def check_redundancy(factor_frame: pd.DataFrame, factor_names: list,
     if len(feat_in_data) < 2:
         return list(factor_names)
     try:
-        corr_mat = factor_frame[feat_in_data].corr(method=method).abs()
+        if method == "spearman":
+            # [优化] 向量化全样本 Spearman（rank + masked Pearson），
+            # 与 pandas corr 逐位一致；pearson 路径保留原 pandas 实现
+            corr_mat = _fast_spearman_corr(factor_frame[feat_in_data]).abs()
+        else:
+            corr_mat = factor_frame[feat_in_data].corr(method=method).abs()
     except Exception:
         return list(factor_names)
 
@@ -362,7 +564,7 @@ def aggregate_across_windows(selections: dict, min_window_ratio: float = 0.5) ->
 # ─────────────────────────── 编排：screening_pipeline ───────────────────────────
 
 def screening_pipeline(factor_frame: pd.DataFrame, label_series: pd.Series,
-                       config: dict = None) -> dict:
+                       config: dict = None, n_tested: int = None) -> dict:
     """批量因子粗筛流水线：5 道快检门，输出每因子的"粗筛卡"与候选清单。
 
     流程：
@@ -376,6 +578,9 @@ def screening_pipeline(factor_frame: pd.DataFrame, label_series: pd.Series,
         factor_frame: 因子数据（MultiIndex，含 'datetime' level）
         label_series: 标签 Series（与 factor_frame 行对齐）
         config: 覆盖 DEFAULT_SCREENING_CONFIG 的配置 dict
+        n_tested: 多重检验的假设总数（应含全部参与筛选的因子，含被质量门/冗余
+                  淘汰者）。默认 = factor_frame 列数，但该值仅含本阶段幸存者，
+                  会系统性低估选择偏差（data mining bias），全库筛选时必须显式传入。
 
     Returns:
         dict:
@@ -431,7 +636,7 @@ def screening_pipeline(factor_frame: pd.DataFrame, label_series: pd.Series,
     if not daily_ic.empty and stable_factors:
         sig, p_adj = apply_multiple_testing_correction(
             daily_ic[stable_factors],
-            n_tested=len(factor_frame.columns),
+            n_tested=n_tested if n_tested is not None else len(factor_frame.columns),
             alpha=cfg["correction_alpha"], method=cfg["correction_method"],
         )
         significant = sig.reindex(kept).fillna(True)

@@ -57,45 +57,60 @@ from qlworks.evaluation.selector import (
     compute_factor_ics, compute_daily_ic_frame, select_top_by_abs, screening_pipeline,
 )
 from qlworks.features.dataset import build_custom_feature_cache
+from qlworks.processors.neutralize import CSNeutralize
+from qlworks.processors.quantile_norm import CSQuantileNorm
 from qlworks.config import QLIB_DATA_DIR
+from qlworks.pipeline_config import (
+    LABEL_EXPR, LABEL_NAME, INSTRUMENTS, START_TIME, END_TIME,
+    REDUNDANCY_THRESHOLD, ICIR_WINDOW, ICIR_KEEP_RATIO, TOP_K,
+    FILTER_ST, FILTER_NEW_STOCKS,
+)
 from select_factors import load_factors_by_category, build_global_bundle
 import qlib
 from qlib.data import D
 
 # ==============================================================================
 # [全局配置区] - 在此修改运行参数（也可用命令行参数覆盖）
+# 共享键（标签/股票池/时间/阈值）引用 pipeline_config 单一事实源，跨脚本自动对齐
 # ==============================================================================
 CONFIG = {
     # 因子文件列表（'all' 表示加载所有活跃因子文件）
+    # [口径修复] 补齐 price_volume_factors，与 train_tree-doubao.py factor_files 7 类全对齐，
+    # 避免该类因子在默认粗筛中被漏筛（训练端可选取而粗筛端永无入选机会）。
     "factor_files": [
         "reversal_momentum_factors", "quality_factors", "style_factors",
-        "risk_factors", "sentiment_factors", "other_factors",
+        "price_volume_factors", "risk_factors", "sentiment_factors", "other_factors",
     ],
 
-    # 股票池与时间范围
-    "instruments": "main_board",
-    "start_time": "2020-01-01",
-    "end_time": "2025-12-31",
+    # 股票池与时间范围（共享配置）
+    "instruments": INSTRUMENTS,
+    "start_time": START_TIME,
+    "end_time": END_TIME,
 
-    # 标签（与 select_factors.py / train_tree.py 对齐）
-    "label_expr": "Ref($close, -5) / Ref($open, -1) - 1",
-    "label_name": "LABEL_5D",
+    # 标签（共享配置，与 select_factors / train_tree-doubao / 评测端一致）
+    "label_expr": LABEL_EXPR,
+    "label_name": LABEL_NAME,
 
     # 阶段一：分批 IC 粗筛
     "batch_size": 20,       # 每批因子数（防 OOM）
-    "top_k": 60,            # 进入阶段二深筛的因子数（按 |IC| 降序）
+    "top_k": TOP_K,         # 进入阶段二深筛的因子数（按 |IC| 降序）
     "min_samples": 50,      # IC 计算有效样本下限
 
     # 阶段二：5 道快检门参数（selector.DEFAULT_SCREENING_CONFIG 同键）
     "min_coverage": 0.8,         # ① 覆盖率门槛
     "min_nunique": 50,           # ① 常数因子门槛
-    "icir_window": 60,           # ③ ICIR 滚动窗口
-    "icir_keep_ratio": 0.8,      # ③ ICIR 正向占比保留比例
+    "icir_window": ICIR_WINDOW,  # ③ ICIR 滚动窗口
+    "icir_keep_ratio": ICIR_KEEP_RATIO,  # ③ ICIR 正向占比保留比例
     "icir_min_keep": 3,          # ③ ICIR 至少保留数
-    "redundancy_threshold": 0.90,    # ④ 冗余相关系数阈值
+    "redundancy_threshold": REDUNDANCY_THRESHOLD,  # ④ 冗余相关系数阈值
     "redundancy_method": "spearman", # ④ 冗余相关方法
     "correction_alpha": 0.05,    # ⑤ 多重检验显著性水平
     "correction_method": "bh",   # ⑤ bh / holm
+
+    # 股票可交易性过滤（与评测/精选/训练/实盘一致，引用 pipeline_config 统一开关）：
+    # 粗筛端 IC 样本逐日剔除 ST/次新股，避免因子仅凭 ST/次新上的假 IC 进入 top_k
+    "filter_st": FILTER_ST,
+    "filter_new_stocks": FILTER_NEW_STOCKS,
 
     # 分年度 IC 报告（时间切片一致性，报告用、不做硬性门槛）
     "subperiod_ic_threshold": 0.02,  # 年度 |IC| ≥ 此值计为"显著年度"
@@ -106,8 +121,19 @@ CONFIG = {
 
 
 def _load_label_series(feature_cache, label_expr: str, label_name: str,
-                       start_time: str, end_time: str) -> pd.Series:
-    """加载标签并统一为 (instrument, datetime) MultiIndex，与因子数据对齐。"""
+                       start_time: str, end_time: str,
+                       apply_untradeable_filter: bool = True) -> pd.Series:
+    """加载标签并统一为 (instrument, datetime) MultiIndex，与因子数据对齐。
+
+    [P1-5] 标签管线一致性声明：
+      标签表达式与 select_factors.py / train_tree-doubao.py 完全一致：
+        Ref($close, -5) / Ref($open, -1) - 1
+      粗筛端默认应用 filter_untradeable_labels（涨跌停/一字板/持仓期停牌过滤），
+      与训练端可交易性过滤对齐，避免筛选结论来自不可交易样本。
+
+    Args:
+        apply_untradeable_filter: 是否执行可交易性过滤（默认 True）
+    """
     label_raw = D.features(
         feature_cache.resolved_instruments,
         [label_expr],
@@ -118,10 +144,54 @@ def _load_label_series(feature_cache, label_expr: str, label_name: str,
     if isinstance(label_raw.columns, pd.MultiIndex):
         label_raw.columns = label_raw.columns.droplevel(1)
     label_raw = label_raw.rename(columns={label_raw.columns[0]: label_name})
+
+    if apply_untradeable_filter:
+        from qlworks.factors.filter_utils import filter_untradeable_labels
+        label_raw = filter_untradeable_labels(
+            label_raw, feature_cache.resolved_instruments, start_time, end_time
+        )
+        if label_raw is None or label_raw.empty:
+            raise ValueError(f"标签 {label_expr} 经可交易性过滤后为空")
+
     label_flat = label_raw.reset_index()
     label_flat["instrument"] = label_flat["instrument"].str.lower()
     label_flat = label_flat.set_index(["instrument", "datetime"]).sort_index()
     return label_flat[label_name]
+
+
+def _apply_dk_label(series: pd.Series, tradeable_mask: dict | None = None) -> pd.Series:
+    """标签 DK_L 管线：CSNeutralize(industry+mv) → CSQuantileNorm。
+
+    [口径修复] 与 select_factors.py / train_tree-doubao.py 的 neutralize_labels 逐位对齐：
+      ① CSNeutralize：Ridge 回归剥离行业/市值风格暴露（纯 alpha 口径）
+      ② CSQuantileNorm：截面分位化
+    否则风格 beta 因子（行业/市值代理）在粗筛端 IC 虚高，与训练端标签口径错位。
+    执行顺序对齐 select_factors：先剔除无标签样本 → 再按 tradeable_mask 剔除
+    ST/次新截面（与因子侧 IC 面板同口径）→ 最后中性化。
+
+    Args:
+        series: (instrument, datetime) MultiIndex 的原始标签 Series（涨跌停等不可交易
+                样本已由 _load_label_series 置 NaN）
+        tradeable_mask: {datetime: set(instruments)}；为 None 则跳过 ST/次新截面剔除
+
+    Returns:
+        DK_L 中性化后的标签 Series；无行业/市值暴露的样本为 NaN，交由下游 dropna
+        （Spearman IC 对 CSQuantileNorm 的 rank 单调变换不变，实际生效的是中性化部分）
+    """
+    # ① 剔除无标签样本（对齐 select_factors 先 dropna 后中性化）
+    series = series.dropna()
+    # ② 剔除 ST/次新截面（与因子侧掩码同口径）
+    if tradeable_mask is not None and not series.empty:
+        series = _apply_tradeable_mask(series.to_frame(), tradeable_mask).iloc[:, 0]
+    if series.empty:
+        return series
+    # ③ DK_L：中性化 + 分位化
+    frame = series.rename(LABEL_NAME).to_frame()
+    frame.columns = pd.MultiIndex.from_tuples([("label", LABEL_NAME)])
+    frame = CSNeutralize(fields_group="label",
+                         industry_field="sw_l1", market_cap_field="circ_mv").__call__(frame)
+    frame = CSQuantileNorm(fields_group="label").__call__(frame)
+    return frame[("label", LABEL_NAME)].rename(LABEL_NAME)
 
 
 def _normalize_batch_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -133,38 +203,106 @@ def _normalize_batch_columns(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_factor_batch(cache, name_expr_map: dict, batch_names: list,
                        start_time: str, end_time: str) -> pd.DataFrame:
-    """加载一批因子数据：优先 parquet 缓存（get_warehouse_df），
-    无缓存时回退 Qlib 表达式实时计算（D.features），保证因子覆盖完整。
+    """加载一批因子数据：优先 parquet 缓存，缺失者回退 Qlib 表达式实时计算。
 
-    name_expr_map: {因子名: Qlib 表达式}（来自因子 YAML 的 expression 字段）
+    [P0 修复] 原实现"仓库非空即返回"：warehouse 仅含落盘 parquet 的因子，
+    未落盘（仅 meta.json）的因子在混合批次中被静默丢弃，导致因子覆盖不完整。
+    现改为两路并取：warehouse 子集 + 差集 Qlib 回退，最后按列 concat。
+    [P1 修复] Qlib 回退路径列结构：D.features 返回 MultiIndex (表达式, 股票代码)，
+    需 droplevel(1) 保留表达式名（原实现 droplevel(0) 错留股票代码）。
+
+    Args:
+        cache: 全局特征缓存（get_warehouse_df / resolved_instruments）
+        name_expr_map: {因子名: Qlib 表达式}（来自因子 YAML 的 expression 字段）
+        batch_names: 本批因子名列表
+        start_time, end_time: 时间区间
+
+    Returns:
+        单层列（因子名）× MultiIndex (instrument, datetime) 的因子面板
     """
+    frames = []
+
     # 1) parquet 缓存路径（快）
     df = cache.get_warehouse_df(batch_names, start_time=start_time, end_time=end_time)
     if not df.empty:
-        return _normalize_batch_columns(df).sort_index()
+        frames.append(_normalize_batch_columns(df))
 
-    # 2) Qlib 表达式实时计算路径（覆盖全部因子，含无 parquet 缓存者）
-    exprs = [name_expr_map[n] for n in batch_names if n in name_expr_map]
-    if not exprs:
+    # 2) 差集 → Qlib 表达式实时计算路径（覆盖全部因子，含无 parquet 缓存者）
+    loaded = {c for f in frames for c in f.columns}
+    missing = [n for n in batch_names if n not in loaded]
+    if missing:
+        exprs = [name_expr_map[n] for n in missing if n in name_expr_map]
+        if exprs:
+            raw = D.features(cache.resolved_instruments, exprs, start_time, end_time)
+            if not raw.empty:
+                # 列：Qlib 返回 MultiIndex (表达式, 股票代码)，保留第 0 层表达式名
+                if isinstance(raw.columns, pd.MultiIndex):
+                    raw.columns = raw.columns.droplevel(1)
+                # 列名（表达式）映射回因子名；instrument 统一小写与标签对齐
+                expr_to_name = {name_expr_map[n]: n for n in missing if n in name_expr_map}
+                raw = raw.rename(columns=lambda c: expr_to_name.get(c, c))
+                raw.index = raw.index.set_levels(
+                    [lv.str.lower() if lv.name == "instrument" else lv
+                     for lv in raw.index.levels],
+                )
+                frames.append(_normalize_batch_columns(raw))
+
+    if not frames:
         return pd.DataFrame()
-    raw = D.features(cache.resolved_instruments, exprs, start_time, end_time)
-    if raw.empty:
-        return pd.DataFrame()
-    if isinstance(raw.columns, pd.MultiIndex):
-        raw.columns = raw.columns.droplevel(0)
-    # 列名（表达式）映射回因子名；instrument 统一小写与标签对齐
-    expr_to_name = {name_expr_map[n]: n for n in batch_names if n in name_expr_map}
-    raw = raw.rename(columns=lambda c: expr_to_name.get(c, c))
-    raw.index = raw.index.set_levels(
-        [lv.str.lower() if lv.name == "instrument" else lv for lv in raw.index.levels],
-    )
-    return raw.sort_index()
+    return pd.concat(frames, axis=1).sort_index()
+
+
+def _build_tradeable_mask(cache, dates, filter_new_stocks: bool, filter_st: bool) -> dict | None:
+    """逐日构建可交易股票集合掩码（跨批次复用，避免每批重复过滤）。
+
+    与评测/精选/训练/实盘口径一致：逐日剔除 ST 与次新股。
+    cache.resolved_instruments 为静态全池，ST/次新状态按目标日动态判定。
+
+    Args:
+        cache: 全局特征缓存（提供 resolved_instruments 全池）
+        dates: 交易日序列（label_series 的 datetime 层）
+        filter_new_stocks: 是否剔除次新股
+        filter_st: 是否剔除 ST 股
+
+    Returns:
+        {datetime: set(instruments)}；开关全关时返回 None（调用方跳过过滤）
+    """
+    if not (filter_new_stocks or filter_st):
+        return None
+    from qlworks.factors.filter_utils import filter_codes_post
+    all_inst = list(cache.resolved_instruments)
+    mask: dict = {}
+    for dt in dates:
+        try:
+            ok = filter_codes_post(all_inst, str(pd.Timestamp(dt).date()),
+                                   filter_new_stocks=filter_new_stocks, filter_st=filter_st)
+            mask[dt] = set(ok)
+        except Exception:
+            mask[dt] = None  # 该日过滤失败则视为不过滤（防御降级）
+    print(f"      [可交易掩码] 逐日 ST/次新过滤完成：{len(mask)} 个交易日")
+    return mask
+
+
+def _apply_tradeable_mask(frame: pd.DataFrame, mask: dict | None) -> pd.DataFrame:
+    """按 (instrument, datetime) 过滤帧，仅保留掩码内的可交易股票。"""
+    if mask is None or frame.empty:
+        return frame
+    inst = frame.index.get_level_values("instrument")
+    dts = frame.index.get_level_values("datetime")
+
+    def _ok(c, d):
+        m = mask.get(d)
+        return m is None or c in m
+
+    keep = [_ok(c, d) for c, d in zip(inst, dts)]
+    return frame[keep]
 
 
 def _batch_ic_selection(cache, factor_names, name_expr_map, label_series,
                         start_time: str, end_time: str,
                         batch_size: int = 20, top_k: int = 60,
-                        min_samples: int = 50):
+                        min_samples: int = 50,
+                        tradeable_mask: dict | None = None):
     """阶段一：分批加载因子并逐批计算 Spearman IC，按 |IC| 粗筛取 top_k。"""
     all_ic: dict = {}
     n = len(factor_names)
@@ -174,6 +312,11 @@ def _batch_ic_selection(cache, factor_names, name_expr_map, label_series,
               f"{', '.join(batch_names[:3])}{'...' if len(batch_names) > 3 else ''}")
 
         batch_df = _load_factor_batch(cache, name_expr_map, batch_names, start_time, end_time)
+        if batch_df.empty:
+            continue
+
+        # [数据质量] 剔除 ST/次新股样本（与评测/精选/训练口径一致）
+        batch_df = _apply_tradeable_mask(batch_df, tradeable_mask)
         if batch_df.empty:
             continue
 
@@ -198,9 +341,14 @@ def _batch_ic_selection(cache, factor_names, name_expr_map, label_series,
 
 
 def _load_factor_frame(cache, factor_names, name_expr_map, label_series,
-                       start_time: str, end_time: str) -> tuple:
+                       start_time: str, end_time: str,
+                       tradeable_mask: dict | None = None) -> tuple:
     """全量加载指定因子（阶段二用，因子数已收敛到 top_k），返回 (factor_frame, labels)。"""
     df = _load_factor_batch(cache, name_expr_map, factor_names, start_time, end_time)
+    if df.empty:
+        return pd.DataFrame(), pd.Series(dtype=float)
+    # [数据质量] 剔除 ST/次新股样本（与阶段一口径一致）
+    df = _apply_tradeable_mask(df, tradeable_mask)
     if df.empty:
         return pd.DataFrame(), pd.Series(dtype=float)
     common_index = df.index.intersection(label_series.index)
@@ -406,12 +554,29 @@ def main(argv=None):
     print(f"      >>> 标签 {len(label_series):,} 条, "
           f"{label_series.index.get_level_values('datetime').nunique()} 个交易日")
 
+    # 4.5 构建逐日可交易股票掩码（ST/次新过滤，跨两阶段复用）
+    dates = label_series.index.get_level_values("datetime").unique()
+    tradeable_mask = _build_tradeable_mask(
+        feature_cache, dates,
+        filter_new_stocks=cfg["filter_new_stocks"], filter_st=cfg["filter_st"],
+    )
+
+    # 4.6 [DK_L 对齐] 标签中性化：先按可交易掩码剔除截面，
+    #     再剥离行业/市值暴露（CSNeutralize）+ 分位化（CSQuantileNorm），
+    #     与 select_factors / train_tree-doubao 的 neutralize_labels 口径一致。
+    print("\n[4.6] 标签 DK_L 中性化（CSNeutralize + CSQuantileNorm）...")
+    label_series = _apply_dk_label(label_series, tradeable_mask)
+    n_valid = int(label_series.notna().sum())
+    print(f"      >>> DK_L 标签 {n_valid:,} 条有效 / {len(label_series):,} 条, "
+          f"{label_series.index.get_level_values('datetime').nunique()} 个交易日")
+
     # 5. 阶段一：分批 IC 粗筛
     print(f"\n[5] 阶段一：分批 IC 粗筛 (batch_size={cfg['batch_size']}, top_k={cfg['top_k']})...")
     ic_all, top_names = _batch_ic_selection(
         feature_cache, all_factor_names, name_expr_map, label_series,
         cfg["start_time"], cfg["end_time"],
         batch_size=cfg["batch_size"], top_k=cfg["top_k"], min_samples=cfg["min_samples"],
+        tradeable_mask=tradeable_mask,
     )
     if not top_names:
         print("[错误] 无因子通过 IC 粗筛")
@@ -426,13 +591,20 @@ def main(argv=None):
     # 6. 阶段二：全量加载 top_k 因子 → 5 道快检门
     print(f"\n[6] 阶段二：对 top {len(top_names)} 因子执行 5 道快检门...")
     factor_frame, labels = _load_factor_frame(feature_cache, top_names, name_expr_map, label_series,
-                                              cfg["start_time"], cfg["end_time"])
+                                              cfg["start_time"], cfg["end_time"],
+                                              tradeable_mask=tradeable_mask)
     if factor_frame.empty:
         print("[错误] 阶段二因子数据为空")
         sys.exit(1)
     print(f"      >>> 因子面板 {factor_frame.shape[0]:,} 行 × {factor_frame.shape[1]} 列")
 
-    result = screening_pipeline(factor_frame, labels, config=_screening_config_from(cfg))
+    result = screening_pipeline(
+        factor_frame, labels,
+        config=_screening_config_from(cfg),
+        # [修复] BH 多重检验以"全部参与筛选的因子数"为假设总数，
+        # 而非阶段二幸存者数（原默认仅 top_k，低估选择偏差）
+        n_tested=len(all_factor_names),
+    )
 
     # 6.5 分年度 IC 报告（时间切片一致性，仅报告、不参与筛选门槛）
     daily_ic = compute_daily_ic_frame(factor_frame, labels)

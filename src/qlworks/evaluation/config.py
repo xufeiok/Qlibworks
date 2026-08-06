@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Tuple
 
+from qlworks.pipeline_config import LABEL_EXPR, LABEL_NAME, INSTRUMENTS
+
 
 def _parse_label_horizon(label_expr: str) -> int:
     m = re.search(r"Ref\(\$\w+,\s*(-\d+)\)", label_expr)
@@ -24,7 +26,8 @@ EXTREME_EVENTS = {
 
 @dataclass
 class EvalConfig:
-    instruments: str = "csi500"
+    # 股票池与标签引用 pipeline_config 单一事实源（与筛选/训练端自动对齐）
+    instruments: str = INSTRUMENTS
     start_time: str = "2010-01-01"
     end_time: str = "2026-12-31"
     freq: str = "day"
@@ -32,8 +35,8 @@ class EvalConfig:
     train_end: str = "2024-12-31"
     valid_end: str = "2025-12-31"
 
-    label_expr: str = "Ref($close, -5) / Ref($open, -1) - 1"
-    label_name: str = "LABEL_5D"
+    label_expr: str = LABEL_EXPR
+    label_name: str = LABEL_NAME
     label_horizon: int = 0
 
     winsorize_method: str = "mad"

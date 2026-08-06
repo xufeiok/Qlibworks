@@ -43,6 +43,7 @@ from qlworks.evaluation.selector import (
 from qlworks.models import prepare_feature_selection_data, cached_select_features
 from qlworks.config import QLIB_DATA_DIR
 from qlworks.factors.filter_utils import filter_codes_post, filter_untradeable_labels, apply_label_filter
+from qlworks.pipeline_config import FILTER_ST, FILTER_NEW_STOCKS
 import qlib
 from _config import resolve_runtime_config
 
@@ -85,8 +86,8 @@ LOCAL_CONFIG = {
     "normalize_labels": True,  # 标签截面 rank 归一化 → [0,1]（通过 Processor 管线在每个 fold 内独立执行，消除前视偏差）
     "neutralize_labels": False,  # 标签中性化（树模型不推荐）
     "use_dynamic_filter": True,  # 启用流动性过滤（成交量>0 + 近20日均成交额>500万），涨跌停过滤已移至 filter_untradeable_labels
-    "filter_new_stocks": True,   # 过滤上市不满 250 日次新股
-    "filter_st": True,           # 过滤 ST 股票
+    "filter_new_stocks": FILTER_NEW_STOCKS,   # 过滤上市不满 250 日次新股（pipeline_config 统一开关）
+    "filter_st": FILTER_ST,           # 过滤 ST 股票（pipeline_config 统一开关）
     
     # 标签可交易性过滤（剔除涨跌停无法买入的样本）
     "filter_untradeable_labels": True,
