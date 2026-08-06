@@ -180,7 +180,7 @@ class CandidatePool:
         s2, r2 = self.stage2_predictive_check(
             metrics.get("ic_mean", 0),
             metrics.get("ic_positive_ratio", 0),
-            metrics.get("ir", 0),
+            metrics.get("icir_nw") or metrics.get("ir", 0),  # [P0] 优先 NW 修正 ICIR
         )
         s3, r3 = self.stage3_stability_check(
             metrics.get("ic_std", 0),
@@ -252,7 +252,8 @@ class CandidatePool:
                     metrics.get("valid_pct", 0), STRICT_THRESHOLDS)[0]
                 and self.stage2_predictive_check(
                     metrics.get("ic_mean", 0), metrics.get("ic_positive_ratio", 0),
-                    metrics.get("ir", 0), STRICT_THRESHOLDS)[0]
+                    metrics.get("icir_nw") or metrics.get("ir", 0),  # [P0] 优先 NW 修正 ICIR
+                    STRICT_THRESHOLDS)[0]
                 and self.stage3_stability_check(
                     metrics.get("ic_std", 0), metrics.get("sharpe", 0),
                     metrics.get("monotonicity", 0), STRICT_THRESHOLDS)[0]
@@ -268,7 +269,7 @@ class CandidatePool:
             "sub_category": "",
             "meaning": "",
             "source_file": "",
-            "latest_icir": metrics.get("ir", 0),
+            "latest_icir": metrics.get("icir_nw") or metrics.get("ir", 0),  # [P0] 优先 NW 修正 ICIR
             "admitted_at": now,
             "eval_date": now,
             "rolling_ic": {},

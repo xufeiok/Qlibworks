@@ -24,6 +24,13 @@ INSTRUMENTS = "main_board"  # 600/601/603/000 开头主板，支持 PIT 格式
 START_TIME = "2020-01-01"
 END_TIME = "2025-12-31"
 
+# ── 因子准入数据窗口（P0：杜绝测试期数据泄漏）──
+# 候选池将供给 train_tree-doubao.py 的滚动测试窗口（最早 Test_2023 起始于 2023-01-01）。
+# 准入评价窗口必须严格早于 ADMISSION_CUTOFF_DATE（截止日不含），
+# 否则因子的"准入决策"会用上测试期数据 → 选择偏差泄漏，Test IC 不再是真正的样本外。
+ADMISSION_CUTOFF_DATE = "2023-01-01"   # 准入数据截止日（不含），须 ≤ 下游最早测试窗口起点
+ADMISSION_WINDOW_YEARS = 3             # 准入评价窗口长度（年），从截止日往前推
+
 # ── 统计阈值（粗筛 / 精选 / 训练统一）──
 REDUNDANCY_THRESHOLD = 0.90   # 冗余剔除相关系数阈值
 ICIR_WINDOW = 60              # ICIR 滚动窗口（交易日）

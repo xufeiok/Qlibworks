@@ -60,6 +60,30 @@ from qlworks.pipeline_config import (
 import qlib
 from _config import resolve_runtime_config
 
+# [Tushare] 重定向 token 缓存（tk.csv）到项目目录，避免写入用户主目录被沙箱拦截
+# 与 scripts/data/gen_instruments.py 的 TUSHARE_CACHE_DIR 约定保持一致
+_TUSHARE_CACHE_DIR = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), "..", "..", ".tushare_cache")
+)
+os.environ["TUSHARE_HOME"] = _TUSHARE_CACHE_DIR
+os.environ["TUSHARE_CACHE_DIR"] = _TUSHARE_CACHE_DIR
+os.makedirs(_TUSHARE_CACHE_DIR, exist_ok=True)
+
+# [Tushare 1.4.x 兼容] upass.set_token 硬编码写入 ~/tk.csv（不认 TUSHARE_HOME），
+# monkey-patch 重定向到项目目录，防止沙箱拦截导致进程退出非零。
+# 注意：tushare/__init__.py 通过 `from .util.upass import *` 绑定顶层 set_token，
+# 必须同时替换 upass.set_token 与 tushare.set_token 两个引用。
+try:
+    import tushare as _tushare
+    from tushare.util import upass as _tushare_upass
+    def _tushare_set_token(token):
+        fp = os.path.join(_TUSHARE_CACHE_DIR, "tk.csv")
+        pd.DataFrame([token], columns=["token"]).to_csv(fp, index=False)
+    _tushare_upass.set_token = _tushare_set_token
+    _tushare.set_token = _tushare_set_token
+except Exception:
+    pass
+
 # ==============================================================================
 # [全局配置]
 # 可通过 `--config-source yaml` 切换使用 scripts/training/configs/ 下的 YAML 配置
@@ -97,7 +121,8 @@ LOCAL_CONFIG = {
     # [对齐筛选端] 使用 select_factors.py 输出的跨窗口精选因子作为候选池，
     # 跳过窗口内全量 243 因子 IC 粗筛，保证训练端与筛选端因子口径一致。
     # 设为 None 则回退到原有的"窗口内跨窗口稳定 IC 粗筛"逻辑。
-    "preselected_factors_file": "",
+    # [2 因子基线] 指向候选池（Alpha Book），仅用 admitted 因子（ROC30 + illiquidity_amihud）训练
+    "preselected_factors_file": "factor_data/registry/candidate_pool.json",
     "normalize_features": True,  # 特征截面分位数化（树模型推荐）
     "neutralize_features": False,  # [AQR修正] 树模型不推荐特征中性化（可通过特征交互学习行业效应）
     "renormalize_features_after_neutralize": False,  # 树模型不需要再标准化
@@ -1531,7 +1556,8 @@ def run_ml_pipeline(config_source: str = "local", config_name: str | None = None
                     _usable = [f for f in _preselected if f in _avail]
                     print(f"\n  [Step 1] 使用筛选端精选因子池 (preselected: {len(_preselected)} 个, "
                           f"缓存可用: {len(_usable)} 个, 来自 {os.path.basename(_ps_path)})")
-                    if len(_usable) >= 3:
+                    # [2 因子基线] 候选池因子较少(≥1)时也采用白名单，不回退全量 IC 粗筛
+                    if len(_usable) >= 1:
                         window_selected_factors = _usable
                     else:
                         print(f"  [警告] preselected 可用因子过少({len(_usable)})，回退到 IC 粗筛")

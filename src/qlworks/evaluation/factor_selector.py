@@ -455,6 +455,7 @@ def update_factor_registry(registry_path, factor_name, eval_result, ic_stats, ls
         "composite_score": eval_result.get("composite_score", 0),
         "ic_mean": ic_stats.get("ic_mean"),
         "icir": ic_stats.get("icir"),
+        "icir_nw": ic_stats.get("icir_nw"),
     })
 
     registry["factors"][factor_name] = {
@@ -465,6 +466,7 @@ def update_factor_registry(registry_path, factor_name, eval_result, ic_stats, ls
         "last_eval_date": str(datetime.now()),
         "ic_mean": ic_stats.get("ic_mean"),
         "icir": ic_stats.get("icir"),
+        "icir_nw": ic_stats.get("icir_nw"),
         "win_rate": ic_stats.get("win_rate"),
         "ls_annual_return": ls_stats.get("annual_return"),
         "ls_sharpe": ls_stats.get("sharpe"),

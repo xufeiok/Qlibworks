@@ -62,6 +62,7 @@ from qlworks.evaluation.candidate_pool import CandidatePool  # noqa: E402
 from qlworks.pipeline_config import (  # noqa: E402  单一事实源共享配置
     LABEL_EXPR, LABEL_NAME, INSTRUMENTS,
     CORR_THRESHOLD, ICIR_IMPROVE_MIN,
+    ADMISSION_CUTOFF_DATE, ADMISSION_WINDOW_YEARS,
 )
 
 
@@ -92,13 +93,34 @@ ADMIT_THRESHOLDS = {
 
 
 def load_candidate_pool() -> dict:
-    """读取当前候选池，若不存在则返回空池"""
+    """读取当前候选池，若不存在则返回空池；旧版 v1 格式（candidate_pool 键）自动迁移为 v2（factors/rejected/stats 键）"""
     if CANDIDATE_POOL_PATH.exists():
         with open(CANDIDATE_POOL_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
+            data = json.load(f)
+        # [迁移] v1 旧格式（candidate_pool 键）→ v2：遗留候选仅登记 rejected，不入准入池
+        if "factors" not in data:
+            legacy = data.get("candidate_pool") or []
+            return {
+                "_meta": {"version": "2.0", "set_version": "v1",
+                          "description": "多因子准入候选池（Alpha Book）— 仅由 admit_to_multifactor.py 三关检验写入，下游 train_tree-doubao.py 从此读取因子名单",
+                          "pipeline_note": "v1 旧格式自动迁移，遗留候选仅登记 rejected",
+                          "updated_at": pd.Timestamp.now().isoformat()[:19],
+                          "admit_thresholds": ADMIT_THRESHOLDS},
+                "factors": [],
+                "rejected": [{
+                    "name": e.get("factor_name"),
+                    "tier": e.get("tier", "archive"),
+                    "status": e.get("status", "legacy"),
+                    "_legacy_entry": {k: v for k, v in e.items() if k != "factor_name"},
+                } for e in legacy if e.get("factor_name")],
+                "stats": {"total_candidates": 0, "admitted": 0, "rejected_corr": 0,
+                          "rejected_marginal": 0, "rejected_direction": 0},
+            }
+        return data
     return {
-        "_meta": {"version": "1.0", "description": "多因子准入候选池", "updated_at": None,
-                   "admit_thresholds": ADMIT_THRESHOLDS},
+        "_meta": {"version": "2.0", "set_version": "v1",
+                  "description": "多因子准入候选池（Alpha Book）— 仅由 admit_to_multifactor.py 三关检验写入，下游 train_tree-doubao.py 从此读取因子名单",
+                  "updated_at": None, "admit_thresholds": ADMIT_THRESHOLDS},
         "factors": [], "rejected": [],
         "stats": {"total_candidates": 0, "admitted": 0, "rejected_corr": 0,
                   "rejected_marginal": 0, "rejected_direction": 0},
@@ -154,9 +176,28 @@ def scan_tier_factors(tier: str = "satellite") -> list[dict]:
 
 WAREHOUSE_DIR = PROJECT_ROOT / "factor_data" / "warehouse"
 
-# 相关性计算的时间窗口（近 3 年，反映近期因子关系）
-CORR_START_DATE = "2023-01-01"
-CORR_END_DATE = "2025-12-31"
+# ── 准入评价统一窗口（P0 修复：杜绝测试期数据泄漏）──
+# 由 ADMISSION_CUTOFF_DATE 动态生成：准入窗口严格早于截止日
+# （= 下游 train_tree-doubao.py 最早测试窗口起点，默认 2023-01-01）。
+# 若仍用 2023-2025 硬编码窗口，因子的"准入决策"就用了测试期数据 → 选择偏差泄漏，
+# 报告的 Test IC 不是真正样本外。修复后默认窗口为 2020-01-01 ~ 2022-12-31。
+def _build_admission_window() -> tuple:
+    """由准入截止日生成 (start, end, sub_periods)；sub_periods 按年切片。"""
+    cutoff = pd.Timestamp(ADMISSION_CUTOFF_DATE)
+    end = (cutoff - pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    start = (cutoff - pd.DateOffset(years=ADMISSION_WINDOW_YEARS)).strftime("%Y-%m-%d")
+    y0, y1 = int(start[:4]), int(end[:4])
+    sub_periods = []
+    for y in range(y0, y1 + 1):
+        s = start if y == y0 else f"{y}-01-01"
+        e = end if y == y1 else f"{y}-12-31"
+        sub_periods.append((str(y), s, e))
+    return start, end, sub_periods
+
+
+CORR_START_DATE, CORR_END_DATE, SUB_PERIODS = _build_admission_window()
+print(f"[admit] 准入评价窗口（P0 修复，严格早于截止日 {ADMISSION_CUTOFF_DATE}）: "
+      f"{CORR_START_DATE} ~ {CORR_END_DATE}")
 
 
 def compute_correlation_matrix(factor_names: list[str]) -> pd.DataFrame:
@@ -172,9 +213,9 @@ def compute_correlation_matrix(factor_names: list[str]) -> pd.DataFrame:
         if not fdir.exists():
             missing.append(name)
             continue
-        # 读 2023-2025 年的 parquet
+        # 按年 parquet：只读准入窗口内年份（默认 2020~2022）
         dfs = []
-        for y in range(2023, 2026):
+        for y in range(int(CORR_START_DATE[:4]), int(CORR_END_DATE[:4]) + 1):
             pf = fdir / f"{y}.parquet"
             if pf.exists():
                 dfs.append(pd.read_parquet(pf))
@@ -182,13 +223,15 @@ def compute_correlation_matrix(factor_names: list[str]) -> pd.DataFrame:
             missing.append(name)
             continue
         combined = pd.concat(dfs)
+        # 按年 parquet 可能存在重复索引行（原始写入拼接所致），读取时去重
+        combined = combined[~combined.index.duplicated(keep="first")]
         # 只保留 CORR_START_DATE ~ CORR_END_DATE 范围
         dts = combined.index.get_level_values("datetime")
         combined = combined[(dts >= CORR_START_DATE) & (dts <= CORR_END_DATE)]
         factor_data[name] = combined
 
     if missing:
-        print(f"[admit] 以下因子在 warehouse 中无 2023~2025 年数据: {missing}")
+        print(f"[admit] 以下因子在 warehouse 中无 {CORR_START_DATE[:4]}~{CORR_END_DATE[:4]} 年数据: {missing}")
         if not factor_data:
             print("[admit] 无任何因子可计算相关矩阵")
             return pd.DataFrame()
@@ -249,12 +292,9 @@ def check_correlation(new_factor: str, existing_factors: list[dict],
 # 增量 IC 检验共享辅助（供边际贡献 / 方向一致性使用）
 # ==============================================================================
 
-# 增量检验统一窗口：近 3 年（2023-2025），与相关矩阵计算窗口一致，按年度切片
-SUB_PERIODS = [
-    ("2023", "2023-01-01", "2023-12-31"),
-    ("2024", "2024-01-01", "2024-12-31"),
-    ("2025", "2025-01-01", "2025-12-31"),
-]
+# 增量检验统一窗口：由 ADMISSION_CUTOFF_DATE 动态生成（P0 修复），
+# 与相关矩阵计算窗口一致（见模块顶部 _build_admission_window），按年度切片。
+# SUB_PERIODS / CORR_START_DATE / CORR_END_DATE 均为模块级动态常量，勿重复硬编码。
 
 
 def _load_label_frame(start: str, end: str) -> pd.Series | None:
@@ -308,20 +348,22 @@ def _load_label_frame(start: str, end: str) -> pd.Series | None:
 
 def _load_warehouse_series(name: str) -> pd.Series | None:
     """
-    从 warehouse 读取因子在 2023~2025 年的序列（单列），instrument 统一小写与标签对齐。
+    从 warehouse 读取因子在准入窗口内的序列（单列），instrument 统一小写与标签对齐。
     无数据返回 None。
     """
     fdir = WAREHOUSE_DIR / name
     if not fdir.exists():
         return None
     dfs = []
-    for y in range(2023, 2026):
+    for y in range(int(CORR_START_DATE[:4]), int(CORR_END_DATE[:4]) + 1):
         pf = fdir / f"{y}.parquet"
         if pf.exists():
             dfs.append(pd.read_parquet(pf))
     if not dfs:
         return None
     combined = pd.concat(dfs)
+    # 按年 parquet 可能存在重复索引行，读取时去重（与 compute_correlation_matrix 口径一致）
+    combined = combined[~combined.index.duplicated(keep="first")]
     combined = combined.replace([np.inf, -np.inf], np.nan).dropna()
     if combined.empty:
         return None
@@ -369,6 +411,31 @@ def _slice_period(series: pd.Series, start: str, end: str) -> pd.Series:
     return series[(dts >= start) & (dts <= end)]
 
 
+def _nw_icir(ic_series: pd.Series, annual_factor: float = 252.0) -> float:
+    """Newey-West 自相关修正 ICIR（[P0] 闸门切换 icir_nw）。
+
+    5 日重叠标签使日频 IC 序列强自相关，原生 mean/std 口径会系统性虚高 ICIR
+    （典型虚高约 √5 倍）。与 qlworks.evaluation.ic_analysis.calc_ic_stats 的
+    icir_nw 口径一致：NW 序列标准差 = NW 标准误 × √n，再年化。
+    """
+    ic_clean = ic_series.dropna()
+    n = len(ic_clean)
+    if n < 10:
+        return 0.0
+    mean = float(ic_clean.mean())
+    std = float(ic_clean.std())
+    if std <= 1e-12 or abs(mean) <= 1e-12:
+        return 0.0
+    from qlworks.evaluation.ic_analysis import calc_newey_west_tstat
+    nw = calc_newey_west_tstat(ic_clean)
+    nw_se = nw.get("nw_std") or 0.0
+    n_obs = nw.get("n_obs") or n
+    nw_std_series = nw_se * np.sqrt(n_obs) if n_obs > 0 else std
+    if nw_std_series <= 1e-12:
+        return 0.0
+    return mean / nw_std_series * np.sqrt(annual_factor)
+
+
 def check_marginal_contribution(new_factor: str, existing_factors: list[dict],
                                 label_frame: pd.Series | None = None,
                                 corr_matrix: pd.DataFrame | None = None) -> tuple[bool, str]:
@@ -378,7 +445,8 @@ def check_marginal_contribution(new_factor: str, existing_factors: list[dict],
     逻辑：
     - 候选池为空 → 自动通过
     - 以已有池因子"截面等权组合信号"为基准 S0，加入新因子后为 S1
-    - 逐日计算组合 IC，ICIR = mean(IC) / std(IC)，按年度子时段对比增量
+    - 逐日计算组合 IC，ICIR = NW 修正后 mean(IC) / 序列标准差（[P0] 切换 icir_nw），
+      按年度子时段对比增量
     - 要求各年度增量 ICIR 的均值 ≥ ICIR_IMPROVE_MIN（默认 0，即不得拉低组合 ICIR）
 
     注：原实现以"平均相关 > 0.40"近似边际贡献，与文档口径不符；现改为真实
@@ -420,10 +488,10 @@ def check_marginal_contribution(new_factor: str, existing_factors: list[dict],
                                 _slice_period(label_frame, start, end))
                 if len(ic0) < 10 or len(ic1) < 10:
                     continue
-                icir0 = ic0.mean() / (ic0.std() + 1e-9)
-                icir1 = ic1.mean() / (ic1.std() + 1e-9)
+                icir0 = _nw_icir(ic0)
+                icir1 = _nw_icir(ic1)
                 deltas.append(icir1 - icir0)
-                details.append(f"{label} ICIR {icir0:.3f}→{icir1:.3f} (Δ{icir1 - icir0:+.3f})")
+                details.append(f"{label} ICIR_NW {icir0:.3f}→{icir1:.3f} (Δ{icir1 - icir0:+.3f})")
 
             if deltas:
                 avg_delta = float(np.mean(deltas))
@@ -460,7 +528,7 @@ def check_direction_consistency(new_factor: str,
     - 优先：基于 warehouse 因子值与标签的逐年 Spearman IC，要求各年度 IC 同号
     - 回退：标签缺失时保留因子值符号校验（带警告）
 
-    窗口与相关矩阵统一为近 3 年（2023-2025，年度切片）。
+    窗口与相关矩阵统一为动态准入窗口（默认 2020-2022，年度切片，P0 修复）。
     """
     series = _load_warehouse_series(new_factor)
     if series is None:
@@ -518,9 +586,13 @@ def _load_registry_metrics(factor_name: str) -> dict:
     except Exception:
         return {}
     entry = (reg.get("factors") or {}).get(factor_name) or {}
+    # [P0] 闸门切换 icir_nw：优先用 Newey-West 自相关修正 ICIR（更保守、真实），
+    # 旧 registry 无 icir_nw 时回退原生 icir。
+    icir_nw = entry.get("icir_nw")
     return {
         "ic_mean": entry.get("ic_mean"),
-        "ir": entry.get("icir"),
+        "icir_nw": icir_nw,
+        "ir": icir_nw if icir_nw is not None else entry.get("icir"),
         "ic_positive_ratio": entry.get("win_rate"),
         "sharpe": entry.get("ls_sharpe"),
     }
@@ -540,7 +612,8 @@ def _admit_entry(factor_name: str, factor_info: dict, result: dict, tier: str) -
         return None
     direction = "positive" if float(ic_mean) > 0 else "negative"
     now = datetime.now().isoformat(timespec="seconds")
-    latest_icir = metrics.get("ir", 0) or 0
+    # [P0] latest_icir 切换为 icir_nw（NW 自相关修正，防重叠标签虚高），无则回退原生 icir
+    latest_icir = metrics.get("icir_nw") or metrics.get("ir", 0) or 0
     result["latest_icir"] = latest_icir
     return {
         "name": factor_name,
@@ -649,7 +722,7 @@ def build_all():
 
     print(f"[admit] 候选因子: {len(factor_names)} 个 | 已有池: {len(existing)} 个")
     corr_matrix = compute_correlation_matrix(all_names)
-    # 加载统一窗口（2023-2025）标签，供增量 ICIR 边际贡献 / IC 方向一致性检验
+    # 加载统一准入窗口（默认 2020-2022，P0 修复）标签，供增量 ICIR 边际贡献 / IC 方向一致性检验
     label_frame = _load_label_frame(CORR_START_DATE, CORR_END_DATE)
 
     admitted = []
@@ -745,7 +818,7 @@ def admit_single(factor_name: str, tier: str = None):
     # 构建相关矩阵
     all_names = [factor_name] + [f["name"] for f in existing]
     corr_matrix = compute_correlation_matrix(all_names)
-    # 加载统一窗口（2023-2025）标签，供增量 ICIR 边际贡献 / IC 方向一致性检验
+    # 加载统一准入窗口（默认 2020-2022，P0 修复）标签，供增量 ICIR 边际贡献 / IC 方向一致性检验
     label_frame = _load_label_frame(CORR_START_DATE, CORR_END_DATE)
 
     result = admit_factor(factor_name, factor_info, existing, corr_matrix, label_frame)

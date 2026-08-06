@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import logging
 from qlib.data.dataset.processor import Processor
-from qlib.data.data import ExpressionD
+from qlib.data.data import ExpressionD, Cal
 from sklearn.linear_model import Ridge
 
 _logger = logging.getLogger(__name__)
@@ -12,7 +12,15 @@ def _fetch_features_direct(instruments, fields, start_time, end_time, freq='day'
     """绕过 D.features() 的 ParallelExt 缺陷（Windows spawn 多进程下
     Operators 模块不可见导致 SyntaxError），直接用 ExpressionD.expression()
     逐 instrument 逐 field 取值。返回与 D.features() 相同格式的 DataFrame
-    （MultiIndex: instrument x datetime, columns=fields 原始字符串）。"""
+    （MultiIndex: instrument x datetime, columns=fields 原始字符串）。
+
+    [P0修复] ExpressionD.expression() 默认 time2idx=True，返回的是
+    "全局交易日历位置"整数索引（行号）而非真实日期（见 qlib/data/data.py
+    LocalExpressionProvider.expression）。若直接使用该整数索引，下游与
+    parquet 因子/预测的日期索引完全失配（pd.to_datetime(int) 会得到
+    1970 附近的垃圾日期），导致 join 恒为空。此处用 qlib 日历将整数
+    位置映射回真实日期。
+    """
     import pandas as pd
 
     result_parts = []
@@ -21,6 +29,11 @@ def _fetch_features_direct(instruments, fields, start_time, end_time, freq='day'
         for f in fields:
             try:
                 series = ExpressionD.expression(inst, f, start_time, end_time, freq)
+                if series is not None and len(series) > 0:
+                    # 整数行号索引 → 用 qlib 交易日历映射回真实日期
+                    if not isinstance(series.index, pd.DatetimeIndex):
+                        _cal = Cal.calendar(freq=freq)
+                        series.index = pd.DatetimeIndex([_cal[i] for i in series.index])
                 inst_data[f] = series
             except Exception:
                 inst_data[f] = pd.Series(dtype=float)
@@ -37,8 +50,8 @@ def _fetch_features_direct(instruments, fields, start_time, end_time, freq='day'
         return pd.DataFrame(columns=fields)
 
     result = pd.concat(result_parts).sort_index()
-    # datetime 层统一转 Timestamp（ExpressionD.expression 返回的 index 可能是 str，
-    # 与 parquet 缓存的 pd.Timestamp 类型不一致会导致 MultiIndex.intersection 返回空集）
+    # datetime 层统一转 Timestamp（兼容部分调用路径返回 str 索引的情况；
+    # 正常路径下该层已是 datetime64，此处为幂等安全转换）
     dt_level = result.index.names.index('datetime') if 'datetime' in result.index.names else -1
     if dt_level >= 0:
         new_levels = list(result.index.levels)
