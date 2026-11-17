@@ -1,0 +1,203 @@
+# ============================================================================
+# 【sentiment_factors 家族】情绪因子（2026-10-16 增补）
+# ----------------------------------------------------------------------------
+# 因子总数: 16 | warehouse 缓存一一对应: 16/16
+# 子类构成:
+#   #   资金情绪  ×6
+#   #   sent_mf_net_ratio sent_margin_chg_20d sent_elg_net_ratio sent_lg_net_ratio sent_md_net_ratio sent_mf_strength_20d
+#   #   交易情绪  ×3
+#   #   sent_turnover_dev sent_north_chg_20d volume_ratio_5d
+#   #   筹码/股东  ×2
+#   #   holder_num_chg_20d holder_num_trend_4q
+#   #   龙虎榜/涨停/热搜  ×5
+#   #   lhb_count_20d lhb_org_net_rate limit_up_height_20d limit_seal_strength hot_rank_chg_20d
+# 数据源: 局域网 ClickHouse quant_db——money_flow / daily_indicators / stk_holdernumber / ths_dragon_tiger_stock_daily / ths_limit_up_pool_daily / ths_hot_stock_rank_daily
+# 口径: 个股截面级（可进 factor_screen 筛选）；同花顺特色因子历史短（2025-09起），回测样本有限
+# 排列规则: 因子按 category 分组排列，组内按名称排序；条目间空 1 行
+# ============================================================================
+name: sentiment_factors
+version: '5.0'
+strategy_type: sentiment_factors 因子合集
+author: Quant
+updated_at: '2026-10-11'
+description: Sentiment 情绪家族：资金流/杠杆/换手/北向情绪，SYU 2012 高情绪期贡献 80% 口径。
+analysis:
+  pros: 与量价家族正交的另类情绪源，历史长（2010+）支撑主回测窗口。
+  cons: 北向 2024 后断更；情绪因子需配合高低情绪期分组检验（P2-1 sentiment_split）。
+  optimization_direction: 补充市场级情绪 regime（涨停家数/连板高度，2025 起短历史）、文本情绪。
+factors:
+- name: sent_mf_net_ratio
+  category: 资金情绪
+  expression:
+    qlib: 'CH: money_flow.net_mf_amount / (daily_prices.amount*1e4)'
+  meaning: 主力资金净流入/成交额。资金情绪：主力净买入占比。
+  usage_scenario: 主力资金流向跟踪，资金情绪选股。
+  strategy_hint: 正向因子（主力净流入溢价）。
+
+- name: sent_margin_chg_20d
+  category: 资金情绪
+  expression:
+    qlib: 'CH: daily_indicators.rzye / Ref20(rzye) - 1'
+  meaning: 融资余额 20 日变化率。杠杆情绪：融资买入动能。
+  usage_scenario: 杠杆资金参与度变化，情绪周期跟踪。
+  strategy_hint: 方向视策略而定（杠杆资金追涨杀跌，周期性强）。
+
+- name: sent_turnover_dev
+  category: 交易情绪
+  expression:
+    qlib: 'CH: daily_indicators.turnover_rate / Mean20 - 1'
+  meaning: 换手率 / 20日均换手 - 1。换手异动情绪：放量/缩量。
+  usage_scenario: 量能异动捕捉，高换手折价剔除。
+  strategy_hint: 极端高换手通常负向（A股高换手折价）。
+
+- name: sent_north_chg_20d
+  category: 交易情绪
+  expression:
+    qlib: 'CH: daily_indicators.north_hold / Ref20(north_hold) - 1'
+  meaning: 北向持股 20 日变化率。外资情绪（2024-08 起日频停发，样本止 2024-06）。
+  usage_scenario: 外资加仓/减仓跟踪。
+  strategy_hint: 正向因子（外资净增仓溢价）。
+
+- name: sent_elg_net_ratio
+  category: 资金情绪
+  expression:
+    qlib: 'CH: (money_flow.buy_elg_amount - money_flow.sell_elg_amount) / (buy_elg_amount + sell_elg_amount)'
+  meaning: 超大单净流入占比。主力资金（机构/大户）净买入占超大单成交比。
+  usage_scenario: 机构动向跟踪，超大单净流入溢价选股。
+  strategy_hint: 正向因子（超大单净买入=机构看多）。
+
+- name: sent_lg_net_ratio
+  category: 资金情绪
+  expression:
+    qlib: 'CH: (money_flow.buy_lg_amount - money_flow.sell_lg_amount) / (buy_lg_amount + sell_lg_amount)'
+  meaning: 大单净流入占比。大户资金净买入占大单成交比。
+  usage_scenario: 大户/私募动向跟踪。
+  strategy_hint: 正向因子。
+
+- name: sent_md_net_ratio
+  category: 资金情绪
+  expression:
+    qlib: 'CH: (money_flow.buy_md_amount - money_flow.sell_md_amount) / (buy_md_amount + sell_md_amount)'
+  meaning: 中单净流入占比。散户与中户资金净买入占比。
+  usage_scenario: 散户情绪反向指标（中单净流入通常负向）。
+  strategy_hint: 负向因子（散户追涨杀跌，中单净流入常预示短期顶部）。
+
+- name: sent_mf_strength_20d
+  category: 资金情绪
+  expression:
+    qlib: 'CH: MA20((buy_lg+buy_elg - sell_lg - sell_elg) / daily_prices.amount)'
+  meaning: 大单+超大单净流入占成交额比，20日均值。综合主力资金强度。
+  usage_scenario: 主力资金持续流入跟踪，中期资金情绪。
+  strategy_hint: 正向因子。
+
+- name: volume_ratio_5d
+  category: 交易情绪
+  expression:
+    qlib: 'CH: MA5(daily_indicators.volume_ratio)'
+  meaning: 量比 5 日均值。当日成交量/过去5日均量的5日平滑。
+  usage_scenario: 量能异动捕捉，关注度变化跟踪。
+  strategy_hint: 极端高量比负向（放量过度）。
+
+- name: holder_num_chg_20d
+  category: 筹码/股东
+  expression:
+    qlib: 'CH: stk_holdernumber.holder_num / Ref4Q(holder_num) - 1'
+  meaning: 股东户数环比变化率（4季度）。户数减少=筹码集中=机构建仓。
+  usage_scenario: 筹码集中度跟踪，主力吸筹信号。
+  strategy_hint: 负向因子（户数减少=筹码集中=看涨）。
+
+- name: holder_num_trend_4q
+  category: 筹码/股东
+  expression:
+    qlib: 'CH: LinReg slope(holder_num, 4Q)'
+  meaning: 近4期股东户数线性斜率。持续下降=筹码持续集中。
+  usage_scenario: 中期筹码趋势跟踪。
+  strategy_hint: 负向因子（斜率<0=筹码集中=看涨）。
+
+- name: lhb_count_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_dragon_tiger_stock_daily 近20日上榜次数'
+  meaning: 近20日龙虎榜上榜次数。游资关注度。
+  usage_scenario: 游资活跃股跟踪（历史短：2025-09起）。
+  strategy_hint: 极端高频负向（过热）。
+
+- name: lhb_org_net_rate
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_dragon_tiger_stock_daily.org_net_value / buy_value 近20日均值'
+  meaning: 龙虎榜机构席位净买入率。机构通过龙虎榜的买卖力度。
+  usage_scenario: 龙虎榜机构动向跟踪。
+  strategy_hint: 正向因子（机构净买入=看多）。
+
+- name: limit_up_height_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_limit_up_pool_daily.continue_day_cnt 近20日最大值'
+  meaning: 近20日涨停连板高度最大值。打板情绪周期位置。
+  usage_scenario: 涨停动量跟踪（历史短：2025-01起）。
+  strategy_hint: 极端高度负向（过热回调风险）。
+
+- name: limit_seal_strength
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_limit_up_pool_daily.seal_money / daily_indicators.circ_mv 近20日均值'
+  meaning: 涨停封板资金强度（封单金额/流通市值）。封板力度=做多决心。
+  usage_scenario: 涨停封板质量评估。
+  strategy_hint: 正向因子（封单强=做多坚决）。
+
+- name: hot_rank_chg_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_hot_stock_rank_daily.rank 近20日变化率（排名上升=关注度提升）'
+  meaning: 热门股搜索排名20日变化。社交媒体关注度变化。
+  usage_scenario: 散户关注度跟踪（历史短：2025-09起）。
+  strategy_hint: 排名急升负向（过热）。
+
+- name: break_count_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_limit_break_pool_daily.open_times 近20日累计'
+  meaning: 近20日炸板次数（开板次数累计）。炸板多=封板不坚决=上方抛压重。
+  usage_scenario: 涨停股封板质量评估（历史短：2025-09起）。
+  strategy_hint: 负向因子（炸板多=弱势）。
+
+- name: limit_down_count_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: ths_limit_down_pool_daily 近20日跌停次数'
+  meaning: 近20日跌停次数。跌停多=恐慌抛售=弱势股。
+  usage_scenario: 弱势股识别、排雷（历史短：2025-09起）。
+  strategy_hint: 负向因子（跌停多=坚决回避）。
+
+- name: hot_money_net_rate_20d
+  category: 龙虎榜/涨停/热搜
+  expression:
+    qlib: 'CH: sum(net_value)/sum(buy_value) 近20日均值'
+  meaning: 近20日龙虎榜游资净买入率。游资净流入强度=短线资金追捧。
+  usage_scenario: 游资偏好股跟踪（历史短：2025-09起）。
+  strategy_hint: 正向因子（游资净流入=短线做多）。
+
+- name: north_hold_chg_20d
+  category: 资金情绪
+  expression:
+    ch: 'north_hold / Ref20(north_hold) - 1'
+  meaning: 北向持仓比例20日变化率。北向=聪明钱，持续加仓=外资看好。
+  usage_scenario: 跟踪外资动向，北向加仓股往往中期跑赢。
+  strategy_hint: 正向因子（北向加仓=外资看好），周频调仓。
+
+- name: rzye_chg_20d
+  category: 资金情绪
+  expression:
+    ch: 'rzye / Ref20(rzye) - 1'
+  meaning: 融资余额20日变化率。融资盘=杠杆做多力量，急升=散户情绪过热。
+  usage_scenario: 杠杆资金情绪指标，融资盘急升后往往见顶。
+  strategy_hint: 反向因子（融资余额急升=情绪过热=短期见顶）。
+
+- name: block_trade_premium_20d
+  category: 资金情绪
+  expression:
+    tushare: 'mean((block_price-close)/close) 近20日'
+  meaning: 大宗交易折溢价率20日均值。大宗折价=机构出货，溢价=机构抢筹。
+  usage_scenario: 机构大宗交易动向跟踪。
+  strategy_hint: 反向因子（折价深=利空），周频跟踪。

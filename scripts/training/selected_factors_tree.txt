@@ -1,0 +1,11 @@
+# Forecast_20261113
+1. Alpha62
+2. Alpha42
+3. VMA60
+4. MIN10
+5. ep_ind_neutral
+6. roe_ttm
+7. grossprofit_margin
+8. total_mv_log
+9. momentum_1m
+

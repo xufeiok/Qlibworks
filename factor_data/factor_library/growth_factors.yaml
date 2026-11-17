@@ -1,0 +1,52 @@
+# ============================================================================
+# 【growth_factors 家族】因子统计（新增 2026-10-17）
+# ----------------------------------------------------------------------------
+# 因子总数: 4 | warehouse 缓存一一对应: 4/4 ✓
+# 子类构成:
+#   成长 ×4
+#   revenue_growth_yoy profit_growth_yoy q_revenue_growth_yoy dt_profit_growth_yoy
+# 家族口径: 季度频 | 正向 | 与价值/动量低相关，AQR QMJ 五柱之一
+# 排列规则: 因子按 category 分组排列，组内按名称排序；条目间空 1 行
+# ============================================================================
+name: growth_factors
+version: '1.0'
+strategy_type: growth_factors 因子合集
+author: Quant
+updated_at: '2026-10-17'
+description: Growth 成长家族：营收/利润同比增速，捕捉公司扩张速度（AQR QMJ 五柱之一）。
+analysis:
+  pros: 与价值、动量、质量低相关，分散组合风险；A股成长溢价显著。
+  cons: 成长股估值波动大，牛市弹性大熊市回撤深；需结合质量过滤高估值陷阱。
+  optimization_direction: 补 SUE 盈利惊喜、分析师上调比例（P1 需 tushare）。
+factors:
+- name: revenue_growth_yoy
+  category: 成长
+  expression:
+    qlib: $tr_yoy
+  meaning: 营业收入同比增长率（YoY）。营收持续高增长=公司规模扩张。
+  usage_scenario: 成长股筛选、行业景气度判断。
+  strategy_hint: 正向因子（营收增速高=成长性强），季度频调仓。
+
+- name: profit_growth_yoy
+  category: 成长
+  expression:
+    qlib: $netprofit_yoy
+  meaning: 净利润同比增长率（YoY）。利润持续高增长=盈利能力增强。
+  usage_scenario: 成长股筛选、业绩超预期识别。
+  strategy_hint: 正向因子（利润增速高=盈利能力强），季度频。
+
+- name: q_revenue_growth_yoy
+  category: 成长
+  expression:
+    qlib: $q_sales_yoy
+  meaning: 单季营业收入同比增速。比年度增速更灵敏的成长拐点信号。
+  usage_scenario: 季度业绩拐点捕捉，提前识别加速/减速。
+  strategy_hint: 正向因子（单季加速=成长动能增强），季度频。
+
+- name: dt_profit_growth_yoy
+  category: 成长
+  expression:
+    qlib: $dt_netprofit_yoy
+  meaning: 扣非净利润同比增长率。剔除非经常性损益后的真实盈利增长。
+  usage_scenario: 识别主业真实成长性，剔除卖资产/政府补贴等一次性收益。
+  strategy_hint: 正向因子（扣非高增=主业真实成长），季度频。

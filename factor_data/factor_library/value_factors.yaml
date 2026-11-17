@@ -1,0 +1,64 @@
+# ============================================================================
+# 【value_factors 家族】因子统计（归档 2026-10-08）
+# ----------------------------------------------------------------------------
+# 因子总数: 4 | warehouse 缓存一一对应: 4/4 ✓
+# 子类构成:
+  #   价值  ×4
+  #   dv_ttm pb_lf pe_ttm ps_ttm
+# 家族口径: 日频滚动 | 均值回归 | 风格依赖强，需控行业市值暴露
+# 排列规则: 因子按 category 分组排列，组内按名称排序；条目间空 1 行
+# ============================================================================
+name: value_factors
+version: '1.0'
+strategy_type: value_factors 因子合集
+author: Quant
+updated_at: '2026-10-08'
+description: Value 价值估值家族：PE/PB/PS/DV，估值修复均值回归收益来源（原 style_factors 估值子类独立成档）。
+analysis:
+  pros: 价值家族独立成档，家族独立质检。
+  cons: 风格依赖性强（熊市稳健牛市偏弱），需配额约束与行业市值中性。
+  optimization_direction: 补充行业中性估值、远期估值、估值分位变化。
+factors:
+- name: dv_ttm
+  category: 价值
+  expression:
+    qlib: $dv_ttm
+    duckdb: dv_ttm
+  meaning: 股息率（TTM）。反映股票的现金回报能力。
+  usage_scenario: 大盘蓝筹、高分红板块、震荡市全市场。
+  strategy_hint: 正向因子，用于红利策略、养老型量化策略。
+
+- name: pb_lf
+  category: 价值
+  expression:
+    qlib: $pb
+    duckdb: pb
+  meaning: 市净率（LF）。反映股价相对最新净资产的溢价。
+  usage_scenario: 金融、周期等重资产行业，全市场价值选股。
+  strategy_hint: 通常作为负向因子，在行业轮动或小市值估值过滤中使用。
+
+- name: pe_ttm
+  category: 价值
+  expression:
+    qlib: $pe_ttm
+    duckdb: pe_ttm
+  meaning: 市盈率（TTM）。反映股价相对盈利的溢价，值越低估值越低。
+  usage_scenario: 全市场、价值选股。在震荡市、价值牛市中有效性极强。
+  strategy_hint: 通常作为负向因子（取倒数或求相反数使用），小市值策略中需结合估值筛选避免陷阱。
+
+- name: ps_ttm
+  category: 价值
+  expression:
+    qlib: $ps_ttm
+    duckdb: ps_ttm
+  meaning: 市销率（TTM）。反映股价相对营收的溢价。
+  usage_scenario: 适配盈利不稳定的成长股 / 周期股，如创业板、科创板、中小盘成长股。
+  strategy_hint: 负向因子，用于成长股选股、小市值多因子。
+
+- name: ep_ind_neutral
+  category: 价值
+  expression:
+    qlib: 'CH: (1/pe_ttm) - group_mean(1/pe_ttm, sw_l1)'
+  meaning: EP行业中性版。个股盈利收益率减去所属申万一级行业均值，剔除行业估值差异。
+  usage_scenario: 行业内估值排序，避免价值因子集中在低估值行业。
+  strategy_hint: 正向因子（EP高于行业均值=行业内低估）。

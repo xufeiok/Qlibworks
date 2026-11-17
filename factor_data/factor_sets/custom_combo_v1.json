@@ -1,0 +1,94 @@
+{
+  "_meta": {
+    "set_version": "user_combo_v1",
+    "updated_at": "2026-11-01",
+    "description": "用户自建因子组合（12 个）：Momentum_Price 7 + Value 1 + Quality 2 + Size 1 + ShortRev 1",
+    "note": "name 为因子库/warehouse 实际可用名；alias 为用户原始叫法。category 直接写标准家族名，供组合层配额使用。"
+  },
+  "factors": [
+    {
+      "name": "Alpha62",
+      "alias": "Alpha62",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 5.4952
+    },
+    {
+      "name": "Alpha42",
+      "alias": "Alpha42",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 4.2317
+    },
+    {
+      "name": "VMA60",
+      "alias": "VMA60",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 3.9482
+    },
+    {
+      "name": "MIN10",
+      "alias": "MIN10",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 3.7509
+    },
+    {
+      "name": "QTLD60",
+      "alias": "QTLD60",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 3.3796
+    },
+    {
+      "name": "Alpha105",
+      "alias": "Alpha105",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 2.9424
+    },
+    {
+      "name": "VOL_REV",
+      "alias": "VOL_REV",
+      "category": "momentum_price",
+      "status": "admitted",
+      "latest_icir": 2.0384
+    },
+    {
+      "name": "ep_ind_neutral",
+      "alias": "EP_TTM",
+      "category": "value",
+      "status": "admitted",
+      "latest_icir": null
+    },
+    {
+      "name": "roe_ttm",
+      "alias": "ROE_TTM",
+      "category": "quality",
+      "status": "admitted",
+      "latest_icir": null
+    },
+    {
+      "name": "grossprofit_margin",
+      "alias": "GROSS_MARGIN",
+      "category": "quality",
+      "status": "admitted",
+      "latest_icir": null
+    },
+    {
+      "name": "total_mv_log",
+      "alias": "LOG_MV",
+      "category": "size",
+      "status": "admitted",
+      "latest_icir": null
+    },
+    {
+      "name": "momentum_1m",
+      "alias": "RET_20D",
+      "category": "short_rev",
+      "status": "admitted",
+      "latest_icir": null
+    }
+  ]
+}

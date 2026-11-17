@@ -1,0 +1,139 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+
+# 环境配置
+.env
+.venv/
+
+# IDE
+.idea/
+*.swp
+*.swo
+
+# 调试与临时脚本
+_debug*.py
+_debug*.log
+_diag*.py
+_test_*.py
+_check_*.py
+_verify_*.py
+_find_*.py
+_clear_*.py
+_run_bt.py
+_run_*.py
+_sp2.py
+_subprocess_runner.py
+_temp_*.py
+_opt.py
+_opt_run.py
+_bootstrap.py
+_gen_main.py
+_gen_changes.py
+_add_debug.py
+_*.py
+# 例外：包初始化文件不被上面的 `_*.py` 误伤
+!__init__.py
+
+# 运行日志与临时输出
+*.log
+err.log
+_bt_*.txt
+_bt_*.log
+_train_*.txt
+_tree_*.txt
+_gen_out.txt
+debug_output.json
+
+# 训练中间输出
+batch_factor_ic.csv
+batch_selected_factors.csv
+train_tree_batch_*.csv
+train_tree_daily_ic_series_*.csv
+
+# 训练评分输出（大文件，超 GitHub 100MB 限制，不推送）
+score_tree*.csv
+
+# 模型训练缓存
+catboost_info/
+mlruns/
+
+# 数据文件（可重新生成）
+qlib_data/
+qlib_data_backup_*/
+qlib_data_rebuild_*/
+artifacts/
+.fs_cache/
+_fs_cache/
+_vendor/
+
+# 临时输出目录
+backtrader_superplot/
+
+# 运行时产物统一收纳（P0 2026-10-13：mlruns/catboost/日志/回测输出/debug 探针）
+runtime/
+**/qlib_bt_superplot*.json
+debug_output*.json
+
+# 非核心目录
+Myfreqtrade/
+PineScript_study/
+Qlibworks_draft/
+Quant_Tushare/
+RealtimeTrader/
+TradingAgents-CN/
+articles/
+local-mcp-server/
+my_tool/
+xf_draft/
+drafts/
+bt_output/
+
+# 杂项脚本
+generate_chart.py
+generate_qlib_instruments.py
+loader.py
+preview_plotly.py
+run_chart_generation.bat
+run_training_launcher.py
+run_xaut_okx.py
+temp_scan_sw.py
+stock_stats.py
+stock_data_stats.json
+
+# 部署指南（非代码）
+DEPLOY_GUIDE.md
+
+# 下载进度缓存
+.download_progress.json
+
+# 前端
+frontend/node_modules/
+frontend/dist/
+
+# Node 依赖
+node_modules/
+
+# 因子仓库数据（可重新计算）
+factor_data/warehouse/
+factor_data/warehouse_backup_*/
+factor_data/warehouse_rebuild_*/
+factor_data/cache/
+factor_data/reports/
+factor_data/qualified_factors/
+factor_data/registry/
+factor_data/_backup_*/
+factor_data/archive_verify/
+factor_data/factor_library/archive/*_backup_*/
+
+# GitHub
+.github/instructions/codacy.instructions.md
+
+# 用户规则：所有点开头条目（隐藏配置/目录）不推送，仅保留 .gitignore 本身
+.*
+!.gitignore

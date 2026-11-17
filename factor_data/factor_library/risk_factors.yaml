@@ -1,0 +1,150 @@
+﻿# ============================================================================
+# 【risk_factors 家族】因子统计（归档 2026-10-08）
+# ----------------------------------------------------------------------------
+# 因子总数: 14 | warehouse 缓存一一对应: 14/14 ✓
+# 子类构成:
+  #   杠杆  ×1
+  #   debt_to_assets
+  #   波动与风险  ×4
+  #   beta pledge_ratio shareholder_change volatility_1m
+  #   流动性  ×2
+  #   amihud_illiq_20d turnover_chg_20d
+  #   规模与流动性  ×5
+  #   circ_mv illiquidity_amihud total_mv_log turnover_rate_1m volume_surge
+  #   风格  ×1
+  #   list_age_days
+  #   风险  ×1
+  #   unlock_pressure_60d
+# 家族口径: 日频滚动 | 仅做风险约束与暴露控制 | 不参与Alpha比拼
+# 排列规则: 因子按 category 分组排列，组内按名称排序；条目间空 1 行
+# ============================================================================
+name: risk_factors
+version: '4.0'
+strategy_type: risk_factors 因子合集
+author: Quant
+updated_at: '2026-10-26'
+description: Risk 风险与流动性家族：波动率/Beta/质押/股东变化（风险约束）+ 市值/换手/Amihud（Barra Size 流动性约束）。
+analysis:
+  pros: 风险与Alpha分离，符合 Barra 风格中性化框架。
+  cons: 不做 IC 强制要求，仅校验风险区分度。
+  optimization_direction: 补充特质波动率、最大回撤、日均成交额、解禁压力。
+factors:
+- name: beta
+  category: 波动与风险
+  expression:
+    qlib: $beta
+    duckdb: WITH daily_ret AS (SELECT ts_code, trade_date, close / NULLIF(LAG(close,1) OVER (PARTITION BY ts_code ORDER BY trade_date),0) - 1 AS stock_ret FROM _raw), mkt_ret AS (SELECT trade_date, AVG(stock_ret) AS mkt_ret FROM daily_ret WHERE stock_ret IS NOT NULL GROUP BY trade_date), combined AS (SELECT r.ts_code, r.trade_date, r.stock_ret, m.mkt_ret FROM daily_ret r JOIN mkt_ret m ON r.trade_date = m.trade_date WHERE r.stock_ret IS NOT NULL AND m.mkt_ret IS NOT NULL), rolled AS (SELECT ts_code, trade_date, CAST(COUNT(*) OVER w AS DOUBLE) AS n, SUM(stock_ret*mkt_ret) OVER w AS sum_xy, SUM(stock_ret) OVER w AS sum_x, SUM(mkt_ret) OVER w AS sum_y, SUM(mkt_ret*mkt_ret) OVER w AS sum_y2 FROM combined WINDOW w AS (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN 59 PRECEDING AND CURRENT ROW)) SELECT ts_code, trade_date, CASE WHEN n*sum_y2-sum_y*sum_y>0 THEN (n*sum_xy-sum_x*sum_y)/(n*sum_y2-sum_y*sum_y) END AS value FROM rolled WHERE n>=20 ORDER BY ts_code, trade_date
+  meaning: Beta系数。DuckDB 滚动60日协方差回归计算。
+  usage_scenario: 风控、过滤庄股
+  strategy_hint: 视策略而定
+
+- name: pledge_ratio
+  category: 波动与风险
+  expression:
+    qlib: $pledge_ratio
+    duckdb: pledge_ratio
+  meaning: 股权质押比例。大股东质押股份占总股本比例，高质押=爆仓风险。
+  usage_scenario: A股特色风险排雷，高质押股在下跌时容易强平。
+  strategy_hint: 反向因子（质押比例高=风险大=回避），季度频。
+
+- name: shareholder_change
+  category: 波动与风险
+  expression:
+    qlib: $stk_holdernumber / Ref($stk_holdernumber, 20) - 1
+  meaning: 股东人数变化。需 forward-fill 后做 LAG，走 Qlib 兜底。
+  usage_scenario: 筹码集中度分析
+  strategy_hint: 负向（减少代表集中）
+
+- name: volatility_1m
+  category: 波动与风险
+  expression:
+    qlib: Std(Abs($close/Ref($close,1)-1), 20)
+    duckdb: WITH daily_ret AS (SELECT ts_code, trade_date, close / NULLIF(LAG(close,1) OVER (PARTITION BY ts_code ORDER BY trade_date), 0) - 1 AS stock_ret FROM _raw) SELECT ts_code, trade_date, stddev(abs(stock_ret)) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS value FROM daily_ret WHERE stock_ret IS NOT NULL ORDER BY ts_code, trade_date
+  meaning: 过去20个交易日的日收益率标准差。低波动率异象：A股中历史波动率低的股票，未来收益往往更高且回撤小。
+  usage_scenario: 低波动率异象、多因子模型风控端、低波动率增强策略。
+  strategy_hint: 负向因子，常用于剔除高波动个股，或构建低波红利策略。
+
+- name: circ_mv
+  category: 规模与流动性
+  expression:
+    qlib: Log($circ_mv)
+    duckdb: ln(circ_mv)
+  meaning: 流通市值的自然对数。反映公司的体量大小。
+  usage_scenario: 市值因子是A股最显著的风格因子之一（小市值效应）。
+  strategy_hint: 通常作为负向因子，在小市值策略、微盘股策略中作为核心筛选指标。
+
+- name: illiquidity_amihud
+  category: 规模与流动性
+  expression:
+    qlib: Mean(Abs($close/Ref($close, 1) - 1) / $amount, 20)
+    duckdb: WITH daily_illiq AS (SELECT ts_code, trade_date, abs(CAST(close AS DOUBLE) / CAST(LAG(close, 1) OVER (PARTITION BY ts_code ORDER BY trade_date) AS DOUBLE) - CAST(1 AS DOUBLE)) / CAST(amount AS DOUBLE) AS daily_val FROM _raw) SELECT ts_code, trade_date, CAST(AVG(daily_val) OVER (PARTITION BY ts_code ORDER BY trade_date ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS DOUBLE) AS value FROM daily_illiq WHERE ts_code IS NOT NULL AND trade_date IS NOT NULL ORDER BY ts_code, trade_date
+  meaning: Amihud 非流动性指标
+  usage_scenario: 非流动性溢价：流动性越差的股票，投资者要求更高的预期收益补偿。
+  strategy_hint: 适合中低频、容量较小的策略，赚取流动性折价。
+
+- name: total_mv_log
+  category: 规模与流动性
+  expression:
+    qlib: Log($total_mv)
+    duckdb: CASE WHEN total_mv>0 THEN ln(total_mv) END
+  meaning: 总市值对数（负向）
+  usage_scenario: 小市值策略
+  strategy_hint: 控制暴露不直接参与打分
+
+- name: turnover_rate_1m
+  category: 规模与流动性
+  expression:
+    qlib: Mean($turnover_rate, 20)
+    duckdb: avg(turnover_rate) over (partition by ts_code order by trade_date rows between 19 preceding and current row)
+  meaning: 过去20个交易日换手率均值。
+  usage_scenario: 量价背离、量价齐升。温和放量通常是资金介入的信号。
+  strategy_hint: A股常存在高换手率折价现象，通常将极高换手作为负向因子剔除过度炒作的股票。
+
+- name: volume_surge
+  category: 规模与流动性
+  expression:
+    qlib: Mean($volume, 5) / Mean($volume, 60)
+    duckdb: (avg(vol) over (partition by ts_code order by trade_date rows between 4 preceding and current row)) / (avg(vol) over (partition by ts_code order by trade_date rows between 59 preceding and current row))
+  meaning: 5日均量除以60日均量。捕捉近期资金温和活跃的标的，避免买入死水股。
+  usage_scenario: 量价配合策略，验证价格反弹的有效性。
+  strategy_hint: 正向因子，反转必须有资金配合，但要避免极端放量（如单日换手过高）。
+
+- name: amihud_illiq_20d
+  category: 流动性
+  expression:
+    qlib: 'CH: MA20(|pct_chg|/amount)'
+  meaning: Amihud非流动性指标20日均值。|日收益|/成交额，值高=流动性差。
+  usage_scenario: 流动性溢价选股，非流动性高的股票要求更高收益补偿。
+  strategy_hint: 正向因子（流动性差=长期收益补偿高），日频周调仓。
+
+- name: debt_to_assets
+  category: 杠杆
+  expression:
+    qlib: $debt_to_assets
+  meaning: 资产负债率。总负债/总资产，财务杠杆水平。
+  usage_scenario: 财务风险排雷，高杠杆公司在衰退期/加息周期脆弱。
+  strategy_hint: 反向因子（高杠杆=财务风险高），季度频。
+
+- name: turnover_chg_20d
+  category: 流动性
+  expression:
+    qlib: 'CH: turnover_rate / MA60(turnover_rate) - 1'
+  meaning: 换手率相对60日均值偏离度。交投活跃度突变=资金关注度变化。
+  usage_scenario: 识别放量启动/缩量冷却，配合价格方向判断。
+  strategy_hint: 正向因子（放量上涨=资金关注），需结合价格方向。
+
+- name: list_age_days
+  category: 风格
+  expression:
+    qlib: 'CH: days since list_date'
+  meaning: 上市天数（自然日）。次新股（<250天）有显著溢价效应。
+  usage_scenario: 次新股溢价/破发风险识别，上市初期波动大。
+  strategy_hint: 非线性因子：上市<250天为次新股，需单独分组合并。
+
+- name: unlock_pressure_60d
+  category: 风险
+  expression:
+    tushare: 'sum(float_ratio) 未来60日'
+  meaning: 未来60日限售解禁比例合计。解禁=潜在抛压。
+  usage_scenario: 解禁前抛压预判，大额解禁前1-2月股价承压。
+  strategy_hint: 反向因子（解禁压力大=回避），日频监控。

@@ -1,0 +1,7955 @@
+{
+  "Alpha1": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 479,
+    "zero_count": 8,
+    "valid_count": 5210631
+  },
+  "Alpha10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha100": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191779,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191779
+  },
+  "Alpha101": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha102": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 895,
+    "valid_count": 5209749
+  },
+  "Alpha103": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha104": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211092,
+    "null_count": 4032,
+    "zero_count": 0,
+    "valid_count": 5207060
+  },
+  "Alpha105": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211109,
+    "null_count": 1805,
+    "zero_count": 49,
+    "valid_count": 5209255
+  },
+  "Alpha106": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5182260,
+    "null_count": 0,
+    "zero_count": 30353,
+    "valid_count": 5151907
+  },
+  "Alpha107": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha108": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 2244463,
+    "zero_count": 0,
+    "valid_count": 2966659
+  },
+  "Alpha109": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 177,
+    "zero_count": 0,
+    "valid_count": 5210945
+  },
+  "Alpha11": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5123231,
+    "null_count": 0,
+    "zero_count": 12,
+    "valid_count": 5123219
+  },
+  "Alpha110": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 2088,
+    "zero_count": 416,
+    "valid_count": 5208614
+  },
+  "Alpha111": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 339,
+    "zero_count": 0,
+    "valid_count": 5210783
+  },
+  "Alpha112": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200255,
+    "null_count": 0,
+    "zero_count": 42164,
+    "valid_count": 5158091
+  },
+  "Alpha113": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5209801,
+    "null_count": 170074,
+    "zero_count": 0,
+    "valid_count": 5039727
+  },
+  "Alpha114": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211057,
+    "null_count": 20031,
+    "zero_count": 0,
+    "valid_count": 5191026
+  },
+  "Alpha115": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3220,
+    "valid_count": 5207902
+  },
+  "Alpha116": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 3,
+    "valid_count": 5210641
+  },
+  "Alpha117": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 563736,
+    "valid_count": 4647386
+  },
+  "Alpha118": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191906,
+    "null_count": 1782,
+    "zero_count": 40,
+    "valid_count": 5190084
+  },
+  "Alpha119": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3518,
+    "valid_count": 5207604
+  },
+  "Alpha12": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha120": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha121": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5215898
+  },
+  "Alpha122": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 0,
+    "valid_count": 5210644
+  },
+  "Alpha123": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha124": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 4861,
+    "valid_count": 5206261
+  },
+  "Alpha125": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha126": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha127": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 2344,
+    "valid_count": 5208778
+  },
+  "Alpha128": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200535,
+    "null_count": 0,
+    "zero_count": 5029,
+    "valid_count": 5195506
+  },
+  "Alpha129": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207137,
+    "null_count": 0,
+    "zero_count": 11973,
+    "valid_count": 5195164
+  },
+  "Alpha13": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 4863,
+    "valid_count": 5206259
+  },
+  "Alpha130": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha131": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha132": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192257,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192257
+  },
+  "Alpha133": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 5914,
+    "valid_count": 5205208
+  },
+  "Alpha134": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5186127,
+    "null_count": 0,
+    "zero_count": 42059,
+    "valid_count": 5144068
+  },
+  "Alpha135": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211002,
+    "null_count": 10046,
+    "zero_count": 0,
+    "valid_count": 5200956
+  },
+  "Alpha136": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 477,
+    "zero_count": 0,
+    "valid_count": 5210641
+  },
+  "Alpha137": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207804,
+    "null_count": 0,
+    "zero_count": 23286,
+    "valid_count": 5184518
+  },
+  "Alpha138": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 1248,
+    "valid_count": 5209874
+  },
+  "Alpha139": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5198809,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5198809
+  },
+  "Alpha14": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189524,
+    "null_count": 0,
+    "zero_count": 70188,
+    "valid_count": 5119336
+  },
+  "Alpha140": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha141": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha142": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha143": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha144": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 2395,
+    "zero_count": 0,
+    "valid_count": 5208723
+  },
+  "Alpha145": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192210,
+    "null_count": 0,
+    "zero_count": 4320,
+    "valid_count": 5187890
+  },
+  "Alpha146": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 0,
+    "valid_count": 5210643
+  },
+  "Alpha147": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 2,
+    "valid_count": 5210642
+  },
+  "Alpha148": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 2694677,
+    "valid_count": 2516445
+  },
+  "Alpha149": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211110,
+    "null_count": 1954,
+    "zero_count": 0,
+    "valid_count": 5209156
+  },
+  "Alpha15": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191509,
+    "null_count": 0,
+    "zero_count": 853212,
+    "valid_count": 4338297
+  },
+  "Alpha150": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha151": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211011,
+    "null_count": 9564,
+    "zero_count": 0,
+    "valid_count": 5201447
+  },
+  "Alpha152": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211071,
+    "null_count": 5240,
+    "zero_count": 5858,
+    "valid_count": 5199973
+  },
+  "Alpha153": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192088,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192088
+  },
+  "Alpha154": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3408238,
+    "valid_count": 1802884
+  },
+  "Alpha155": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha156": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 316,
+    "valid_count": 5210806
+  },
+  "Alpha157": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha158": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 20096,
+    "valid_count": 5191026
+  },
+  "Alpha159": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 2,
+    "valid_count": 5211096
+  },
+  "Alpha16": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha160": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 2344,
+    "valid_count": 5208778
+  },
+  "Alpha161": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 24,
+    "valid_count": 5211098
+  },
+  "Alpha162": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211109,
+    "null_count": 2852,
+    "zero_count": 849683,
+    "valid_count": 4358574
+  },
+  "Alpha163": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha164": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 177,
+    "zero_count": 2597,
+    "valid_count": 5208348
+  },
+  "Alpha165": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 0,
+    "valid_count": 5210643
+  },
+  "Alpha166": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 477,
+    "valid_count": 5210166
+  },
+  "Alpha167": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207137,
+    "null_count": 0,
+    "zero_count": 11631,
+    "valid_count": 5195506
+  },
+  "Alpha168": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha169": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211115,
+    "null_count": 949,
+    "zero_count": 5794,
+    "valid_count": 5204372
+  },
+  "Alpha17": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211104,
+    "null_count": 11959,
+    "zero_count": 492,
+    "valid_count": 5198653
+  },
+  "Alpha170": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha171": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5208834,
+    "null_count": 271512,
+    "zero_count": 203042,
+    "valid_count": 4734280
+  },
+  "Alpha172": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211115,
+    "null_count": 539,
+    "zero_count": 0,
+    "valid_count": 5210576
+  },
+  "Alpha173": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha174": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 1000,
+    "valid_count": 5210122
+  },
+  "Alpha175": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 24,
+    "valid_count": 5211098
+  },
+  "Alpha176": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 2412,
+    "zero_count": 47,
+    "valid_count": 5208659
+  },
+  "Alpha177": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha178": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191509,
+    "null_count": 0,
+    "zero_count": 172390,
+    "valid_count": 5019119
+  },
+  "Alpha179": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha18": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189524,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5189524
+  },
+  "Alpha180": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215896,
+    "null_count": 1131,
+    "zero_count": 17025,
+    "valid_count": 5197740
+  },
+  "Alpha181": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 0,
+    "valid_count": 5210644
+  },
+  "Alpha182": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 1675,
+    "valid_count": 5209447
+  },
+  "Alpha183": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 0,
+    "valid_count": 5210643
+  },
+  "Alpha184": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha185": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 1681,
+    "valid_count": 5214217
+  },
+  "Alpha186": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211092,
+    "null_count": 3394,
+    "zero_count": 0,
+    "valid_count": 5207698
+  },
+  "Alpha187": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 415,
+    "valid_count": 5210707
+  },
+  "Alpha188": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 177,
+    "zero_count": 0,
+    "valid_count": 5210945
+  },
+  "Alpha189": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5198188,
+    "null_count": 0,
+    "zero_count": 1332,
+    "valid_count": 5196856
+  },
+  "Alpha19": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189524,
+    "null_count": 0,
+    "zero_count": 70188,
+    "valid_count": 5119336
+  },
+  "Alpha190": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5210993,
+    "null_count": 11199,
+    "zero_count": 0,
+    "valid_count": 5199794
+  },
+  "Alpha191": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189553,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5189553
+  },
+  "Alpha2": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5179780,
+    "null_count": 0,
+    "zero_count": 55326,
+    "valid_count": 5124454
+  },
+  "Alpha20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189034,
+    "null_count": 0,
+    "zero_count": 63155,
+    "valid_count": 5125879
+  },
+  "Alpha21": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 42,
+    "valid_count": 5210602
+  },
+  "Alpha22": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211112,
+    "null_count": 1424,
+    "zero_count": 0,
+    "valid_count": 5209688
+  },
+  "Alpha23": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 521,
+    "valid_count": 5210122
+  },
+  "Alpha24": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211104,
+    "null_count": 2376,
+    "zero_count": 0,
+    "valid_count": 5208728
+  },
+  "Alpha25": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha26": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211099,
+    "null_count": 2853,
+    "zero_count": 0,
+    "valid_count": 5208246
+  },
+  "Alpha27": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211099,
+    "null_count": 2852,
+    "zero_count": 0,
+    "valid_count": 5208247
+  },
+  "Alpha28": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 237,
+    "zero_count": 2,
+    "valid_count": 5210883
+  },
+  "Alpha29": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189034,
+    "null_count": 0,
+    "zero_count": 63155,
+    "valid_count": 5125879
+  },
+  "Alpha3": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5196860,
+    "null_count": 0,
+    "zero_count": 24780,
+    "valid_count": 5172080
+  },
+  "Alpha31": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 1945,
+    "valid_count": 5190067
+  },
+  "Alpha32": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha33": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211104,
+    "null_count": 2376,
+    "zero_count": 100142,
+    "valid_count": 5108586
+  },
+  "Alpha34": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha35": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha36": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha37": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-13",
+    "end_date": "2026-11-13",
+    "total_records": 5165799,
+    "null_count": 0,
+    "zero_count": 1674,
+    "valid_count": 5164125
+  },
+  "Alpha38": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191409,
+    "null_count": 0,
+    "zero_count": 2785942,
+    "valid_count": 2405467
+  },
+  "Alpha39": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3559,
+    "valid_count": 5207563
+  },
+  "Alpha4": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207137,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5207137
+  },
+  "Alpha40": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201789,
+    "null_count": 2111,
+    "zero_count": 1732,
+    "valid_count": 5197946
+  },
+  "Alpha41": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha42": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-08",
+    "end_date": "2026-11-13",
+    "total_records": 5185942,
+    "null_count": 0,
+    "zero_count": 1677,
+    "valid_count": 5184265
+  },
+  "Alpha43": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 502,
+    "valid_count": 5210620
+  },
+  "Alpha44": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha45": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha46": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha47": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 1990,
+    "valid_count": 5209108
+  },
+  "Alpha48": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211103,
+    "null_count": 0,
+    "zero_count": 18660,
+    "valid_count": 5192443
+  },
+  "Alpha49": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 5253,
+    "valid_count": 5205391
+  },
+  "Alpha5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5204866,
+    "null_count": 508391,
+    "zero_count": 12697,
+    "valid_count": 4683778
+  },
+  "Alpha50": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 7927,
+    "valid_count": 5202717
+  },
+  "Alpha51": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 7655,
+    "valid_count": 5202989
+  },
+  "Alpha52": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 2092,
+    "zero_count": 308,
+    "valid_count": 5208718
+  },
+  "Alpha53": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207137,
+    "null_count": 0,
+    "zero_count": 6,
+    "valid_count": 5207131
+  },
+  "Alpha54": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha55": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 0,
+    "valid_count": 5210644
+  },
+  "Alpha56": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 2450109,
+    "valid_count": 2761013
+  },
+  "Alpha57": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 22,
+    "valid_count": 5211076
+  },
+  "Alpha58": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207137,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5207137
+  },
+  "Alpha59": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 4242,
+    "valid_count": 5206880
+  },
+  "Alpha6": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-06",
+    "end_date": "2026-11-13",
+    "total_records": 5197743,
+    "null_count": 0,
+    "zero_count": 105446,
+    "valid_count": 5092297
+  },
+  "Alpha60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 339,
+    "zero_count": 2,
+    "valid_count": 5210781
+  },
+  "Alpha61": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha62": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211112,
+    "null_count": 1227,
+    "zero_count": 17,
+    "valid_count": 5209868
+  },
+  "Alpha63": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 521,
+    "valid_count": 5210122
+  },
+  "Alpha64": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha65": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "Alpha66": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 6373,
+    "valid_count": 5185639
+  },
+  "Alpha67": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 521,
+    "valid_count": 5210122
+  },
+  "Alpha68": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 474,
+    "zero_count": 1451,
+    "valid_count": 5209193
+  },
+  "Alpha7": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 479,
+    "zero_count": 8,
+    "valid_count": 5210631
+  },
+  "Alpha70": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191648,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191648
+  },
+  "Alpha71": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 790,
+    "valid_count": 5191222
+  },
+  "Alpha72": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 1990,
+    "valid_count": 5209108
+  },
+  "Alpha73": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 1138,
+    "valid_count": 5209984
+  },
+  "Alpha74": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha75": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191902,
+    "null_count": 0,
+    "zero_count": 3914,
+    "valid_count": 5187988
+  },
+  "Alpha76": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200556,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5200556
+  },
+  "Alpha77": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha78": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 21,
+    "zero_count": 1030,
+    "valid_count": 5210071
+  },
+  "Alpha79": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 475,
+    "zero_count": 521,
+    "valid_count": 5210122
+  },
+  "Alpha8": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3150,
+    "valid_count": 5207972
+  },
+  "Alpha80": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189524,
+    "null_count": 0,
+    "zero_count": 17,
+    "valid_count": 5189507
+  },
+  "Alpha81": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-16",
+    "end_date": "2026-11-13",
+    "total_records": 5144553,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5144553
+  },
+  "Alpha82": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 1990,
+    "valid_count": 5209108
+  },
+  "Alpha83": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-03",
+    "end_date": "2026-11-13",
+    "total_records": 5202622,
+    "null_count": 0,
+    "zero_count": 1680,
+    "valid_count": 5200942
+  },
+  "Alpha84": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 479,
+    "valid_count": 5210643
+  },
+  "Alpha85": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3357,
+    "valid_count": 5207765
+  },
+  "Alpha86": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191521,
+    "null_count": 0,
+    "zero_count": 86659,
+    "valid_count": 5104862
+  },
+  "Alpha87": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha88": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5182260,
+    "null_count": 0,
+    "zero_count": 30353,
+    "valid_count": 5151907
+  },
+  "Alpha89": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha9": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211118,
+    "null_count": 1913,
+    "zero_count": 0,
+    "valid_count": 5209205
+  },
+  "Alpha90": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha91": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 78,
+    "valid_count": 5211044
+  },
+  "Alpha92": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "Alpha93": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 3334,
+    "valid_count": 5207788
+  },
+  "Alpha94": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 479,
+    "valid_count": 5210643
+  },
+  "Alpha95": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191779,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191779
+  },
+  "Alpha96": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 24,
+    "zero_count": 17,
+    "valid_count": 5211081
+  },
+  "Alpha97": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191724,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191724
+  },
+  "Alpha98": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-03",
+    "end_date": "2026-11-13",
+    "total_records": 5201116,
+    "null_count": 0,
+    "zero_count": 200470,
+    "valid_count": 5000646
+  },
+  "Alpha99": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211122,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211122
+  },
+  "BETA10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191031,
+    "null_count": 0,
+    "zero_count": 548,
+    "valid_count": 5190483
+  },
+  "BETA20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191426,
+    "null_count": 0,
+    "zero_count": 57,
+    "valid_count": 5191369
+  },
+  "BETA30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191472,
+    "null_count": 0,
+    "zero_count": 15,
+    "valid_count": 5191457
+  },
+  "BETA5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5190630,
+    "null_count": 0,
+    "zero_count": 17417,
+    "valid_count": 5173213
+  },
+  "BETA60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191521,
+    "null_count": 0,
+    "zero_count": 2,
+    "valid_count": 5191519
+  },
+  "CNTD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 1067483,
+    "valid_count": 4139656
+  },
+  "CNTD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 681104,
+    "valid_count": 4526035
+  },
+  "CNTD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 517953,
+    "valid_count": 4689186
+  },
+  "CNTD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 269811,
+    "valid_count": 4937328
+  },
+  "CNTD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 331432,
+    "valid_count": 4875707
+  },
+  "CNTN10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 16763,
+    "valid_count": 5190376
+  },
+  "CNTN20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 8233,
+    "valid_count": 5198906
+  },
+  "CNTN30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 7143,
+    "valid_count": 5199996
+  },
+  "CNTN5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 182702,
+    "valid_count": 5024437
+  },
+  "CNTN60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 6251,
+    "valid_count": 5200888
+  },
+  "CNTP10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 16747,
+    "valid_count": 5190392
+  },
+  "CNTP20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 7987,
+    "valid_count": 5199152
+  },
+  "CNTP30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 6593,
+    "valid_count": 5200546
+  },
+  "CNTP5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 201755,
+    "valid_count": 5005384
+  },
+  "CNTP60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5207139,
+    "null_count": 0,
+    "zero_count": 5151,
+    "valid_count": 5201988
+  },
+  "CORD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5197726,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5197726
+  },
+  "CORD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200516,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5200516
+  },
+  "CORD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201404,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201404
+  },
+  "CORD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5193367,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5193367
+  },
+  "CORD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202239,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5202239
+  },
+  "CORR10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5198812,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5198812
+  },
+  "CORR20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201157,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201157
+  },
+  "CORR30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201990,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201990
+  },
+  "CORR5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5194793,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5194793
+  },
+  "CORR60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202770,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5202770
+  },
+  "EXTREME_REV": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203962,
+    "null_count": 0,
+    "zero_count": 5077321,
+    "valid_count": 126641
+  },
+  "HIGH0": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "IMAX10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200302,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5200302
+  },
+  "IMAX20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201855,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201855
+  },
+  "IMAX30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202590,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5202590
+  },
+  "IMAX5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5197357,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5197357
+  },
+  "IMAX60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203272,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5203272
+  },
+  "IMIN10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200302,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5200302
+  },
+  "IMIN20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201855,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201855
+  },
+  "IMIN30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202590,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5202590
+  },
+  "IMIN5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5197357,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5197357
+  },
+  "IMIN60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203272,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5203272
+  },
+  "IMXD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200302,
+    "null_count": 0,
+    "zero_count": 61831,
+    "valid_count": 5138471
+  },
+  "IMXD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201855,
+    "null_count": 0,
+    "zero_count": 60868,
+    "valid_count": 5140987
+  },
+  "IMXD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202590,
+    "null_count": 0,
+    "zero_count": 80879,
+    "valid_count": 5121711
+  },
+  "IMXD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5197357,
+    "null_count": 0,
+    "zero_count": 180882,
+    "valid_count": 5016475
+  },
+  "IMXD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203272,
+    "null_count": 0,
+    "zero_count": 145765,
+    "valid_count": 5057507
+  },
+  "IND_NEUT_MOM": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5152192,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5152192
+  },
+  "KLEN": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 20089,
+    "valid_count": 5171923
+  },
+  "KLOW": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 22242,
+    "valid_count": 5169770
+  },
+  "KLOW2": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2026-11-13",
+    "total_records": 10457564,
+    "null_count": 0,
+    "zero_count": 1100190,
+    "valid_count": 9357374
+  },
+  "KMID": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 193827,
+    "valid_count": 4998185
+  },
+  "KMID2": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 193827,
+    "valid_count": 4998185
+  },
+  "KSFT": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 69123,
+    "valid_count": 5122889
+  },
+  "KSFT2": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 69123,
+    "valid_count": 5122889
+  },
+  "KUP": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 21975,
+    "valid_count": 5170037
+  },
+  "KUP2": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2026-11-13",
+    "total_records": 10457564,
+    "null_count": 0,
+    "zero_count": 1303097,
+    "valid_count": 9154467
+  },
+  "LOW0": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "LTR_12m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5116702,
+    "null_count": 216779,
+    "zero_count": 2722,
+    "valid_count": 4897201
+  },
+  "MA10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MA20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MA30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MA5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MA60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MAX10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MAX20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MAX30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MAX5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MAX60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MIN10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MIN20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MIN30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MIN5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MIN60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "MOM_12m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 4983145,
+    "null_count": 0,
+    "zero_count": 2753,
+    "valid_count": 4980392
+  },
+  "MOM_6m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5140961,
+    "null_count": 0,
+    "zero_count": 7412,
+    "valid_count": 5133549
+  },
+  "MOM_ACCEL": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5140956,
+    "null_count": 0,
+    "zero_count": 15077,
+    "valid_count": 5125879
+  },
+  "MOM_skip1m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5084967,
+    "null_count": 0,
+    "zero_count": 3143,
+    "valid_count": 5081824
+  },
+  "OPEN0": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLU10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLU20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLU30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLU5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "QTLU60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RANK10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RANK20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RANK30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RANK5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RANK60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "RESI10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191031,
+    "null_count": 0,
+    "zero_count": 1397,
+    "valid_count": 5189634
+  },
+  "RESI20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191426,
+    "null_count": 0,
+    "zero_count": 691,
+    "valid_count": 5190735
+  },
+  "RESI30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191472,
+    "null_count": 0,
+    "zero_count": 566,
+    "valid_count": 5190906
+  },
+  "RESI5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5190630,
+    "null_count": 0,
+    "zero_count": 35200,
+    "valid_count": 5155430
+  },
+  "RESI60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191521,
+    "null_count": 0,
+    "zero_count": 493,
+    "valid_count": 5191028
+  },
+  "ROC10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5187070,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5187070
+  },
+  "ROC20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5182248,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5182248
+  },
+  "ROC30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5177419,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5177419
+  },
+  "ROC5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5189516,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5189516
+  },
+  "ROC60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5162719,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5162719
+  },
+  "RSQR10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5198812,
+    "null_count": 0,
+    "zero_count": 566,
+    "valid_count": 5198246
+  },
+  "RSQR20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201157,
+    "null_count": 0,
+    "zero_count": 65,
+    "valid_count": 5201092
+  },
+  "RSQR30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201990,
+    "null_count": 0,
+    "zero_count": 23,
+    "valid_count": 5201967
+  },
+  "RSQR5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5194793,
+    "null_count": 0,
+    "zero_count": 17171,
+    "valid_count": 5177622
+  },
+  "RSQR60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202770,
+    "null_count": 0,
+    "zero_count": 5,
+    "valid_count": 5202765
+  },
+  "RSV10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 73551,
+    "valid_count": 5118461
+  },
+  "RSV20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 53658,
+    "valid_count": 5138354
+  },
+  "RSV30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 44669,
+    "valid_count": 5147343
+  },
+  "RSV5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 102007,
+    "valid_count": 5090005
+  },
+  "RSV60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 29939,
+    "valid_count": 5162073
+  },
+  "STD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191526,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 5191525
+  },
+  "STD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191536,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 5191535
+  },
+  "STD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191536,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 5191535
+  },
+  "STD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191521,
+    "null_count": 0,
+    "zero_count": 270,
+    "valid_count": 5191251
+  },
+  "STD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191537,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 5191536
+  },
+  "STR_20d": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203857,
+    "null_count": 10046,
+    "zero_count": 30370,
+    "valid_count": 5163441
+  },
+  "STR_5d": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203936,
+    "null_count": 2852,
+    "zero_count": 70258,
+    "valid_count": 5130826
+  },
+  "SUMD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 47808,
+    "valid_count": 5151511
+  },
+  "SUMD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 30412,
+    "valid_count": 5170856
+  },
+  "SUMD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 23844,
+    "valid_count": 5178206
+  },
+  "SUMD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 70287,
+    "valid_count": 5125684
+  },
+  "SUMD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 15454,
+    "valid_count": 5187327
+  },
+  "SUMN10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 8943,
+    "valid_count": 5190376
+  },
+  "SUMN20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 2362,
+    "valid_count": 5198906
+  },
+  "SUMN30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 2054,
+    "valid_count": 5199996
+  },
+  "SUMN5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 171534,
+    "valid_count": 5024437
+  },
+  "SUMN60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 1893,
+    "valid_count": 5200888
+  },
+  "SUMP10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 8927,
+    "valid_count": 5190392
+  },
+  "SUMP20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 2116,
+    "valid_count": 5199152
+  },
+  "SUMP30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 1504,
+    "valid_count": 5200546
+  },
+  "SUMP5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 190587,
+    "valid_count": 5005384
+  },
+  "SUMP60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 793,
+    "valid_count": 5201988
+  },
+  "VMA10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "VMA20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "VMA30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "VMA5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "VMA60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5192012,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5192012
+  },
+  "VOL_REV": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5203954,
+    "null_count": 1424,
+    "zero_count": 0,
+    "valid_count": 5202530
+  },
+  "VSTD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191526,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191526
+  },
+  "VSTD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191536,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191536
+  },
+  "VSTD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191536,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191536
+  },
+  "VSTD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191521,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191521
+  },
+  "VSTD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5191537,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5191537
+  },
+  "VSUMD10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 7,
+    "valid_count": 5199312
+  },
+  "VSUMD20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 13,
+    "valid_count": 5201255
+  },
+  "VSUMD30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 10,
+    "valid_count": 5202040
+  },
+  "VSUMD5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 16,
+    "valid_count": 5195955
+  },
+  "VSUMD60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 5,
+    "valid_count": 5202776
+  },
+  "VSUMN10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 984,
+    "valid_count": 5198335
+  },
+  "VSUMN20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 264,
+    "valid_count": 5201004
+  },
+  "VSUMN30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 197,
+    "valid_count": 5201853
+  },
+  "VSUMN5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 21778,
+    "valid_count": 5174193
+  },
+  "VSUMN60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 121,
+    "valid_count": 5202660
+  },
+  "VSUMP10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199319,
+    "null_count": 0,
+    "zero_count": 2669,
+    "valid_count": 5196650
+  },
+  "VSUMP20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201268,
+    "null_count": 0,
+    "zero_count": 1198,
+    "valid_count": 5200070
+  },
+  "VSUMP30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202050,
+    "null_count": 0,
+    "zero_count": 1023,
+    "valid_count": 5201027
+  },
+  "VSUMP5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5195971,
+    "null_count": 0,
+    "zero_count": 82714,
+    "valid_count": 5113257
+  },
+  "VSUMP60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202781,
+    "null_count": 0,
+    "zero_count": 905,
+    "valid_count": 5201876
+  },
+  "VWAP0": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5215898
+  },
+  "WVMA10": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5197789,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5197789
+  },
+  "WVMA20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5200557,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5200557
+  },
+  "WVMA30": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201445,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5201445
+  },
+  "WVMA5": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5193539,
+    "null_count": 0,
+    "zero_count": 74,
+    "valid_count": 5193465
+  },
+  "WVMA60": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5202280,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5202280
+  },
+  "accruals_sloan": {
+    "status": "ok",
+    "years": [
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2006-01-24",
+    "end_date": "2026-10-31",
+    "total_records": 209298,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 209297
+  },
+  "amihud_illiq_20d": {
+    "status": "ok",
+    "years": [
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1991-01-10",
+    "end_date": "2026-11-06",
+    "total_records": 15040077,
+    "null_count": 0,
+    "zero_count": 68,
+    "valid_count": 15040009
+  },
+  "basic_eps_yoy": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3692872,
+    "valid_count": 1897372
+  },
+  "beta": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5206193,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5206193
+  },
+  "block_trade_premium_20d": {
+    "status": "ok",
+    "years": [
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2015-01-05",
+    "end_date": "2026-11-06",
+    "total_records": 164349,
+    "null_count": 0,
+    "zero_count": 1675,
+    "valid_count": 162674
+  },
+  "break_count_20d": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-09-12",
+    "end_date": "2026-11-06",
+    "total_records": 6945,
+    "null_count": 0,
+    "zero_count": 27,
+    "valid_count": 6918
+  },
+  "circ_mv": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211117,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211117
+  },
+  "current_ratio": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3598601,
+    "valid_count": 1991643
+  },
+  "debt_to_assets": {
+    "status": "ok",
+    "years": [
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1993-06-26",
+    "end_date": "2026-11-13",
+    "total_records": 510156,
+    "null_count": 0,
+    "zero_count": 157246,
+    "valid_count": 352910
+  },
+  "dt_profit_growth_yoy": {
+    "status": "ok",
+    "years": [
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1993-06-26",
+    "end_date": "2026-11-13",
+    "total_records": 510156,
+    "null_count": 0,
+    "zero_count": 181573,
+    "valid_count": 328583
+  },
+  "dv_ttm": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 1689055,
+    "valid_count": 3526843
+  },
+  "ep_ind_neutral": {
+    "status": "ok",
+    "years": [
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1991-04-04",
+    "end_date": "2026-11-06",
+    "total_records": 15262689,
+    "null_count": 0,
+    "zero_count": 41,
+    "valid_count": 15262648
+  },
+  "gross_margin_chg_4q": {
+    "status": "ok",
+    "years": [
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1995-07-22",
+    "end_date": "2026-10-31",
+    "total_records": 207379,
+    "null_count": 0,
+    "zero_count": 4980,
+    "valid_count": 202399
+  },
+  "grossprofit_margin": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3603062,
+    "valid_count": 1987182
+  },
+  "holder_num_chg_20d": {
+    "status": "ok",
+    "years": [
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1996-04-20",
+    "end_date": "2026-11-07",
+    "total_records": 430609,
+    "null_count": 0,
+    "zero_count": 3200,
+    "valid_count": 427409
+  },
+  "holder_num_trend_4q": {
+    "status": "ok",
+    "years": [
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1991-12-30",
+    "end_date": "2026-11-07",
+    "total_records": 472139,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 472139
+  },
+  "hot_money_net_rate_20d": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-09-29",
+    "end_date": "2026-11-06",
+    "total_records": 12039,
+    "null_count": 0,
+    "zero_count": 1,
+    "valid_count": 12038
+  },
+  "hot_rank_chg_20d": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-10-19",
+    "end_date": "2026-11-06",
+    "total_records": 5236,
+    "null_count": 0,
+    "zero_count": 226,
+    "valid_count": 5010
+  },
+  "illiquidity_amihud": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211120,
+    "null_count": 474,
+    "zero_count": 1,
+    "valid_count": 5210645
+  },
+  "inv_turn": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-04-08",
+    "end_date": "2026-11-06",
+    "total_records": 5008726,
+    "null_count": 0,
+    "zero_count": 320,
+    "valid_count": 5008406
+  },
+  "lhb_count_20d": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-09-29",
+    "end_date": "2026-11-06",
+    "total_records": 1003025,
+    "null_count": 0,
+    "zero_count": 825637,
+    "valid_count": 177388
+  },
+  "lhb_org_net_rate": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-09-29",
+    "end_date": "2026-11-06",
+    "total_records": 14698,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 14698
+  },
+  "limit_down_count_20d": {
+    "status": "ok",
+    "years": [
+      2025,
+      2026
+    ],
+    "start_date": "2025-09-12",
+    "end_date": "2026-11-06",
+    "total_records": 5605,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5605
+  },
+  "limit_seal_strength": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-07-23",
+    "end_date": "2026-11-06",
+    "total_records": 102427,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 102427
+  },
+  "limit_up_height_20d": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-07-23",
+    "end_date": "2026-11-06",
+    "total_records": 102432,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 102432
+  },
+  "list_age_days": {
+    "status": "ok",
+    "years": [
+      1990,
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1990-12-19",
+    "end_date": "2026-11-06",
+    "total_records": 17545254,
+    "null_count": 0,
+    "zero_count": 5578,
+    "valid_count": 17539676
+  },
+  "long_momentum": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5174562,
+    "null_count": 0,
+    "zero_count": 15535,
+    "valid_count": 5159027
+  },
+  "ma_cross_5_20": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5199187,
+    "null_count": 0,
+    "zero_count": 3236,
+    "valid_count": 5195951
+  },
+  "momentum_1m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5194300,
+    "null_count": 0,
+    "zero_count": 30374,
+    "valid_count": 5163926
+  },
+  "netprofit_margin": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3551148,
+    "valid_count": 2039096
+  },
+  "netprofit_yoy": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3610128,
+    "valid_count": 1980116
+  },
+  "north_hold_chg_20d": {
+    "status": "ok",
+    "years": [
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "start_date": "2017-01-03",
+    "end_date": "2024-09-30",
+    "total_records": 3581635,
+    "null_count": 0,
+    "zero_count": 512381,
+    "valid_count": 3069254
+  },
+  "ocf_to_netprofit": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 2215331,
+    "null_count": 191729,
+    "zero_count": 17084,
+    "valid_count": 2006518
+  },
+  "pb_lf": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 45506,
+    "valid_count": 5170392
+  },
+  "pe_ttm": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 1127740,
+    "valid_count": 4088158
+  },
+  "pledge_ratio": {
+    "status": "ok",
+    "years": [
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2014-03-07",
+    "end_date": "2026-11-13",
+    "total_records": 1537950,
+    "null_count": 0,
+    "zero_count": 134042,
+    "valid_count": 1403908
+  },
+  "profit_growth_yoy": {
+    "status": "ok",
+    "years": [
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1993-06-26",
+    "end_date": "2026-11-13",
+    "total_records": 510156,
+    "null_count": 0,
+    "zero_count": 163605,
+    "valid_count": 346551
+  },
+  "ps_ttm": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 4818,
+    "valid_count": 5211080
+  },
+  "q_revenue_growth_yoy": {
+    "status": "ok",
+    "years": [
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1993-06-26",
+    "end_date": "2026-10-31",
+    "total_records": 234466,
+    "null_count": 0,
+    "zero_count": 16675,
+    "valid_count": 217791
+  },
+  "revenue_growth_yoy": {
+    "status": "ok",
+    "years": [
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1993-06-26",
+    "end_date": "2026-11-13",
+    "total_records": 510156,
+    "null_count": 0,
+    "zero_count": 163926,
+    "valid_count": 346230
+  },
+  "roa_ttm": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3597623,
+    "valid_count": 1992621
+  },
+  "roe_ttm": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3549675,
+    "valid_count": 2040569
+  },
+  "rzye_chg_20d": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-03-31",
+    "end_date": "2026-11-06",
+    "total_records": 6252956,
+    "null_count": 51900,
+    "zero_count": 7,
+    "valid_count": 6201049
+  },
+  "sent_elg_net_ratio": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2026-11-06",
+    "total_records": 10645073,
+    "null_count": 0,
+    "zero_count": 16961,
+    "valid_count": 10628112
+  },
+  "sent_lg_net_ratio": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2026-11-06",
+    "total_records": 14148931,
+    "null_count": 0,
+    "zero_count": 2681,
+    "valid_count": 14146250
+  },
+  "sent_margin_chg_20d": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-05",
+    "total_records": 7575562,
+    "null_count": 2925806,
+    "zero_count": 0,
+    "valid_count": 4649756
+  },
+  "sent_md_net_ratio": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-04",
+    "end_date": "2026-11-06",
+    "total_records": 14204201,
+    "null_count": 0,
+    "zero_count": 363,
+    "valid_count": 14203838
+  },
+  "sent_mf_net_ratio": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-06",
+    "total_records": 7917166,
+    "null_count": 0,
+    "zero_count": 22037,
+    "valid_count": 7895129
+  },
+  "sent_mf_strength_20d": {
+    "status": "ok",
+    "years": [
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2010-01-15",
+    "end_date": "2026-11-06",
+    "total_records": 14158999,
+    "null_count": 0,
+    "zero_count": 125,
+    "valid_count": 14158874
+  },
+  "sent_north_chg_20d": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2024-09-30",
+    "total_records": 4921982,
+    "null_count": 2656533,
+    "zero_count": 315572,
+    "valid_count": 1949877
+  },
+  "sent_turnover_dev": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-06",
+    "total_records": 8164289,
+    "null_count": 22434,
+    "zero_count": 29,
+    "valid_count": 8141826
+  },
+  "shareholder_change": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 2819580,
+    "null_count": 242024,
+    "zero_count": 1396952,
+    "valid_count": 1180604
+  },
+  "short_reversal": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5201564,
+    "null_count": 0,
+    "zero_count": 70255,
+    "valid_count": 5131309
+  },
+  "total_mv_log": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211117,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211117
+  },
+  "tr_yoy": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5590244,
+    "null_count": 0,
+    "zero_count": 3609592,
+    "valid_count": 1980652
+  },
+  "turnover_chg_20d": {
+    "status": "ok",
+    "years": [
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1991-02-07",
+    "end_date": "2026-11-06",
+    "total_records": 18209145,
+    "null_count": 0,
+    "zero_count": 13,
+    "valid_count": 18209132
+  },
+  "turnover_rate_1m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5215898,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5215898
+  },
+  "unlock_pressure_60d": {
+    "status": "ok",
+    "years": [
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2015-01-05",
+    "end_date": "2026-11-06",
+    "total_records": 853767,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 853767
+  },
+  "volatility_1m": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5210642,
+    "null_count": 475,
+    "zero_count": 0,
+    "valid_count": 5210167
+  },
+  "volume_ratio_5d": {
+    "status": "ok",
+    "years": [
+      1990,
+      1991,
+      1992,
+      1993,
+      1994,
+      1995,
+      1996,
+      1997,
+      1998,
+      1999,
+      2000,
+      2001,
+      2002,
+      2003,
+      2004,
+      2005,
+      2006,
+      2007,
+      2008,
+      2009,
+      2010,
+      2011,
+      2012,
+      2013,
+      2014,
+      2015,
+      2016,
+      2017,
+      2018,
+      2019,
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "1990-12-21",
+    "end_date": "2026-11-06",
+    "total_records": 18309991,
+    "null_count": 0,
+    "zero_count": 18749,
+    "valid_count": 18291242
+  },
+  "volume_surge": {
+    "status": "ok",
+    "years": [
+      2020,
+      2021,
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "start_date": "2020-01-02",
+    "end_date": "2026-11-13",
+    "total_records": 5211123,
+    "null_count": 0,
+    "zero_count": 0,
+    "valid_count": 5211123
+  }
+}
