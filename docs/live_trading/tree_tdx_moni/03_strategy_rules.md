@@ -2,7 +2,7 @@
 
 ## 选股规则
 
-- 使用 `score_tree.csv` 中最新交易日分数
+- 使用 `outputs/train_tree-doubao/backtest/score_tree.csv` 中最新交易日分数
 - 先做行业约束
 - 再按 `score >= 0.7` 过滤
 - 最多保留 `TOP_K=20`

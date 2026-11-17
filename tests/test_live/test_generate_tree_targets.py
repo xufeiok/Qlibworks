@@ -24,7 +24,7 @@ class TestGenerateTreeTargets(unittest.TestCase):
     def test_generate_targets_supports_selected_strategy(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             project_root = Path(tmpdir)
-            score_path = project_root / "scripts" / "training" / "score_tree_selected.csv"
+            score_path = project_root / "outputs" / "train_from_selected" / "backtest" / "score_tree_selected.csv"
             score_path.parent.mkdir(parents=True, exist_ok=True)
             pd.DataFrame(
                 {
@@ -35,7 +35,8 @@ class TestGenerateTreeTargets(unittest.TestCase):
                 }
             ).to_csv(score_path, index=False)
 
-            with patch("scripts.live.generate_tree_targets.PROJECT_ROOT", project_root):
+            with patch("qlworks.config.OUTPUTS_DIR", project_root / "outputs"), \
+                 patch("scripts.live.generate_tree_targets.PROJECT_ROOT", project_root):
                 target_df, output_path = generate_targets(strategy_name="selected")
 
             self.assertEqual(output_path, project_root / "runtime" / "live" / "tree" / "signals" / "daily" / "target_positions_20250108.csv")

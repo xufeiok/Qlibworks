@@ -2,7 +2,7 @@
 import csv, json
 from collections import defaultdict
 
-score_path = "e:/Quant/Qlibworks/scripts/training/score_tree_selected.csv"
+score_path = "e:/Quant/Qlibworks/outputs/train_from_selected/backtest/score_tree_selected.csv"
 rows = list(csv.DictReader(open(score_path)))
 date_rows = defaultdict(list)
 for r in rows:

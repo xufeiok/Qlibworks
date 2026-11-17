@@ -40,6 +40,45 @@ FACTOR_CACHE_DIR = FS_CACHE_DIR / 'factors'
 # ==================== 因子仓库配置 ====================
 WAREHOUSE_DIR = _resolve_path('WAREHOUSE_DIR', 'factor_data/warehouse')
 
+# ==================== 成果输出目录 ====================
+# 训练等脚本的成果文件（预测得分、因子清单等）统一收纳到 outputs/<脚本名>/<模式>/
+OUTPUTS_DIR = PROJECT_ROOT / "outputs"
+
+
+def get_output_dir(script_name: str, mode: str) -> Path:
+    """
+    返回并自动创建成果输出目录 outputs/<脚本名>/<模式>/。
+
+    入参:
+        script_name: 脚本标识，通常取脚本文件名主干（如 "train_tree-doubao"）
+        mode: 运行模式（如 "backtest" / "forecast"）
+    返回:
+        Path: 成果目录，不存在时自动创建
+    异常:
+        目录创建失败抛出 OSError，由调用方处理
+    注意:
+        仅用于收纳成果文件，不含模型缓存/中间产物
+    """
+    out_dir = OUTPUTS_DIR / script_name / mode
+    out_dir.mkdir(parents=True, exist_ok=True)
+    return out_dir
+
+
+def output_file(script_name: str, mode: str, filename: str) -> Path:
+    """
+    返回成果文件路径 outputs/<脚本名>/<模式>/<文件名>（只拼接，不创建目录）。
+
+    入参:
+        script_name: 产出该成果的脚本名（如 "train_tree-doubao"）
+        mode: 运行模式（如 "backtest" / "forecast"）
+        filename: 成果文件名（如 "score_tree.csv"）
+    返回:
+        Path: 成果文件的完整路径
+    注意:
+        供回测/live 等下游读取使用；目录由产出脚本负责创建
+    """
+    return OUTPUTS_DIR / script_name / mode / filename
+
 # ==================== 鏁版嵁瑙勮寖閰嶇疆 ====================
 FORCE_ADJUSTED_PRICES = os.environ.get('FORCE_ADJUSTED_PRICES', 'true').lower() == 'true'
 

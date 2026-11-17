@@ -9,7 +9,7 @@ from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
 from qlworks.backtest.bt_strategy import EnhancedQlibStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, output_file
 
 # ==============================================================================
 # [参数区] — 所有可调参数一目了然
@@ -50,7 +50,7 @@ ADMISSION_BUFFER = 3                      # 每天保留 top_k × buffer 只候�
 
 # ==============================================================================
 
-SCORE_PATH = os.path.join(os.path.dirname(__file__), f"../training/{SCORE_FILE}")
+SCORE_PATH = output_file("train_linear", "backtest", SCORE_FILE)
 OUTPUT_DIR = os.path.dirname(__file__)
 
 

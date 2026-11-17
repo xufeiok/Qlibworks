@@ -20,14 +20,14 @@
 
 位置：
 
-- `scripts/training/train_tree.py`
+- `scripts/training/train_tree-doubao.py`
 - `scripts/live/generate_tree_targets.py`
 
 职责：
 
 - 训练模型
 - 保存筛选后的因子列表
-- 基于 `score_tree.csv` 生成最新目标持仓
+- 基于 `outputs/train_tree-doubao/backtest/score_tree.csv` 生成最新目标持仓
 
 ### 2. 通达信执行层
 
@@ -60,4 +60,4 @@
 
 ## 数据流
 
-`train_tree.py` -> `score_tree.csv` -> `generate_tree_targets.py` -> `target_positions_YYYYMMDD.csv` -> `tree_live_executor.py` -> 通达信模拟盘委托/成交日志
+`train_tree-doubao.py` -> `outputs/train_tree-doubao/backtest/score_tree.csv` -> `generate_tree_targets.py` -> `target_positions_YYYYMMDD.csv` -> `tree_live_executor.py` -> 通达信模拟盘委托/成交日志

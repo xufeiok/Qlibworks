@@ -6,7 +6,7 @@
       并输出 4 个模型（tree / linear / icir / ensemble）的绩效对比报表。
 
 用法：
-  1. 确保 training/ 目录下存在 score_tree.csv / score_linear.csv / score_icir.csv
+  1. 确保 outputs/ 下存在各模型的 score 文件（由训练脚本产出，统一收纳于 outputs/<脚本名>/<模式>/）
   2. 按需修改下方 CONFIG 中的回测参数
   3. python backtest_ensemble.py
 """
@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 from qlworks.backtest.bt_runner import run_qlib_backtrader, EnhancedQlibStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
+from qlworks.config import output_file, get_output_dir
 import qlib
 from qlib.data import D
 
@@ -67,11 +68,11 @@ CONFIG = {
         "instrument_alias": "main_board",  # Qlib instrument 别名，与训练股票池保持一致
     },
 
-    # — 预测文件路径 —
+    # — 预测文件路径（统一收纳在 outputs/<脚本名>/<模式>/） —
     "score_files": {
-        "tree":   os.path.join(os.path.dirname(__file__), "../training/score_tree.csv"),
-        "linear": os.path.join(os.path.dirname(__file__), "../training/score_linear.csv"),
-        "icir":   os.path.join(os.path.dirname(__file__), "../training/score_icir.csv"),
+        "tree":   str(output_file("train_tree-doubao", "backtest", "score_tree.csv")),
+        "linear": str(output_file("train_linear", "backtest", "score_linear.csv")),
+        "icir":   str(output_file("train_icir", "backtest", "score_icir.csv")),
     },
 
     # — 融合权重（权重和最好为 1） —
@@ -342,7 +343,7 @@ def build_ensemble_score():
     merged['score'] = sum(merged[f'{name}_score'] * weights[name] for name, _ in available)
     merged['score'] = merged.groupby(level='datetime')['score'].rank(pct=True, na_option='keep')
 
-    out = os.path.join(os.path.dirname(__file__), "../training/score_ensemble.csv")
+    out = str(get_output_dir("ensemble", "backtest") / "score_ensemble.csv")
     merged[['score']].to_csv(out)
     print(f"    >>> 融合得分已保存至: {out}")
     return merged[['score']]

@@ -16,7 +16,7 @@ from qlib.config import C
 from qlworks.backtest.bt_runner import run_qlib_backtrader
 from qlworks.backtest.bt_strategy import EnhancedQlibStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
-from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
+from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, output_file
 from qlworks.live.tree_strategy import get_live_strategy_config
 
 # ==============================================================================
@@ -226,7 +226,8 @@ def main():
     C.maxtasksperchild = 1
     LOG.write("[1] Qlib init OK\n")
 
-    score_path = os.path.join(os.path.dirname(__file__), f"../training/{score_file}")
+    # 预测得分统一收纳在 outputs/<产出脚本>/backtest/，由策略档案的 output_script 指定产出脚本
+    score_path = output_file(config["output_script"], "backtest", score_file)
     print(f"\n[2] 读取预测得分 ({score_file})...")
     if not os.path.exists(score_path):
         raise FileNotFoundError(f"找不到预测文件: {score_path}。请先运行对应的 train_*.py！")

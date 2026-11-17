@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 
 import qlib
 from qlworks.backtest.industry import apply_industry_constraint_pit, load_industry_maps_pit
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, output_file
 from qlworks.live.targets import build_daily_target_positions
 from qlworks.live.tree_strategy import DEFAULT_LIVE_STRATEGY, get_live_strategy_config
 from qlworks.pipeline_config import (
@@ -50,7 +50,8 @@ def _resolve_live_context(
     """
     config = get_live_strategy_config(strategy_name)
     runtime_name = (runtime_model_name or config["runtime_model_name"]).strip()
-    score_path = PROJECT_ROOT / "scripts" / "training" / config["score_file"]
+    # 预测得分统一收纳在 outputs/<产出脚本>/backtest/，由策略档案的 output_script 指定产出脚本
+    score_path = output_file(config["output_script"], "backtest", config["score_file"])
     runtime_root = PROJECT_ROOT / "runtime" / "live" / runtime_name
     return {
         "config": config,

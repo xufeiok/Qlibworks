@@ -34,7 +34,7 @@ from qlworks.features.dataset import (
 )
 from qlworks.models.training import train_ridge_model, predict_ensemble_models
 from qlworks.models import prepare_feature_selection_data, cached_select_features
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, get_output_dir
 from qlworks.pipeline_config import INSTRUMENTS
 import qlib
 from qlworks.training.config import resolve_runtime_config
@@ -517,11 +517,13 @@ def run_ml_pipeline(
     print(final_predictions.head(10))
 
     # 5. 保存预测结果（forecast 生产模式输出独立文件，保留历史信号可追溯）
+    # 成果统一收纳到 outputs/<脚本名>/<模式>/
+    _out_dir = get_output_dir(Path(__file__).stem, mode)
     if mode == "forecast":
         _fc_asof = CONFIG["rolling_windows"][0]["test"][1].replace("-", "")
-        output_path = os.path.join(os.path.dirname(__file__), f"score_linear_forecast_{_fc_asof}.csv")
+        output_path = _out_dir / f"score_linear_forecast_{_fc_asof}.csv"
     else:
-        output_path = os.path.join(os.path.dirname(__file__), "score_linear.csv")
+        output_path = _out_dir / "score_linear.csv"
     final_predictions.to_csv(output_path)
     print(f"\n>>> 线性模型预测得分已保存至: {output_path}")
     if mode == "forecast":

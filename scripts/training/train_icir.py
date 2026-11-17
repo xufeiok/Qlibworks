@@ -27,7 +27,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../.
 from qlworks.features.builder import build_factor_library_bundle
 from qlworks.factors.registry import resolve_factor_set, validate_factor_set
 from qlworks.features.dataset import create_custom_dataset, build_custom_feature_cache
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, get_output_dir
 from qlworks.pipeline_config import INSTRUMENTS
 import qlib
 from qlworks.training.config import resolve_runtime_config
@@ -441,11 +441,13 @@ def run_icir_baseline_pipeline(
     print(f">>> 合并完成！总测试集跨度: {final_predictions.index.get_level_values('datetime').min().date()} 至 {final_predictions.index.get_level_values('datetime').max().date()}")
     
     # 5. 保存预测结果（forecast 生产模式输出独立文件，保留历史信号可追溯）
+    # 成果统一收纳到 outputs/<脚本名>/<模式>/
+    _out_dir = get_output_dir(Path(__file__).stem, mode)
     if mode == "forecast":
         _fc_asof = CONFIG["rolling_windows"][0]["test"][1].replace("-", "")
-        output_path = os.path.join(os.path.dirname(__file__), f"score_icir_forecast_{_fc_asof}.csv")
+        output_path = _out_dir / f"score_icir_forecast_{_fc_asof}.csv"
     else:
-        output_path = os.path.join(os.path.dirname(__file__), "score_icir.csv")
+        output_path = _out_dir / "score_icir.csv"
     final_predictions.to_csv(output_path)
     print(f"\n>>> ICIR 传统加权预测得分已保存至: {output_path}")
     if mode == "forecast":

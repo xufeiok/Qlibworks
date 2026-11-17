@@ -36,6 +36,7 @@ Qlibworks/
 ├── tests/                # 单元测试（镜像 src 分层）
 ├── tools/                # 一次性运维工具（数据恢复 / 因子管理）
 ├── docs/                 # 设计文档、方法论、核查报告
+├── outputs/              # 训练/回测成果输出（outputs/<脚本名>/<模式>/，已 gitignore，可重新生成）
 ├── factor_data/          # 因子数据（factor_library / factor_sets / raw；仓库/缓存已 gitignore）
 ├── demos/                # 组件用法示例
 └── frontend/             # Vue 前端子系统

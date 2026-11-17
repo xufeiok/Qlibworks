@@ -52,7 +52,7 @@ from qlworks.models.training import (
     predict_ensemble_models, compute_ic, compute_ic_ewma
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, get_output_dir
 # [类别口径统一] 复用全链路唯一事实源，保证候选池类别名在训练端读取口径一致
 from qlworks.evaluation.factor_stats import normalize_factor_family
 from qlworks.processors.neutralize import _fetch_features_direct, CSNeutralize
@@ -1553,6 +1553,9 @@ def run_ml_pipeline(
               f"{[w['name'] for w in CONFIG.get('rolling_windows', [])]} ===")
         print("="*60)
 
+    # [成果输出] 所有成果文件统一收纳到 outputs/<脚本名>/<模式>/
+    _out_dir = get_output_dir(Path(__file__).stem, mode)
+
     # [统一入口] 命令行 --factor-set 覆盖配置文件中的因子集合
     if factor_set_spec:
         CONFIG["factor_set"] = factor_set_spec
@@ -1750,7 +1753,7 @@ def run_ml_pipeline(
                 label_name=label_name,
                 train_start=segments["train"][0],
                 train_end=segments["train"][1],
-                out_dir=CONFIG.get("output_dir", "."),
+                out_dir=str(_out_dir),
                 batch_size=20,
                 top_k=coarse_top_k,
                 stride=stride,
@@ -2612,7 +2615,7 @@ def run_ml_pipeline(
         all_predictions.append(predictions)
 
         # [断点续跑] 每窗口完成后增量保存预测结果，防止中途崩溃丢失已计算结果
-        _incr_path = Path(__file__).parent / f"score_tree_{window_name}.csv"
+        _incr_path = _out_dir / f"score_tree_{window_name}.csv"
         try:
             predictions.to_csv(_incr_path)
             print(f"    [增量保存] → {_incr_path}")
@@ -2876,7 +2879,7 @@ def run_ml_pipeline(
     # [6] 保存输出
     # =========================================================================
     # 保存选中因子清单（取最后一个窗口的因子）
-    _selected_dir = Path(__file__).parent
+    _selected_dir = _out_dir
     _selected_path = _selected_dir / "selected_factors_tree.txt"
     _selected_archive_path = _selected_dir / f"selected_factors_tree_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
 
@@ -2901,9 +2904,9 @@ def run_ml_pipeline(
     _run_mode = mode if 'mode' in locals() else "backtest"
     if _run_mode == "forecast":
         _fc_asof = CONFIG["rolling_windows"][0]["test"][1].replace("-", "")
-        output_path = os.path.join(os.path.dirname(__file__), f"score_forecast_{_fc_asof}.csv")
+        output_path = _out_dir / f"score_forecast_{_fc_asof}.csv"
     else:
-        output_path = os.path.join(os.path.dirname(__file__), "score_tree.csv")
+        output_path = _out_dir / "score_tree.csv"
     final_predictions.to_csv(output_path)
     print(f">>> 预测结果已保存: {output_path}")
     print("="*60)

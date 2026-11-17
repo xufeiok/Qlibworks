@@ -17,6 +17,8 @@ LIVE_STRATEGY_PROFILES: dict[str, dict] = {
         "model_name": "tree",
         "model_label": "树模型",
         "score_file": "score_tree.csv",
+        # 回测/live 默认以 doubao 版训练产物为准，score 文件统一收纳到 outputs/<脚本名>/<模式>/
+        "output_script": "train_tree-doubao",
         "runtime_model_name": "tree",
         "top_k": 20,
         "score_threshold": 0.7,
@@ -38,6 +40,8 @@ LIVE_STRATEGY_PROFILES: dict[str, dict] = {
         "model_name": "tree_selected",
         "model_label": "精选树模型",
         "score_file": "score_tree_selected.csv",
+        # 精选结果由 train_from_selected 产出，score 文件统一收纳到 outputs/<脚本名>/<模式>/
+        "output_script": "train_from_selected",
         # 通达信执行器当前默认读取 runtime/live/tree，精选结果沿用该目录即可直连模拟盘。
         "runtime_model_name": "tree",
         "top_k": 20,

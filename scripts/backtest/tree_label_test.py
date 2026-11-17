@@ -12,7 +12,7 @@ from qlib.data import D
 from qlworks.backtest.bt_runner import run_qlib_backtrader
 from qlworks.backtest.bt_strategy_label import LabelConsistencyStrategy
 from qlworks.backtest.industry import load_industry_maps_pit, apply_industry_constraint_pit
-from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE
+from qlworks.config import QLIB_DATA_DIR, CH_HOST, CH_PORT, CH_USER, CH_PASSWORD, CH_DATABASE, output_file
 
 # ==============================================================================
 # [参数区] — 标签一致性回测专用
@@ -48,7 +48,7 @@ REVERSE_TEST = False                       # True=反向测试（买入得分最
 
 # ==============================================================================
 
-SCORE_PATH = os.path.join(os.path.dirname(__file__), f"../training/{SCORE_FILE}")
+SCORE_PATH = output_file("train_tree-doubao", "backtest", SCORE_FILE)
 OUTPUT_DIR = os.path.join(os.path.dirname(__file__), "output_label_test")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 

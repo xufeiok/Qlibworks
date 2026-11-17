@@ -41,7 +41,7 @@ from qlworks.evaluation.selector import (
     select_top_by_abs,
 )
 from qlworks.models import prepare_feature_selection_data, cached_select_features
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, get_output_dir
 from qlworks.factors.filter_utils import filter_codes_post, filter_untradeable_labels, apply_label_filter
 from qlworks.pipeline_config import FILTER_ST, FILTER_NEW_STOCKS, INSTRUMENTS
 import qlib
@@ -879,6 +879,9 @@ def run_ml_pipeline(
         print("=== 多因子树模型集成训练流水线（Pro 版） ===")
         print("="*60)
 
+    # [成果输出] 所有成果文件统一收纳到 outputs/<脚本名>/<模式>/
+    _out_dir = get_output_dir(Path(__file__).stem, mode)
+
     # 1. 初始化 Qlib
     print("\n[1] 初始化 Qlib 引擎...")
     qlib.init(provider_uri=str(QLIB_DATA_DIR), region="cn", joblib_backend="threading", maxtasksperchild=None)
@@ -999,7 +1002,7 @@ def run_ml_pipeline(
             label_name=label_name,
             train_start=segments["train"][0],
             train_end=segments["train"][1],
-            out_dir=CONFIG.get("output_dir", "."),
+            out_dir=str(_out_dir),
             batch_size=20,
             top_k=top_k,
             stride=stride,
@@ -1691,7 +1694,7 @@ def run_ml_pipeline(
     # [6] 保存输出
     # =========================================================================
     # 保存选中因子清单（取最后一个窗口的因子）
-    _selected_dir = Path(__file__).parent
+    _selected_dir = _out_dir
     _selected_path = _selected_dir / "selected_factors_tree.txt"
     _selected_archive_path = _selected_dir / f"selected_factors_tree_{pd.Timestamp.now():%Y%m%d_%H%M%S}.csv"
 
@@ -1715,9 +1718,9 @@ def run_ml_pipeline(
     # 保存预测结果（forecast 生产模式输出独立文件，保留历史信号可追溯）
     if mode == "forecast":
         _fc_asof = CONFIG["rolling_windows"][0]["test"][1].replace("-", "")
-        output_path = os.path.join(os.path.dirname(__file__), f"score_tree_forecast_{_fc_asof}.csv")
+        output_path = _out_dir / f"score_tree_forecast_{_fc_asof}.csv"
     else:
-        output_path = os.path.join(os.path.dirname(__file__), "score_tree.csv")
+        output_path = _out_dir / "score_tree.csv"
     final_predictions.to_csv(output_path)
     print(f">>> 预测结果已保存: {output_path}")
     print("="*60)

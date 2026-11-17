@@ -82,7 +82,7 @@ from qlworks.models.training import (
     predict_ensemble_models, compute_ic, compute_ic_ewma,
 )
 from qlworks.factors.filter_utils import filter_codes_post, apply_label_filter
-from qlworks.config import QLIB_DATA_DIR
+from qlworks.config import QLIB_DATA_DIR, get_output_dir
 from qlworks.pipeline_config import INSTRUMENTS
 import qlib
 
@@ -3320,8 +3320,9 @@ def main():
           f"至 {final_predictions.index.get_level_values('datetime').max().date()}")
     print(final_predictions.head(10))
 
-    # 6. 保存预测结果
-    output_path = CONFIG["output"] or os.path.join(os.path.dirname(__file__), "score_tree_selected.csv")
+    # 6. 保存预测结果（默认输出到 outputs/<脚本名>/backtest/）
+    _out_dir = get_output_dir(Path(__file__).stem, "backtest")
+    output_path = CONFIG["output"] or str(_out_dir / "score_tree_selected.csv")
     final_predictions.to_csv(output_path)
     print(f"\n  >>> 预测得分已保存至: {output_path}")
     print(
